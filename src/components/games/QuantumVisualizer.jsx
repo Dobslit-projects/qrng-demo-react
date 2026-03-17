@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState, useCallback, useContext } from "react";
 import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
-import { fetchQRNGBytes } from "../../qrngApi";
+import { fetchQRNGBytes, getApiPrefix } from "../../qrngApi";
 import { lcgNext } from "../../prng";
 import * as galaxy from "./visualizations/galaxySpiral";
 import * as mandala from "./visualizations/mandala";
@@ -45,9 +45,9 @@ function generatePrngBytes(count, seedRef) {
 }
 
 export default function QuantumVisualizer() {
-  const { isOnline, latency } = useContext(AppContext);
+  const { isOnline, latency, qrngSource: globalSource } = useContext(AppContext);
   const [mode, setMode] = useState("galaxy");
-  const [qrngSource, setQrngSource] = useState("...");
+  const [qrngSourceLabel, setQrngSourceLabel] = useState("...");
   const [bytesUsed, setBytesUsed] = useState(0);
   const [fps, setFps] = useState(0);
   const [prngStatsBytes, setPrngStatsBytes] = useState(null);
@@ -97,22 +97,23 @@ export default function QuantumVisualizer() {
   const refillBuffer = useCallback(async () => {
     if (fetchingRef.current || qrngBufferRef.current.length > 6000) return;
     fetchingRef.current = true;
+    const apiPrefix = getApiPrefix(globalSource);
+    const labelMap = { remote: "Remota (SP)", fpga: "FPGA", "pre-collected": "Pre-coletado" };
     try {
-      if (isOnline) {
-        const { bytes } = await fetchQRNGBytes(8192);
-        qrngBufferRef.current.push(...bytes);
-        setQrngSource("Red Pitaya");
-      } else {
-        throw new Error("offline");
+      if (globalSource === "pre-collected") {
+        throw new Error("pre-collected");
       }
+      const { bytes } = await fetchQRNGBytes(8192, apiPrefix);
+      qrngBufferRef.current.push(...bytes);
+      setQrngSourceLabel(labelMap[globalSource] || globalSource);
     } catch {
       for (let i = 0; i < 4096; i++) {
         qrngBufferRef.current.push(Math.floor(Math.random() * 256));
       }
-      setQrngSource("Fallback");
+      setQrngSourceLabel("Fallback");
     }
     fetchingRef.current = false;
-  }, [isOnline]);
+  }, [globalSource]);
 
   // Consume N bytes from QRNG buffer
   const consumeQrng = useCallback((count) => {
@@ -379,7 +380,7 @@ export default function QuantumVisualizer() {
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", gap: 6, overflowY: "auto" }}>
       {/* Pipeline diagram */}
-      <DataPipeline source={qrngSource} latency={latency} bytesUsed={bytesUsed} />
+      <DataPipeline source={qrngSourceLabel} latency={latency} bytesUsed={bytesUsed} />
 
       {/* Mode selector — pill-style, centered, (i) on active */}
       <div style={{ display: "flex", justifyContent: "center", gap: 8, flexShrink: 0, flexWrap: "wrap" }}>
@@ -445,7 +446,7 @@ export default function QuantumVisualizer() {
           fontFamily: "'IBM Plex Mono', monospace",
           letterSpacing: "0.06em",
         }}>
-          QRNG {"\u00B7"} {qrngSource}
+          QRNG {"\u00B7"} {qrngSourceLabel}
         </span>
       </div>
 

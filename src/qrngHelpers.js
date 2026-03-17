@@ -1,4 +1,4 @@
-import { fetchQRNGBytes } from "./qrngApi";
+import { fetchQRNGBytes, getApiPrefix } from "./qrngApi";
 import { QRNG_PRECOLLECTED } from "./qrngFallbackData";
 
 let fallbackOffset = 0;
@@ -21,10 +21,20 @@ export function qrngBytesToInts(bytes, min, max) {
   return bytes.map((b) => min + (b % range));
 }
 
-export async function generateQRNGSequence(count) {
+/**
+ * Gera sequência QRNG usando a fonte especificada.
+ * @param {number} count - Quantidade de floats desejados
+ * @param {string} source - "remote" | "fpga" | "pre-collected"
+ */
+export async function generateQRNGSequence(count, source = "remote") {
+  if (source === "pre-collected") {
+    return { values: getFallbackFloats(count), source: "pre-collected", latencyMs: null };
+  }
+
+  const apiPrefix = getApiPrefix(source);
   try {
-    const { bytes, latencyMs } = await fetchQRNGBytes(count);
-    return { values: bytesToFloats(bytes), source: "red-pitaya", latencyMs };
+    const { bytes, latencyMs } = await fetchQRNGBytes(count, apiPrefix);
+    return { values: bytesToFloats(bytes), source, latencyMs };
   } catch {
     return { values: getFallbackFloats(count), source: "pre-collected", latencyMs: null };
   }

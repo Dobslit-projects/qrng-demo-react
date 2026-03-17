@@ -1,7 +1,7 @@
 import { useState, useContext } from "react";
 import { theme, formatBytes } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
-import { API_BASE } from "../../qrngApi";
+import { getApiPrefix } from "../../qrngApi";
 import Btn from "../ui/Btn";
 
 const presets = [
@@ -14,7 +14,8 @@ const presets = [
 ];
 
 export default function DataExport() {
-  const { isOnline } = useContext(AppContext);
+  const { isOnline, qrngSource } = useContext(AppContext);
+  const apiPrefix = getApiPrefix(qrngSource);
   const [downloadSize, setDownloadSize] = useState(1024 * 1024);
   const [customInput, setCustomInput] = useState("");
   const [downloading, setDownloading] = useState(false);
@@ -22,7 +23,7 @@ export default function DataExport() {
   const handleDownload = async () => {
     setDownloading(true);
     try {
-      const response = await fetch(`${API_BASE}/api/random?bytes=${downloadSize}`, {
+      const response = await fetch(`${apiPrefix}/random?bytes=${downloadSize}`, {
         signal: AbortSignal.timeout(60000),
       });
       const text = await response.text();

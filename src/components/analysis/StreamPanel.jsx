@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useContext } from "react";
 import { theme, formatBytes } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
-import { connectQRNGStream } from "../../qrngApi";
+import { connectQRNGStream, getApiPrefix } from "../../qrngApi";
 import Btn from "../ui/Btn";
 
 const mono = "'IBM Plex Mono', monospace";
@@ -13,7 +13,7 @@ const VIZ_MODES = [
 ];
 
 export default function StreamPanel() {
-  const { isOnline, streamError, setStreamError } = useContext(AppContext);
+  const { isOnline, streamError, setStreamError, qrngSource } = useContext(AppContext);
   const [streaming, setStreaming] = useState(false);
   const [stalled, setStalled] = useState(false);
   const [vizMode, setVizMode] = useState("waveform");
@@ -45,8 +45,10 @@ export default function StreamPanel() {
     return () => ro.disconnect();
   }, []);
 
+  const canStream = isOnline && qrngSource !== "pre-collected";
+
   const startStream = useCallback(() => {
-    if (!isOnline) return;
+    if (!canStream) return;
     setStreamError(null);
     setStalled(false);
     totalBytesRef.current = 0;
@@ -57,6 +59,7 @@ export default function StreamPanel() {
     setStats({ bytes: 0, startTime, rate: 0 });
     setStreaming(true);
 
+    const apiPrefix = getApiPrefix(qrngSource);
     const abort = connectQRNGStream(
       (chunk) => {
         if (streamError) setStreamError(null);
@@ -86,7 +89,8 @@ export default function StreamPanel() {
         setStreamError(err?.message || "Erro desconhecido");
       },
       () => { setStreaming(false); setStalled(false); },
-      (isStalled) => setStalled(isStalled)
+      (isStalled) => setStalled(isStalled),
+      apiPrefix
     );
     abortRef.current = abort;
 
@@ -98,7 +102,7 @@ export default function StreamPanel() {
         rate: elapsed > 0 ? Math.round(totalBytesRef.current / elapsed) : 0,
       });
     }, 500);
-  }, [isOnline, streamError, setStreamError]);
+  }, [isOnline, streamError, setStreamError, qrngSource]);
 
   const stopStream = useCallback(() => {
     if (abortRef.current) abortRef.current();
@@ -253,7 +257,7 @@ export default function StreamPanel() {
         <Btn
           onClick={streaming ? stopStream : startStream}
           color={streaming ? theme.danger : theme.quantum}
-          disabled={!isOnline}
+          disabled={!canStream}
           small
         >
           {streaming ? "Parar" : "Iniciar Stream"}
@@ -302,9 +306,11 @@ export default function StreamPanel() {
           <span style={{
             fontSize: 10, color: theme.textMuted, fontFamily: mono, marginLeft: "auto",
           }}>
-            {isOnline
-              ? "Pronto para visualizar bytes quânticos em tempo real"
-              : "Backend offline — stream indisponível"
+            {canStream
+              ? "Pronto para visualizar bytes quanticos em tempo real"
+              : qrngSource === "pre-collected"
+                ? "Stream indisponivel com dados pre-coletados"
+                : "Backend offline — stream indisponivel"
             }
           </span>
         )}
@@ -365,7 +371,9 @@ export default function StreamPanel() {
             }}>
               {isOnline
                 ? "Clique em \"Iniciar Stream\" para visualizar"
-                : "Backend offline"
+                : qrngSource === "pre-collected"
+                  ? "Sem stream no modo pre-coletado"
+                  : "Backend offline"
               }
             </span>
           </div>

@@ -1,7 +1,7 @@
 import { useState, useContext, useRef, useEffect } from "react";
 import { theme, formatBytes } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
-import { fetchQRNGSeed, API_BASE } from "../../qrngApi";
+import { fetchQRNGSeed, getApiPrefix } from "../../qrngApi";
 import Btn from "../ui/Btn";
 import GlowTag from "../ui/GlowTag";
 
@@ -62,7 +62,8 @@ const labelStyle = {
 /* ── Component ─────────────────────────────────────────────── */
 
 export default function DataSection() {
-  const { isOnline } = useContext(AppContext);
+  const { isOnline, qrngSource } = useContext(AppContext);
+  const apiPrefix = getApiPrefix(qrngSource);
 
   // Seed state
   const [seedLength, setSeedLength] = useState(32);
@@ -99,7 +100,7 @@ export default function DataSection() {
     }, 40);
 
     try {
-      const result = await fetchQRNGSeed(seedLength);
+      const result = await fetchQRNGSeed(seedLength, apiPrefix);
       clearInterval(animRef.current);
       animRef.current = null;
       setAnimHex(null);
@@ -127,7 +128,7 @@ export default function DataSection() {
   const handleDownload = async () => {
     setDownloading(true);
     try {
-      const response = await fetch(`${API_BASE}/api/random?bytes=${downloadSize}`, {
+      const response = await fetch(`${apiPrefix}/random?bytes=${downloadSize}`, {
         signal: AbortSignal.timeout(60000),
       });
       const text = await response.text();

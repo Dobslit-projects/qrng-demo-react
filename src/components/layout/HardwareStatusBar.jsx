@@ -1,9 +1,10 @@
 import { useContext } from "react";
 import { theme, formatBytes } from "../../theme";
-import { AppContext } from "../../contexts/AppContext";
+import { AppContext, SOURCE_LABELS } from "../../contexts/AppContext";
 
 export default function HardwareStatusBar() {
-  const { health, latency, isOnline } = useContext(AppContext);
+  const { health, latency, isOnline, qrngSource } = useContext(AppContext);
+  const isFallback = qrngSource === "pre-collected";
   const statusColor = isOnline ? theme.success : theme.danger;
 
   return (
@@ -37,12 +38,12 @@ export default function HardwareStatusBar() {
           {isOnline ? "ONLINE" : "OFFLINE"}
         </span>
         <span style={{ color: theme.textMuted }}>
-          {isOnline ? "Red Pitaya QRNG" : "Dados Pre-coletados"}
+          {SOURCE_LABELS[qrngSource] || qrngSource}
         </span>
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 16, color: theme.textDim }}>
-        {isOnline && health && (
+        {!isFallback && isOnline && health && (
           <>
             <span>
               Buffer: <strong style={{ color: theme.text }}>{formatBytes(health.buffer_bytes_available)}</strong>
@@ -58,9 +59,14 @@ export default function HardwareStatusBar() {
             </span>
           </>
         )}
-        {!isOnline && (
+        {isFallback && (
           <span style={{ color: theme.warning }}>
-            Usando 10K amostras pre-coletadas do Red Pitaya
+            Usando 1K amostras pre-coletadas
+          </span>
+        )}
+        {!isFallback && !isOnline && (
+          <span style={{ color: theme.warning }}>
+            Fonte indisponivel — fallback ativo
           </span>
         )}
       </div>

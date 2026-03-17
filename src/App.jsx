@@ -6,6 +6,7 @@ import SectionNav from "./components/layout/SectionNav";
 import AnalysisSection from "./components/analysis/AnalysisSection";
 import InteractiveDemos from "./components/games/InteractiveDemos";
 import DataSection from "./components/data/DataSection";
+import SettingsSection from "./components/settings/SettingsSection";
 
 function AppContent() {
   const { activePage } = useContext(AppContext);
@@ -25,10 +26,11 @@ function AppContent() {
       <style>{fonts}</style>
       <HardwareStatusBar />
       <SectionNav />
-      <div style={{ flex: 1, overflow: "hidden", padding: "12px 16px" }}>
+      <div style={{ flex: 1, overflow: "auto", padding: activePage === "settings" ? 0 : "12px 16px" }}>
         {activePage === "analysis" && <AnalysisSection />}
         {activePage === "games" && <InteractiveDemos />}
         {activePage === "data" && <DataSection />}
+        {activePage === "settings" && <SettingsSection />}
       </div>
     </div>
   );

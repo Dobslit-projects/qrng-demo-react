@@ -29,20 +29,24 @@ export default function AnalysisSection() {
     const s = parseInt(inputSeed) || 42;
     setSeed(s);
     const p = generatePRNGSequence(s, count);
-    const qResult = await generateQRNGSequence(count);
+    const qResult = await generateQRNGSequence(count, qrngSource);
 
     setPrngSeq(p);
     setQrngSeq(qResult.values);
-    setQrngSource(qResult.source);
     if (qResult.latencyMs !== null) setLatency(qResult.latencyMs);
     setPrngBits(p.slice(0, 64).map((v) => (v > 0.5 ? 1 : 0)));
     setQrngBits(qResult.values.slice(0, 64).map((v) => (v > 0.5 ? 1 : 0)));
     setBusy(false);
-  }, [inputSeed, count, setQrngSource, setLatency]);
+  }, [inputSeed, count, qrngSource, setLatency]);
 
   useEffect(() => { generate(); }, []);
 
-  const qrngLabel = qrngSource === "red-pitaya" ? "QRNG · Red Pitaya" : "QRNG · Pré-coletado";
+  const qrngLabelMap = {
+    remote: "QRNG \u00B7 Remota (SP)",
+    fpga: "QRNG \u00B7 FPGA",
+    "pre-collected": "QRNG \u00B7 Pr\u00e9-coletado",
+  };
+  const qrngLabel = qrngLabelMap[qrngSource] || "QRNG";
 
   const prngBytes = useMemo(
     () => new Uint8Array(prngSeq.map((v) => Math.floor(v * 255))),

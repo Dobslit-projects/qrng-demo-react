@@ -1,10 +1,11 @@
 import { useContext } from "react";
 import { theme } from "../../theme";
-import { API_BASE } from "../../qrngApi";
-import { AppContext } from "../../contexts/AppContext";
+import { getApiPrefix } from "../../qrngApi";
+import { AppContext, SOURCE_LABELS } from "../../contexts/AppContext";
 
 export default function Footer() {
-  const { isOnline } = useContext(AppContext);
+  const { isOnline, qrngSource } = useContext(AppContext);
+  const sourceLabel = SOURCE_LABELS[qrngSource] || qrngSource;
 
   return (
     <>
@@ -24,9 +25,8 @@ export default function Footer() {
         {isOnline ? (
           <>
             <strong style={{ color: theme.success }}>Conectado ao hardware:</strong>{" "}
-            Os dados QRNG nesta demo vem diretamente do{" "}
-            <strong style={{ color: theme.quantum }}>Red Pitaya QRNG</strong>{" "}
-            via API em <code style={{ color: theme.quantum }}>{API_BASE}</code>.
+            Os dados QRNG nesta demo vem diretamente da fonte{" "}
+            <strong style={{ color: theme.quantum }}>{sourceLabel}</strong>.
             A entropia e gerada por medicoes de fenomenos quanticos reais,
             nao por algoritmos deterministicos.
           </>
