@@ -5,8 +5,9 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: "::",       // escutar em todas interfaces (acesso externo)
-    port: 5173,       // porta diferente de 8080 (outro projeto) e 3001 (backend)
+    host: "0.0.0.0",  // escutar em todas interfaces (acesso externo)
+    port: 5180,        // porta livre
+    strictPort: false, // se 5180 estiver ocupada, tenta a próxima
     proxy: {
       // FPGA precisa vir ANTES de /api para não ser capturado por /api
       "/api-fpga": {
