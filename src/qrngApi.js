@@ -1,7 +1,7 @@
 // Rotas de proxy para cada fonte
 export const API_ROUTES = {
-  remote: "/api",
-  fpga: "/api-fpga",
+  remote: "/qrng/api",
+  fpga: "/qrng/api-fpga",
 };
 
 export function getApiPrefix(source) {

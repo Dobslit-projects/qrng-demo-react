@@ -10,14 +10,14 @@ const SOURCES = [
     icon: "\u{1F4E1}",
     title: "Servidor Remoto (SP)",
     desc: "Backend principal via proxy Nginx",
-    route: "/api",
+    route: "/qrng/api",
   },
   {
     key: "fpga",
     icon: "\u{1F52C}",
     title: "FPGA (Hardware)",
     desc: "Hardware via SSH tunnel reverso",
-    route: "/api-fpga",
+    route: "/qrng/api-fpga",
   },
   {
     key: "pre-collected",
