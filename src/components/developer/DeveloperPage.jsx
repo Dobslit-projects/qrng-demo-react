@@ -4,14 +4,16 @@ import { devGetToken, devGetUsage, devGetRequests } from "../../qrngApi";
 import TokenCard from "./TokenCard";
 import UsageCard from "./UsageCard";
 import RequestLogsTable from "./RequestLogsTable";
+import NotebookPage from "./NotebookPage";
 
 const mono = "'IBM Plex Mono', monospace";
 
 const TABS = [
-  { id: "token", label: "Token" },
-  { id: "uso", label: "Uso" },
-  { id: "logs", label: "Chamadas" },
-  { id: "docs", label: "Docs" },
+  { id: "token",    label: "Token" },
+  { id: "notebook", label: "Notebook" },
+  { id: "uso",      label: "Uso" },
+  { id: "logs",     label: "Chamadas" },
+  { id: "docs",     label: "Docs" },
 ];
 
 const BASE_URL = "https://bongo.vps-uni5.net/qrng/v1";
@@ -393,6 +395,8 @@ export default function DeveloperPage() {
             onTokenChange={handleTokenChange}
           />
         )}
+
+        {activeTab === "notebook" && <NotebookPage />}
 
         {!loading && activeTab === "uso" && (
           tokenInfo ? (
