@@ -1,0 +1,133 @@
+const express = require("express");
+const rateLimit = require("express-rate-limit");
+const fetch = require("node-fetch");
+
+const app = express();
+
+const PORT = process.env.PORT || 3010;
+const QRNG_UPSTREAM = process.env.QRNG_UPSTREAM || "http://127.0.0.1:18001";
+const API_TOKEN = process.env.QRNG_CLIENT_TOKEN || "troque-este-token";
+
+const limiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+
+app.use(limiter);
+
+function requireToken(req, res, next) {
+  const auth = req.headers.authorization || "";
+
+  if (!auth.startsWith("Bearer ")) {
+    return res.status(401).json({
+      error: "missing_token",
+      message: "Use Authorization: Bearer <token>",
+    });
+  }
+
+  const token = auth.replace("Bearer ", "").trim();
+
+  if (token !== API_TOKEN) {
+    return res.status(403).json({
+      error: "invalid_token",
+      message: "Invalid API token",
+    });
+  }
+
+  next();
+}
+
+app.get("/v1/health", requireToken, async (req, res) => {
+  try {
+    const r = await fetch(`${QRNG_UPSTREAM}/health`);
+    const data = await r.json();
+
+    res.json({
+      status: "ok",
+      api: "dobslit-qrng-client-api",
+      source: "ufpe-fpga",
+      upstream: data,
+    });
+  } catch (err) {
+    res.status(503).json({
+      status: "error",
+      message: "QRNG upstream unavailable",
+    });
+  }
+});
+
+app.get("/v1/random", requireToken, async (req, res) => {
+  const bytes = Math.min(parseInt(req.query.bytes || "32", 10), 4096);
+  const format = req.query.format || "hex";
+
+  if (bytes < 1) {
+    return res.status(400).json({
+      error: "invalid_bytes",
+      message: "bytes must be >= 1",
+    });
+  }
+
+  try {
+    const r = await fetch(`${QRNG_UPSTREAM}/random?bytes=${bytes * 5}`);
+
+    if (!r.ok) {
+      return res.status(502).json({
+        error: "upstream_error",
+        status: r.status,
+      });
+    }
+
+    const text = await r.text();
+
+    const values = text
+      .split("\n")
+      .map((x) => Number(x.trim()))
+      .filter((n) => Number.isInteger(n) && n >= 0 && n <= 255)
+      .slice(0, bytes);
+
+    if (values.length < bytes) {
+      return res.status(503).json({
+        error: "insufficient_entropy",
+        message: "Not enough QRNG bytes available",
+        available: values.length,
+        requested: bytes,
+      });
+    }
+
+    const buffer = Buffer.from(values);
+
+    let random;
+
+    if (format === "hex") {
+      random = buffer.toString("hex");
+    } else if (format === "base64") {
+      random = buffer.toString("base64");
+    } else if (format === "uint8") {
+      random = values;
+    } else {
+      return res.status(400).json({
+        error: "invalid_format",
+        message: "Use format=hex, base64 or uint8",
+      });
+    }
+
+    res.json({
+      source: "dobslit-qrng-ufpe-fpga",
+      bytes,
+      format,
+      random,
+      timestamp: new Date().toISOString(),
+    });
+  } catch (err) {
+    res.status(503).json({
+      error: "qrng_unavailable",
+      message: "Could not fetch QRNG data",
+    });
+  }
+});
+
+app.listen(PORT, "127.0.0.1", () => {
+  console.log(`QRNG client API listening on http://127.0.0.1:${PORT}`);
+});
