@@ -6,6 +6,7 @@ const pages = [
   { id: "analysis", label: "An\u00e1lise" },
   { id: "games", label: "Representa\u00e7\u00f5es Visuais" },
   { id: "data", label: "Dados" },
+  { id: "developer", label: "Desenvolvedor" },
   { id: "settings", label: "\u2699 Configura\u00e7\u00f5es" },
 ];
 

@@ -4,6 +4,9 @@ export const API_ROUTES = {
   fpga: "/qrng/api-fpga",
 };
 
+// Rota do serviço de gestão de tokens (alinhada com o nginx do servidor: /qrng/v1/ → localhost:3010/v1/)
+export const CLIENT_API = "/qrng/v1";
+
 export function getApiPrefix(source) {
   return API_ROUTES[source] || "/api";
 }
@@ -55,6 +58,44 @@ export async function fetchQRNGSeed(bytes, apiPrefix = "/api") {
   const data = await r.json();
   return { bytes: data.bytes, hex: data.hex, latencyMs: Math.round(performance.now() - t0) };
 }
+
+// ── Developer API (gestão de tokens) ─────────────────────────────────────────
+
+// CLIENT_API = "/qrng/v1" → paths abaixo são relativos a esse prefixo (sem /v1/ duplicado)
+async function devFetch(path, options = {}) {
+  const token = localStorage.getItem("qrng_api_token");
+  const headers = { "Content-Type": "application/json", ...options.headers };
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const r = await fetch(`${CLIENT_API}${path}`, { ...options, headers, signal: AbortSignal.timeout(10000) });
+  const data = await r.json();
+  return { ok: r.ok, status: r.status, data };
+}
+
+export async function devCreateToken() {
+  return devFetch("/tokens", { method: "POST" });
+}
+
+export async function devGetToken() {
+  return devFetch("/me/token");
+}
+
+export async function devRotateToken() {
+  return devFetch("/me/token/rotate", { method: "POST" });
+}
+
+export async function devRevokeToken() {
+  return devFetch("/me/token/revoke", { method: "POST" });
+}
+
+export async function devGetUsage() {
+  return devFetch("/me/usage");
+}
+
+export async function devGetRequests(limit = 20) {
+  return devFetch(`/me/requests?limit=${limit}`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 export function connectQRNGStream(onChunk, onError, onClose, onStall, apiPrefix = "/api") {
   const controller = new AbortController();

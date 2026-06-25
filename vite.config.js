@@ -20,6 +20,13 @@ export default defineConfig({
         target: "http://127.0.0.1:3001",
         changeOrigin: true,
       },
+      // API cliente QRNG — gestão de tokens (porta 3010)
+      // Espelha o nginx do servidor: /qrng/v1/ → localhost:3010/v1/
+      "/qrng/v1": {
+        target: "http://127.0.0.1:3010",
+        changeOrigin: true,
+        rewrite: (path) => path.replace(/^\/qrng/, ""),
+      },
     },
   },
   base: "/qrng",
