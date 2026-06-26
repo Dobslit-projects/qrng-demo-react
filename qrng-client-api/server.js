@@ -93,7 +93,7 @@ function logRequest(tokenId, endpoint, bytesRequested, format, statusCode, ip, u
   return requestId;
 }
 
-// ── Rate limiting ────────────────────────────────────────────────────────────
+// ── Rate limiting — global por IP ────────────────────────────────────────────
 
 const limiter = rateLimit({
   windowMs: 60 * 1000,
@@ -103,6 +103,44 @@ const limiter = rateLimit({
 });
 
 app.use(limiter);
+
+// ── Rate limiting — por token (30 req/min) ───────────────────────────────────
+
+const TOKEN_RATE_LIMIT  = 30;
+const TOKEN_RATE_WINDOW = 60 * 1000;
+const tokenRateMap = new Map(); // tokenId -> { count, resetAt }
+
+// Limpa entradas expiradas a cada 5 minutos para evitar memory leak
+setInterval(() => {
+  const now = Date.now();
+  for (const [id, entry] of tokenRateMap) {
+    if (now >= entry.resetAt) tokenRateMap.delete(id);
+  }
+}, 5 * 60 * 1000);
+
+function checkTokenRate(req, res, next) {
+  const tokenId = req.tokenRow.id;
+  const now     = Date.now();
+  const entry   = tokenRateMap.get(tokenId);
+
+  if (!entry || now >= entry.resetAt) {
+    tokenRateMap.set(tokenId, { count: 1, resetAt: now + TOKEN_RATE_WINDOW });
+    return next();
+  }
+
+  if (entry.count >= TOKEN_RATE_LIMIT) {
+    const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
+    res.setHeader("Retry-After", retryAfter);
+    return res.status(429).json({
+      error: "rate_limit_exceeded",
+      message: `Limite de ${TOKEN_RATE_LIMIT} req/min atingido. Tente novamente em ${retryAfter}s.`,
+      retry_after_seconds: retryAfter,
+    });
+  }
+
+  entry.count++;
+  next();
+}
 
 // ── CORS ─────────────────────────────────────────────────────────────────────
 
@@ -176,7 +214,7 @@ app.post("/v1/tokens", (req, res) => {
 
 // ── GET /v1/me/token — Info do token atual ───────────────────────────────────
 
-app.get("/v1/me/token", requireToken, (req, res) => {
+app.get("/v1/me/token", requireToken, checkTokenRate, (req, res) => {
   const row = req.tokenRow;
   const today = new Date().toISOString().slice(0, 10);
   const usage = db.prepare("SELECT requests_count, bytes_count FROM daily_usage WHERE token_id = ? AND date = ?").get(row.id, today);
@@ -195,7 +233,7 @@ app.get("/v1/me/token", requireToken, (req, res) => {
 
 // ── POST /v1/me/token/rotate — Regenerar token ──────────────────────────────
 
-app.post("/v1/me/token/rotate", requireToken, (req, res) => {
+app.post("/v1/me/token/rotate", requireToken, checkTokenRate, (req, res) => {
   const old = req.tokenRow;
   const now = new Date().toISOString();
 
@@ -220,7 +258,7 @@ app.post("/v1/me/token/rotate", requireToken, (req, res) => {
 
 // ── POST /v1/me/token/revoke — Revogar token ────────────────────────────────
 
-app.post("/v1/me/token/revoke", requireToken, (req, res) => {
+app.post("/v1/me/token/revoke", requireToken, checkTokenRate, (req, res) => {
   const now = new Date().toISOString();
   db.prepare("UPDATE api_tokens SET status = 'revoked', revoked_at = ? WHERE id = ?").run(now, req.tokenRow.id);
   res.json({ message: "Token revogado com sucesso.", revoked_at: now });
@@ -228,7 +266,7 @@ app.post("/v1/me/token/revoke", requireToken, (req, res) => {
 
 // ── GET /v1/me/usage — Estatísticas de uso ──────────────────────────────────
 
-app.get("/v1/me/usage", requireToken, (req, res) => {
+app.get("/v1/me/usage", requireToken, checkTokenRate, (req, res) => {
   const { id, name, status, quota_daily, last_used_at } = req.tokenRow;
   const today = new Date().toISOString().slice(0, 10);
   const ago7  = new Date(Date.now() -  7 * 86400000).toISOString().slice(0, 10);
@@ -256,7 +294,7 @@ app.get("/v1/me/usage", requireToken, (req, res) => {
 
 // ── GET /v1/me/requests — Histórico de chamadas ──────────────────────────────
 
-app.get("/v1/me/requests", requireToken, (req, res) => {
+app.get("/v1/me/requests", requireToken, checkTokenRate, (req, res) => {
   const limit = Math.min(parseInt(req.query.limit || "20", 10), 100);
   const logs = db.prepare(`
     SELECT request_id, endpoint, bytes_requested, format, status_code, ip_address, created_at
@@ -270,7 +308,7 @@ app.get("/v1/me/requests", requireToken, (req, res) => {
 
 // ── GET /v1/health ───────────────────────────────────────────────────────────
 
-app.get("/v1/health", requireToken, async (req, res) => {
+app.get("/v1/health", requireToken, checkTokenRate, async (req, res) => {
   try {
     const r = await fetch(`${QRNG_UPSTREAM}/health`);
     const data = await r.json();
@@ -340,7 +378,7 @@ function parseUpstreamRandom(buffer, requestedBytes) {
   return buffer.slice(0, requestedBytes);
 }
 
-app.get("/v1/random", requireToken, checkQuota, async (req, res) => {
+app.get("/v1/random", requireToken, checkTokenRate, checkQuota, async (req, res) => {
   const bytes = Math.min(parseInt(req.query.bytes || "32", 10), 4096);
   const format = req.query.format || "hex";
   const ip = req.ip || req.socket.remoteAddress;
