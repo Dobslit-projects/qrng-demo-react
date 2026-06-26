@@ -26,22 +26,22 @@ function DocsCard() {
     {
       id: "random",
       label: "Gerar bytes aleatórios (hex)",
-      code: `curl "${BASE_URL}/v1/random?bytes=32&format=hex" \\\n  -H "Authorization: Bearer ${token}"`,
+      code: `curl "${BASE_URL}/random?bytes=32&format=hex" \\\n  -H "Authorization: Bearer ${token}"`,
     },
     {
       id: "base64",
       label: "Gerar bytes aleatórios (base64)",
-      code: `curl "${BASE_URL}/v1/random?bytes=64&format=base64" \\\n  -H "Authorization: Bearer ${token}"`,
+      code: `curl "${BASE_URL}/random?bytes=64&format=base64" \\\n  -H "Authorization: Bearer ${token}"`,
     },
     {
       id: "health",
       label: "Status do QRNG",
-      code: `curl "${BASE_URL}/v1/health" \\\n  -H "Authorization: Bearer ${token}"`,
+      code: `curl "${BASE_URL}/health" \\\n  -H "Authorization: Bearer ${token}"`,
     },
     {
       id: "usage",
       label: "Consultar uso do token",
-      code: `curl "${BASE_URL}/v1/me/usage" \\\n  -H "Authorization: Bearer ${token}"`,
+      code: `curl "${BASE_URL}/me/usage" \\\n  -H "Authorization: Bearer ${token}"`,
     },
   ];
 
