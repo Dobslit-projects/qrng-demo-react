@@ -1,4 +1,6 @@
+import { useState } from "react";
 import { theme, formatBytes } from "../../theme";
+import { devGetRequests } from "../../qrngApi";
 
 const mono = "'IBM Plex Mono', monospace";
 
@@ -31,7 +33,53 @@ function formatDate(iso) {
   });
 }
 
+function escapeCell(v) {
+  const s = String(v ?? "");
+  return s.includes(",") || s.includes('"') || s.includes("\n")
+    ? `"${s.replace(/"/g, '""')}"`
+    : s;
+}
+
+function exportCsv(rows) {
+  const headers = ["request_id", "endpoint", "bytes", "formato", "status", "ip", "data_utc"];
+  const lines = [
+    headers.join(","),
+    ...rows.map((r) =>
+      [
+        r.request_id,
+        r.endpoint,
+        r.bytes_requested,
+        r.format ?? "",
+        r.status_code,
+        r.ip_address ?? "",
+        r.created_at,
+      ]
+        .map(escapeCell)
+        .join(",")
+    ),
+  ];
+  const blob = new Blob([lines.join("\r\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `qrng-requests-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export default function RequestLogsTable({ requests }) {
+  const [exporting, setExporting] = useState(false);
+
+  async function handleExport() {
+    setExporting(true);
+    try {
+      const res = await devGetRequests(10000);
+      if (res.ok) exportCsv(res.data.requests);
+    } finally {
+      setExporting(false);
+    }
+  }
+
   if (!requests || requests.length === 0) {
     return (
       <div
@@ -75,9 +123,29 @@ export default function RequestLogsTable({ requests }) {
         gap: 14,
       }}
     >
-      <span style={{ fontSize: 14, fontWeight: 700, color: theme.text, fontFamily: mono }}>
-        Chamadas Recentes
-      </span>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
+        <span style={{ fontSize: 14, fontWeight: 700, color: theme.text, fontFamily: mono }}>
+          Chamadas Recentes
+        </span>
+        <button
+          onClick={handleExport}
+          disabled={exporting}
+          style={{
+            padding: "5px 14px",
+            borderRadius: 8,
+            border: `1px solid ${theme.border}`,
+            background: "transparent",
+            color: exporting ? theme.textMuted : theme.textDim,
+            fontSize: 10,
+            fontWeight: 600,
+            fontFamily: mono,
+            cursor: exporting ? "default" : "pointer",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {exporting ? "Exportando..." : "Exportar CSV"}
+        </button>
+      </div>
 
       <div style={{ overflowX: "auto" }}>
         <table

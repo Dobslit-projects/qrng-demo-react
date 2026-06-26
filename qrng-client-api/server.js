@@ -295,7 +295,7 @@ app.get("/v1/me/usage", requireToken, checkTokenRate, (req, res) => {
 // ── GET /v1/me/requests — Histórico de chamadas ──────────────────────────────
 
 app.get("/v1/me/requests", requireToken, checkTokenRate, (req, res) => {
-  const limit = Math.min(parseInt(req.query.limit || "20", 10), 100);
+  const limit = Math.min(parseInt(req.query.limit || "20", 10), 10000);
   const logs = db.prepare(`
     SELECT request_id, endpoint, bytes_requested, format, status_code, ip_address, created_at
     FROM api_usage_logs
