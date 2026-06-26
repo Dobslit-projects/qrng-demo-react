@@ -51,6 +51,14 @@ db.exec(`
     errors_count   INTEGER DEFAULT 0,
     UNIQUE(token_id, date)
   );
+
+  CREATE TABLE IF NOT EXISTS upstream_health_log (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    status      TEXT    NOT NULL,
+    response_ms INTEGER,
+    detail      TEXT,
+    checked_at  TEXT    NOT NULL
+  );
 `);
 
 // ── Token helpers ────────────────────────────────────────────────────────────
@@ -423,9 +431,91 @@ app.get("/v1/random", requireToken, checkTokenRate, checkQuota, async (req, res)
   }
 });
 
+// ── Upstream monitor ─────────────────────────────────────────────────────────
+
+let upstreamState = { status: "unknown", checkedAt: null, responseMs: null };
+
+async function fetchWithTimeout(url, ms) {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(url, { signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function checkUpstream() {
+  const t0 = Date.now();
+  let status, responseMs, detail;
+
+  try {
+    const r = await fetchWithTimeout(`${QRNG_UPSTREAM}/health`, 5000);
+    responseMs = Date.now() - t0;
+    status = r.ok ? "up" : "down";
+    detail = r.ok ? null : `HTTP ${r.status}`;
+  } catch (err) {
+    responseMs = null;
+    status = "down";
+    detail = err.name === "AbortError" ? "timeout" : err.message;
+  }
+
+  const now = new Date().toISOString();
+  const prev = upstreamState.status;
+  upstreamState = { status, checkedAt: now, responseMs };
+
+  if (prev !== status) {
+    db.prepare(
+      "INSERT INTO upstream_health_log (status, response_ms, detail, checked_at) VALUES (?, ?, ?, ?)"
+    ).run(status, responseMs ?? null, detail ?? null, now);
+
+    console.log(`[upstream] ${prev} → ${status}${detail ? ` (${detail})` : ""}`);
+
+    // Mantém últimas 500 transições
+    db.prepare(
+      "DELETE FROM upstream_health_log WHERE id NOT IN (SELECT id FROM upstream_health_log ORDER BY id DESC LIMIT 500)"
+    ).run();
+  }
+}
+
+// ── GET /v1/upstream/status ───────────────────────────────────────────────────
+
+app.get("/v1/upstream/status", requireToken, checkTokenRate, (req, res) => {
+  const events = db.prepare(
+    "SELECT status, response_ms, detail, checked_at FROM upstream_health_log ORDER BY id DESC LIMIT 50"
+  ).all();
+
+  // Calcula uptime das últimas 24h com base nas transições
+  const ago24h = new Date(Date.now() - 86400000).toISOString();
+  const slice = db.prepare(
+    "SELECT status, checked_at FROM upstream_health_log WHERE checked_at >= ? ORDER BY checked_at ASC"
+  ).all(ago24h);
+
+  let uptimeMs = 0;
+  const windowStart = new Date(ago24h).getTime();
+  const now = Date.now();
+
+  for (let i = 0; i < slice.length; i++) {
+    const from = Math.max(new Date(slice[i].checked_at).getTime(), windowStart);
+    const to   = i + 1 < slice.length ? new Date(slice[i + 1].checked_at).getTime() : now;
+    if (slice[i].status === "up") uptimeMs += to - from;
+  }
+
+  const windowMs   = now - windowStart;
+  const uptime24h  = slice.length > 0 ? Math.round((uptimeMs / windowMs) * 1000) / 10 : null;
+
+  res.json({
+    current:       upstreamState,
+    uptime_24h_pct: uptime24h,
+    recent_events: events,
+  });
+});
+
 // ── Start ────────────────────────────────────────────────────────────────────
 
 app.listen(PORT, "127.0.0.1", () => {
   console.log(`QRNG client API listening on http://127.0.0.1:${PORT}`);
   console.log(`Database: ${DB_PATH}`);
+  checkUpstream();
+  setInterval(checkUpstream, 60 * 1000);
 });

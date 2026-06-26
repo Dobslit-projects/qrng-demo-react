@@ -95,6 +95,10 @@ export async function devGetRequests(limit = 20) {
   return devFetch(`/me/requests?limit=${limit}`);
 }
 
+export async function devGetUpstreamStatus() {
+  return devFetch("/upstream/status");
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function connectQRNGStream(onChunk, onError, onClose, onStall, apiPrefix = "/api") {

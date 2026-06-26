@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { theme } from "../../theme";
-import { devGetToken, devGetUsage, devGetRequests } from "../../qrngApi";
+import { devGetToken, devGetUsage, devGetRequests, devGetUpstreamStatus } from "../../qrngApi";
 import TokenCard from "./TokenCard";
 import UsageCard from "./UsageCard";
 import RequestLogsTable from "./RequestLogsTable";
@@ -214,6 +214,7 @@ export default function DeveloperPage() {
   const [requests, setRequests] = useState(null);
   const [loading, setLoading] = useState(true);
   const [apiError, setApiError] = useState(null);
+  const [upstreamStatus, setUpstreamStatus] = useState(null);
 
   const hasStoredToken = !!localStorage.getItem("qrng_api_token");
 
@@ -260,6 +261,7 @@ export default function DeveloperPage() {
 
   useEffect(() => {
     loadToken();
+    devGetUpstreamStatus().then((r) => { if (r.ok) setUpstreamStatus(r.data); }).catch(() => {});
   }, [loadToken]);
 
   useEffect(() => {
@@ -306,21 +308,36 @@ export default function DeveloperPage() {
               Acesso autenticado à aleatoriedade quântica — Dobslit / UFPE / FPGA
             </div>
           </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <span
-              style={{
-                fontSize: 10,
-                fontWeight: 700,
-                fontFamily: mono,
-                padding: "4px 12px",
-                borderRadius: 20,
-                background: theme.success + "14",
-                color: theme.success,
-                border: `1px solid ${theme.success}40`,
-              }}
-            >
-              ● Fonte: FPGA
-            </span>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+            {(() => {
+              const s = upstreamStatus?.current?.status;
+              const color = s === "up" ? theme.success : s === "down" ? theme.danger : theme.textMuted;
+              const label = s === "up"
+                ? `● FPGA Online${upstreamStatus.current.responseMs != null ? ` (${upstreamStatus.current.responseMs}ms)` : ""}`
+                : s === "down" ? "● FPGA Offline"
+                : "● FPGA …";
+              const title = s === "up" && upstreamStatus.uptime_24h_pct != null
+                ? `Uptime 24h: ${upstreamStatus.uptime_24h_pct}%`
+                : undefined;
+              return (
+                <span
+                  title={title}
+                  style={{
+                    fontSize: 10,
+                    fontWeight: 700,
+                    fontFamily: mono,
+                    padding: "4px 12px",
+                    borderRadius: 20,
+                    background: color + "14",
+                    color,
+                    border: `1px solid ${color}40`,
+                    cursor: title ? "help" : "default",
+                  }}
+                >
+                  {label}
+                </span>
+              );
+            })()}
             <span
               style={{
                 fontSize: 10,
