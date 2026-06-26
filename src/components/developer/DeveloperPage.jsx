@@ -5,6 +5,7 @@ import TokenCard from "./TokenCard";
 import UsageCard from "./UsageCard";
 import RequestLogsTable from "./RequestLogsTable";
 import NotebookPage from "./NotebookPage";
+import AdminPage from "./AdminPage";
 
 const mono = "'IBM Plex Mono', monospace";
 
@@ -14,6 +15,7 @@ const TABS = [
   { id: "uso",      label: "Uso" },
   { id: "logs",     label: "Chamadas" },
   { id: "docs",     label: "Docs" },
+  { id: "admin",    label: "Admin" },
 ];
 
 const BASE_URL = "https://bongo.vps-uni5.net/qrng/v1";
@@ -495,7 +497,8 @@ export default function DeveloperPage() {
           )
         )}
 
-        {activeTab === "docs" && <DocsCard />}
+        {activeTab === "docs"  && <DocsCard />}
+        {activeTab === "admin" && <AdminPage />}
       </div>
     </div>
   );

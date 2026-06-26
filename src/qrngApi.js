@@ -99,6 +99,29 @@ export async function devGetUpstreamStatus() {
   return devFetch("/upstream/status");
 }
 
+export async function devCreateTokenWithInvite(invite_code) {
+  return devFetch("/tokens", { method: "POST", body: JSON.stringify({ invite_code }) });
+}
+
+// ── Admin API ─────────────────────────────────────────────────────────────────
+
+async function adminFetch(path, options = {}) {
+  const secret = localStorage.getItem("qrng_admin_secret");
+  const headers = { "Content-Type": "application/json", ...options.headers };
+  if (secret) headers["Authorization"] = `Bearer ${secret}`;
+  const r = await fetch(`${CLIENT_API}${path}`, { ...options, headers, signal: AbortSignal.timeout(10000) });
+  const data = await r.json();
+  return { ok: r.ok, status: r.status, data };
+}
+
+export async function adminCreateInvite()          { return adminFetch("/admin/invite", { method: "POST" }); }
+export async function adminGetInvites()            { return adminFetch("/admin/invites"); }
+export async function adminGetTokens()             { return adminFetch("/admin/tokens"); }
+export async function adminRevokeToken(id)         { return adminFetch(`/admin/tokens/${id}/revoke`, { method: "POST" }); }
+export async function adminSetQuota(id, quota_daily) {
+  return adminFetch(`/admin/tokens/${id}/quota`, { method: "PATCH", body: JSON.stringify({ quota_daily }) });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function connectQRNGStream(onChunk, onError, onClose, onStall, apiPrefix = "/api") {

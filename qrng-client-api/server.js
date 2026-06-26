@@ -8,9 +8,10 @@ const path = require("path");
 const app = express();
 app.use(express.json());
 
-const PORT = process.env.PORT || 3010;
+const PORT         = process.env.PORT         || 3010;
 const QRNG_UPSTREAM = process.env.QRNG_UPSTREAM || "http://127.0.0.1:18001";
-const DB_PATH = process.env.DB_PATH || path.join(__dirname, "qrng-tokens.db");
+const DB_PATH       = process.env.DB_PATH       || path.join(__dirname, "qrng-tokens.db");
+const ADMIN_SECRET  = process.env.ADMIN_SECRET  || null;
 
 // ── Banco de dados ───────────────────────────────────────────────────────────
 
@@ -58,6 +59,14 @@ db.exec(`
     response_ms INTEGER,
     detail      TEXT,
     checked_at  TEXT    NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS invite_codes (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    code             TEXT    NOT NULL UNIQUE,
+    created_at       TEXT    NOT NULL,
+    used_at          TEXT,
+    used_by_token_id INTEGER
   );
 `);
 
@@ -178,46 +187,114 @@ function requireToken(req, res, next) {
   next();
 }
 
-// ── POST /v1/tokens — Criar token ────────────────────────────────────────────
+// ── Admin middleware ──────────────────────────────────────────────────────────
+
+function requireAdmin(req, res, next) {
+  if (!ADMIN_SECRET) {
+    return res.status(503).json({ error: "admin_disabled", message: "Painel admin não configurado nesta instância." });
+  }
+  const auth = req.headers.authorization || "";
+  if (!auth.startsWith("Bearer ") || auth.slice(7).trim() !== ADMIN_SECRET) {
+    return res.status(401).json({ error: "unauthorized", message: "Admin secret inválido." });
+  }
+  next();
+}
+
+// ── POST /v1/tokens — Criar token (com ou sem convite) ───────────────────────
 
 app.post("/v1/tokens", (req, res) => {
-  const existing = db.prepare("SELECT id FROM api_tokens WHERE status = 'active' LIMIT 1").get();
+  const now = new Date().toISOString();
 
+  // Modo multi-usuário: ADMIN_SECRET configurado → exige código de convite
+  if (ADMIN_SECRET) {
+    const { invite_code } = req.body;
+    if (!invite_code) {
+      return res.status(400).json({ error: "invite_required", message: "Código de convite obrigatório." });
+    }
+    const invite = db.prepare("SELECT * FROM invite_codes WHERE code = ?").get(invite_code);
+    if (!invite) {
+      return res.status(400).json({ error: "invalid_invite", message: "Código de convite inválido." });
+    }
+    if (invite.used_at) {
+      return res.status(400).json({ error: "invite_used", message: "Este código de convite já foi utilizado." });
+    }
+
+    const raw = generateToken();
+    const result = db.prepare(`
+      INSERT INTO api_tokens (token_prefix, token_hash, name, status, quota_daily, created_at)
+      VALUES (?, ?, 'Token principal', 'active', 1000, ?)
+    `).run(tokenPrefix(raw), hashToken(raw), now);
+
+    db.prepare("UPDATE invite_codes SET used_at = ?, used_by_token_id = ? WHERE id = ?")
+      .run(now, result.lastInsertRowid, invite.id);
+
+    return res.json({ message: "Token criado. Guarde-o agora — não será exibido novamente.", token: raw, prefix: tokenPrefix(raw), created_at: now });
+  }
+
+  // Modo single-user: sem ADMIN_SECRET → comportamento original (um token por instância)
+  const existing = db.prepare("SELECT id FROM api_tokens WHERE status = 'active' LIMIT 1").get();
   if (existing) {
-    // Se já tem token, exige que o usuário use /me/token/rotate
     const auth = req.headers.authorization || "";
     if (auth.startsWith("Bearer ")) {
-      const raw = auth.slice(7).trim();
-      const row = db.prepare("SELECT id FROM api_tokens WHERE token_hash = ? AND status = 'active'").get(hashToken(raw));
-      if (row) {
-        return res.status(409).json({
-          error: "token_exists",
-          message: "Você já tem um token ativo. Use POST /v1/me/token/rotate para regenerar.",
-        });
-      }
+      const row = db.prepare("SELECT id FROM api_tokens WHERE token_hash = ? AND status = 'active'").get(hashToken(auth.slice(7).trim()));
+      if (row) return res.status(409).json({ error: "token_exists", message: "Você já tem um token ativo. Use POST /v1/me/token/rotate para regenerar." });
     }
-    return res.status(409).json({
-      error: "token_exists",
-      message: "Já existe um token ativo. Faça login com seu token para gerenciá-lo.",
-    });
+    return res.status(409).json({ error: "token_exists", message: "Já existe um token ativo. Faça login com seu token para gerenciá-lo." });
   }
 
   const raw = generateToken();
-  const hash = hashToken(raw);
   const prefix = tokenPrefix(raw);
-  const now = new Date().toISOString();
-
   db.prepare(`
     INSERT INTO api_tokens (token_prefix, token_hash, name, status, quota_daily, created_at)
     VALUES (?, ?, 'Token principal', 'active', 1000, ?)
-  `).run(prefix, hash, now);
+  `).run(prefix, hashToken(raw), now);
 
-  res.json({
-    message: "Token criado. Guarde-o agora — não será exibido novamente.",
-    token: raw,
-    prefix,
-    created_at: now,
-  });
+  res.json({ message: "Token criado. Guarde-o agora — não será exibido novamente.", token: raw, prefix, created_at: now });
+});
+
+// ── Admin: gestão de convites e tokens ───────────────────────────────────────
+
+app.post("/v1/admin/invite", requireAdmin, (req, res) => {
+  const code = crypto.randomBytes(16).toString("hex");
+  const now  = new Date().toISOString();
+  db.prepare("INSERT INTO invite_codes (code, created_at) VALUES (?, ?)").run(code, now);
+  res.json({ code, created_at: now });
+});
+
+app.get("/v1/admin/invites", requireAdmin, (req, res) => {
+  const invites = db.prepare(
+    "SELECT id, code, created_at, used_at, used_by_token_id FROM invite_codes ORDER BY created_at DESC LIMIT 100"
+  ).all();
+  res.json({ invites });
+});
+
+app.get("/v1/admin/tokens", requireAdmin, (req, res) => {
+  const today  = new Date().toISOString().slice(0, 10);
+  const tokens = db.prepare(`
+    SELECT t.id, t.token_prefix, t.name, t.status, t.quota_daily, t.created_at, t.last_used_at,
+           COALESCE(d.requests_count, 0) AS requests_today,
+           COALESCE(d.bytes_count, 0)    AS bytes_today
+    FROM api_tokens t
+    LEFT JOIN daily_usage d ON d.token_id = t.id AND d.date = ?
+    ORDER BY t.created_at DESC
+  `).all(today);
+  res.json({ tokens });
+});
+
+app.post("/v1/admin/tokens/:id/revoke", requireAdmin, (req, res) => {
+  const now    = new Date().toISOString();
+  const result = db.prepare("UPDATE api_tokens SET status = 'revoked', revoked_at = ? WHERE id = ?")
+    .run(now, req.params.id);
+  if (result.changes === 0) return res.status(404).json({ error: "not_found" });
+  res.json({ message: "Token revogado.", revoked_at: now });
+});
+
+app.patch("/v1/admin/tokens/:id/quota", requireAdmin, (req, res) => {
+  const quota  = parseInt(req.body.quota_daily, 10);
+  if (!quota || quota < 1) return res.status(400).json({ error: "invalid_quota", message: "quota_daily deve ser >= 1" });
+  const result = db.prepare("UPDATE api_tokens SET quota_daily = ? WHERE id = ?").run(quota, req.params.id);
+  if (result.changes === 0) return res.status(404).json({ error: "not_found" });
+  res.json({ message: "Cota atualizada.", quota_daily: quota });
 });
 
 // ── GET /v1/me/token — Info do token atual ───────────────────────────────────

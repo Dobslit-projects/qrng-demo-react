@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { theme } from "../../theme";
-import { devCreateToken, devRotateToken, devRevokeToken } from "../../qrngApi";
+import { devCreateToken, devCreateTokenWithInvite, devRotateToken, devRevokeToken } from "../../qrngApi";
 
 const mono = "'IBM Plex Mono', monospace";
 
@@ -40,10 +40,12 @@ function ActionBtn({ onClick, color, disabled, children }) {
 
 export default function TokenCard({ tokenInfo, onTokenChange }) {
   const [showFull, setShowFull] = useState(false);
-  const [newToken, setNewToken] = useState(null); // token completo exibido uma única vez
+  const [newToken, setNewToken] = useState(null);
   const [copied, setCopied] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+  const [needsInvite, setNeedsInvite] = useState(false);
+  const [inviteCode, setInviteCode] = useState("");
 
   const hasToken = !!tokenInfo;
   const isActive = tokenInfo?.status === "active";
@@ -52,11 +54,19 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
     setLoading(true);
     setError(null);
     try {
-      const res = await devCreateToken();
+      const res = needsInvite
+        ? await devCreateTokenWithInvite(inviteCode.trim())
+        : await devCreateToken();
+
       if (res.ok) {
         localStorage.setItem("qrng_api_token", res.data.token);
         setNewToken(res.data.token);
+        setNeedsInvite(false);
+        setInviteCode("");
         onTokenChange();
+      } else if (res.data.error === "invite_required") {
+        setNeedsInvite(true);
+        setError("Esta instância exige um código de convite para criar um token.");
       } else {
         setError(res.data.message || "Erro ao criar token.");
       }
@@ -261,11 +271,34 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
         </div>
       )}
 
+      {/* Campo de convite — aparece só quando o servidor exige */}
+      {!hasToken && needsInvite && (
+        <div style={{ display: "flex", gap: 8 }}>
+          <input
+            type="text"
+            value={inviteCode}
+            onChange={(e) => setInviteCode(e.target.value)}
+            placeholder="Cole o código de convite aqui..."
+            style={{
+              flex: 1,
+              padding: "8px 12px",
+              borderRadius: 8,
+              border: `1px solid ${theme.quantum}40`,
+              background: "#0a0e17",
+              color: theme.text,
+              fontFamily: mono,
+              fontSize: 12,
+              outline: "none",
+            }}
+          />
+        </div>
+      )}
+
       {/* Ações */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         {!hasToken && (
-          <ActionBtn onClick={handleCreate} color={theme.quantum} disabled={loading}>
-            {loading ? "Gerando..." : "Gerar Token"}
+          <ActionBtn onClick={handleCreate} color={theme.quantum} disabled={loading || (needsInvite && !inviteCode.trim())}>
+            {loading ? "Gerando..." : needsInvite ? "Confirmar com Convite" : "Gerar Token"}
           </ActionBtn>
         )}
         {hasToken && isActive && (
