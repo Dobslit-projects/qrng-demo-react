@@ -355,7 +355,7 @@ export default function DeveloperPage() {
             style={{
               padding: "7px 16px",
               borderRadius: 8,
-              border: "none",
+              border: activeTab === t.id ? `1px solid ${theme.border}` : "1px solid transparent",
               background: activeTab === t.id ? theme.surface : "transparent",
               color: activeTab === t.id ? theme.text : theme.textMuted,
               fontSize: 11,
@@ -364,7 +364,6 @@ export default function DeveloperPage() {
               cursor: "pointer",
               transition: "all 0.15s",
               boxShadow: activeTab === t.id ? "0 1px 4px rgba(0,0,0,0.08)" : "none",
-              border: activeTab === t.id ? `1px solid ${theme.border}` : "1px solid transparent",
             }}
           >
             {t.label}
