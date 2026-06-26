@@ -168,7 +168,7 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
         </div>
       )}
 
-      {/* Token display */}
+      {/* Token display / Onboarding */}
       {hasToken ? (
         <div
           style={{
@@ -189,16 +189,75 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
       ) : (
         <div
           style={{
-            padding: "20px",
             borderRadius: 10,
-            border: `1.5px dashed ${theme.border}`,
-            textAlign: "center",
-            color: theme.textMuted,
-            fontSize: 12,
-            fontFamily: mono,
+            border: `1px solid ${theme.border}`,
+            overflow: "hidden",
           }}
         >
-          Nenhum token gerado ainda.
+          {/* Hero */}
+          <div
+            style={{
+              background: theme.quantum + "08",
+              padding: "20px 22px 16px",
+              borderBottom: `1px solid ${theme.border}`,
+            }}
+          >
+            <div style={{ fontSize: 13, fontWeight: 700, color: theme.text, fontFamily: mono, marginBottom: 6 }}>
+              Acesso à aleatoriedade quântica real
+            </div>
+            <div style={{ fontSize: 11, color: theme.textDim, lineHeight: 1.7 }}>
+              A API QRNG da Dobslit/UFPE fornece bytes gerados por ruído quântico em hardware FPGA —
+              imprevisíveis por construção física, não por algoritmo.
+            </div>
+          </div>
+
+          {/* O que você recebe */}
+          <div style={{ padding: "14px 22px", borderBottom: `1px solid ${theme.border}` }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: theme.textMuted, fontFamily: mono, marginBottom: 10, letterSpacing: 1 }}>
+              O QUE VOCÊ RECEBE
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
+              {[
+                ["1 000 req/dia", "Cota diária para chamadas autenticadas"],
+                ["Até 4 096 bytes", "Por requisição — formatos hex, base64 ou uint8"],
+                ["Token permanente", "Não expira; pode ser regenerado ou revogado a qualquer momento"],
+                ["Logs e estatísticas", "Histórico completo de chamadas e uso agregado"],
+              ].map(([label, desc]) => (
+                <div key={label} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
+                  <span style={{ color: theme.quantum, fontFamily: mono, fontSize: 11, flexShrink: 0 }}>→</span>
+                  <div>
+                    <span style={{ fontSize: 11, fontWeight: 700, color: theme.text, fontFamily: mono }}>{label}</span>
+                    <span style={{ fontSize: 11, color: theme.textDim }}> — {desc}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Como usar */}
+          <div style={{ padding: "14px 22px" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, color: theme.textMuted, fontFamily: mono, marginBottom: 10, letterSpacing: 1 }}>
+              COMO COMEÇAR
+            </div>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+              {["1. Clique em Gerar Token", "2. Copie e guarde o token", "3. Use no header Authorization: Bearer"].map((step, i) => (
+                <div
+                  key={i}
+                  style={{
+                    fontSize: 10,
+                    fontFamily: mono,
+                    color: theme.textDim,
+                    padding: "4px 10px",
+                    borderRadius: 6,
+                    background: theme.quantum + "08",
+                    border: `1px solid ${theme.border}`,
+                  }}
+                >
+                  {step}
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 

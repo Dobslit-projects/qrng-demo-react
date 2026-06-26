@@ -267,11 +267,19 @@ export default function DeveloperPage() {
     if (activeTab === "logs") loadRequests();
   }, [activeTab, loadUsage, loadRequests]);
 
+  const [quotaBannerDismissed, setQuotaBannerDismissed] = useState(false);
+
   function handleTokenChange() {
     setUsage(null);
     setRequests(null);
+    setQuotaBannerDismissed(false);
     loadToken();
   }
+
+  const quotaPct = tokenInfo
+    ? tokenInfo.requests_today / tokenInfo.quota_daily
+    : 0;
+  const showQuotaBanner = !quotaBannerDismissed && tokenInfo && quotaPct >= 0.8;
 
   return (
     <div style={{ height: "100%", display: "flex", flexDirection: "column", gap: 0 }}>
@@ -366,6 +374,47 @@ export default function DeveloperPage() {
 
       {/* Conteúdo */}
       <div style={{ flex: 1, overflowY: "auto" }}>
+        {showQuotaBanner && (
+          <div
+            style={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              gap: 12,
+              padding: "10px 16px",
+              borderRadius: 10,
+              background: quotaPct >= 0.95 ? theme.danger + "12" : theme.warning + "12",
+              border: `1px solid ${quotaPct >= 0.95 ? theme.danger + "40" : theme.warning + "40"}`,
+              fontSize: 11,
+              color: quotaPct >= 0.95 ? theme.danger : theme.warning,
+              fontFamily: mono,
+              marginBottom: 12,
+              flexShrink: 0,
+            }}
+          >
+            <span>
+              {quotaPct >= 0.95
+                ? `Cota quase esgotada — ${tokenInfo.requests_today}/${tokenInfo.quota_daily} req hoje (${Math.round(quotaPct * 100)}%). Resetará à meia-noite UTC.`
+                : `Atenção: ${Math.round(quotaPct * 100)}% da cota diária utilizada (${tokenInfo.requests_today}/${tokenInfo.quota_daily} req).`}
+            </span>
+            <button
+              onClick={() => setQuotaBannerDismissed(true)}
+              style={{
+                background: "none",
+                border: "none",
+                color: "inherit",
+                cursor: "pointer",
+                fontSize: 14,
+                lineHeight: 1,
+                padding: "0 2px",
+                flexShrink: 0,
+              }}
+            >
+              ×
+            </button>
+          </div>
+        )}
+
         {apiError && (
           <div
             style={{
