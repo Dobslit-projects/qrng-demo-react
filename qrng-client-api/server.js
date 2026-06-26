@@ -513,9 +513,13 @@ app.get("/v1/upstream/status", requireToken, checkTokenRate, (req, res) => {
 
 // ── Start ────────────────────────────────────────────────────────────────────
 
-app.listen(PORT, "127.0.0.1", () => {
-  console.log(`QRNG client API listening on http://127.0.0.1:${PORT}`);
-  console.log(`Database: ${DB_PATH}`);
-  checkUpstream();
-  setInterval(checkUpstream, 60 * 1000);
-});
+if (require.main === module) {
+  app.listen(PORT, "127.0.0.1", () => {
+    console.log(`QRNG client API listening on http://127.0.0.1:${PORT}`);
+    console.log(`Database: ${DB_PATH}`);
+    checkUpstream();
+    setInterval(checkUpstream, 60 * 1000);
+  });
+}
+
+module.exports = { app, db };
