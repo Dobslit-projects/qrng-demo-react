@@ -307,20 +307,34 @@ function checkQuota(req, res, next) {
 function parseUpstreamRandom(buffer, requestedBytes) {
   const text = buffer.toString("utf8").trim();
 
+  // JSON format
   try {
     const json = JSON.parse(text);
-    if (Array.isArray(json.bytes))      return Buffer.from(json.bytes.slice(0, requestedBytes));
-    if (typeof json.hex === "string")   return Buffer.from(json.hex, "hex").slice(0, requestedBytes);
+    if (Array.isArray(json.bytes))       return Buffer.from(json.bytes.slice(0, requestedBytes));
+    if (typeof json.hex === "string")    return Buffer.from(json.hex, "hex").slice(0, requestedBytes);
     if (typeof json.random === "string") return Buffer.from(json.random, "hex").slice(0, requestedBytes);
   } catch (_) {}
 
-  if (/^[0-9,\s]+$/.test(text) && /[\s,]/.test(text) && text.length > 0) {
+  // Space/comma-separated decimal values: "143 52 187 ..."
+  if (/^[0-9,\s]+$/.test(text) && /[\s,]/.test(text)) {
     const values = text
       .split(/[\s,]+/)
       .map((x) => Number(x.trim()))
       .filter((n) => Number.isInteger(n) && n >= 0 && n <= 255)
       .slice(0, requestedBytes);
-    if (values.length > 0) return Buffer.from(values);
+    if (values.length >= requestedBytes) return Buffer.from(values);
+  }
+
+  // Packed decimal digit stream — UFPE/FPGA upstream format: "07157403550289211521..."
+  // Rejection sampling: consume 3 digits at a time (000-999); keep if <= 255.
+  // P(keep) ≈ 25.6%, so caller must request ~20× more upstream digits than output bytes.
+  if (/^[0-9]+$/.test(text)) {
+    const result = [];
+    for (let i = 0; i + 3 <= text.length && result.length < requestedBytes; i += 3) {
+      const val = parseInt(text.slice(i, i + 3), 10);
+      if (val <= 255) result.push(val);
+    }
+    if (result.length >= requestedBytes) return Buffer.from(result.slice(0, requestedBytes));
   }
 
   return buffer.slice(0, requestedBytes);
@@ -340,7 +354,7 @@ app.get("/v1/random", requireToken, checkQuota, async (req, res) => {
   }
 
   try {
-    const upstreamBytes = Math.min(bytes * 5, 50 * 1024 * 1024);
+    const upstreamBytes = Math.min(bytes * 20, 50 * 1024 * 1024);
     const r = await fetch(`${QRNG_UPSTREAM}/random?bytes=${upstreamBytes}`);
 
     if (!r.ok) {
