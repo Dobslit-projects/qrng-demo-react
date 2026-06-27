@@ -41,7 +41,7 @@ function escapeCell(v) {
 }
 
 function exportCsv(rows) {
-  const headers = ["request_id", "endpoint", "bytes", "formato", "status", "ip", "data_utc"];
+  const headers = ["request_id", "endpoint", "bytes", "formato", "status", "duration_ms", "ip", "data_utc"];
   const lines = [
     headers.join(","),
     ...rows.map((r) =>
@@ -51,6 +51,7 @@ function exportCsv(rows) {
         r.bytes_requested,
         r.format ?? "",
         r.status_code,
+        r.duration_ms ?? "",
         r.ip_address ?? "",
         r.created_at,
       ]
@@ -158,7 +159,7 @@ export default function RequestLogsTable({ requests }) {
         >
           <thead>
             <tr>
-              {["request_id", "endpoint", "bytes", "formato", "status", "data"].map((h) => (
+              {["request_id", "endpoint", "bytes", "formato", "status", "tempo", "data"].map((h) => (
                 <th
                   key={h}
                   style={{
@@ -200,6 +201,9 @@ export default function RequestLogsTable({ requests }) {
                 </td>
                 <td style={{ padding: "7px 10px" }}>
                   <StatusBadge code={r.status_code} />
+                </td>
+                <td style={{ padding: "7px 10px", color: theme.textDim, whiteSpace: "nowrap" }}>
+                  {r.duration_ms != null ? `${r.duration_ms}ms` : "—"}
                 </td>
                 <td style={{ padding: "7px 10px", color: theme.textMuted, whiteSpace: "nowrap" }}>
                   {formatDate(r.created_at)}
