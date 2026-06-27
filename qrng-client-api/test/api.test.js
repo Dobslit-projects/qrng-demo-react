@@ -210,37 +210,45 @@ describe("Validação de bytes — /v1/random", () => {
   });
 });
 
-// ─── request_id nas respostas ─────────────────────────────────────────────────
-describe("request_id presente nas respostas", () => {
-  test("/v1/random inclui request_id (qualquer status)", async () => {
+// ─── request_id em TODAS as respostas ────────────────────────────────────────
+describe("request_id presente em todas as respostas", () => {
+  function assertRequestId(body) {
+    assert.ok(body.request_id, "deve ter request_id");
+    assert.ok(body.request_id.startsWith("req_"), "formato req_*");
+  }
+
+  test("/v1/random 200/503 inclui request_id", async () => {
     const res = await request(app).get("/v1/random?bytes=32").set("Authorization", `Bearer ${apiToken}`);
-    assert.ok(res.body.request_id, "deve ter request_id");
-    assert.ok(res.body.request_id.startsWith("req_"), "formato req_*");
+    assertRequestId(res.body);
   });
 
-  test("/v1/random erro 422 inclui request_id", async () => {
+  test("/v1/random 422 INVALID_BYTES inclui request_id", async () => {
     const res = await request(app).get("/v1/random?bytes=abc").set("Authorization", `Bearer ${apiToken}`);
-    // 422 é retornado antes do logRequest — request_id gerado antes do fetch
-    // neste caso específico o parseBytes retorna antes de newRequestId no handler
-    // então o 422 do parseBytes não tem request_id — validamos o 413 que sim tem
     assert.equal(res.status, 422);
+    assertRequestId(res.body);
   });
 
-  test("/v1/random erro 413 não chega ao handler (parseBytes devolve antes)", async () => {
+  test("/v1/random 413 REQUEST_TOO_LARGE inclui request_id", async () => {
     const res = await request(app).get("/v1/random?bytes=2000000").set("Authorization", `Bearer ${apiToken}`);
     assert.equal(res.status, 413);
-    assert.equal(res.body.error, "REQUEST_TOO_LARGE");
+    assertRequestId(res.body);
+  });
+
+  test("/v1/random 422 INVALID_FORMAT inclui request_id", async () => {
+    const res = await request(app).get("/v1/random?bytes=32&format=base58").set("Authorization", `Bearer ${apiToken}`);
+    assert.equal(res.status, 422);
+    assertRequestId(res.body);
   });
 
   test("/v1/health inclui request_id", async () => {
     const res = await request(app).get("/v1/health").set("Authorization", `Bearer ${apiToken}`);
-    assert.ok(res.body.request_id, "deve ter request_id");
+    assertRequestId(res.body);
   });
 });
 
 // ─── Enforcement de cota ──────────────────────────────────────────────────────
 describe("Enforcement de cota", () => {
-  test("retorna 429 QUOTA_EXCEEDED quando requests esgotados", async () => {
+  test("retorna 429 QUOTA_EXCEEDED com request_id quando requests esgotados", async () => {
     const tokenId = db.prepare("SELECT id FROM api_tokens WHERE status = 'active' LIMIT 1").get().id;
     const today   = new Date().toISOString().slice(0, 10);
     db.prepare("UPDATE api_tokens SET quota_daily = 1 WHERE id = ?").run(tokenId);
@@ -252,14 +260,14 @@ describe("Enforcement de cota", () => {
     const res = await request(app).get("/v1/random?bytes=32").set("Authorization", `Bearer ${apiToken}`);
     assert.equal(res.status, 429);
     assert.equal(res.body.error, "QUOTA_EXCEEDED");
+    assert.ok(res.body.request_id?.startsWith("req_"), "QUOTA_EXCEEDED deve ter request_id");
     db.prepare("UPDATE api_tokens SET quota_daily = 10000 WHERE id = ?").run(tokenId);
     db.prepare("DELETE FROM daily_usage WHERE token_id = ? AND date = ?").run(tokenId, today);
   });
 
-  test("retorna 429 QUOTA_BYTES_EXCEEDED quando bytes esgotados", async () => {
+  test("retorna 429 QUOTA_BYTES_EXCEEDED com request_id quando bytes esgotados", async () => {
     const tokenId = db.prepare("SELECT id FROM api_tokens WHERE status = 'active' LIMIT 1").get().id;
     const today   = new Date().toISOString().slice(0, 10);
-    // Simula bytes_count = DAILY_QUOTA_BYTES (default 104857600)
     const quota = parseInt(process.env.DAILY_QUOTA_BYTES || "104857600", 10);
     db.prepare(`
       INSERT INTO daily_usage (token_id, date, requests_count, bytes_count, errors_count)
@@ -269,6 +277,7 @@ describe("Enforcement de cota", () => {
     const res = await request(app).get("/v1/random?bytes=32").set("Authorization", `Bearer ${apiToken}`);
     assert.equal(res.status, 429);
     assert.equal(res.body.error, "QUOTA_BYTES_EXCEEDED");
+    assert.ok(res.body.request_id?.startsWith("req_"), "QUOTA_BYTES_EXCEEDED deve ter request_id");
     db.prepare("DELETE FROM daily_usage WHERE token_id = ? AND date = ?").run(tokenId, today);
   });
 });

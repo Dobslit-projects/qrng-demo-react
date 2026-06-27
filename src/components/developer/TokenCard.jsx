@@ -209,7 +209,7 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
             <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
               {[
                 ["1 000 req/dia", "Cota diária para chamadas autenticadas"],
-                ["Até 4 096 bytes", "Por requisição — formatos hex, base64 ou uint8"],
+                ["Até 1 MiB por req", "1 048 576 bytes — formatos hex, base64 ou uint8"],
                 ["Token permanente", "Não expira; pode ser regenerado ou revogado a qualquer momento"],
                 ["Logs e estatísticas", "Histórico completo de chamadas e uso agregado"],
               ].map(([label, desc]) => (

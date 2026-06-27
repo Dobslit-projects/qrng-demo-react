@@ -139,6 +139,13 @@ app.use(rateLimit({
   legacyHeaders: false,
 }));
 
+// ── Geração antecipada de request_id ─────────────────────────────────────────
+
+function attachRequestId(req, _res, next) {
+  req.requestId = newRequestId();
+  next();
+}
+
 // ── Rate limiting — por token (in-memory) ─────────────────────────────────────
 
 const tokenRateMap = new Map(); // tokenId → { count, resetAt }
@@ -162,6 +169,7 @@ function checkTokenRate(req, res, next) {
     const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
     res.setHeader("Retry-After", retryAfter);
     return res.status(429).json({
+      request_id: req.requestId,
       error: "RATE_LIMIT_EXCEEDED",
       message: `Limite de ${RATE_LIMIT_PER_TOKEN_MIN} req/min por token atingido.`,
       retry_after_seconds: retryAfter,
@@ -179,12 +187,14 @@ function parseBytes(req, res, next) {
   const n = Number(raw);
   if (!Number.isInteger(n) || n < 1) {
     return res.status(422).json({
+      request_id: req.requestId,
       error: "INVALID_BYTES",
       message: "bytes must be a positive integer",
     });
   }
   if (n > MAX_BYTES_PER_REQUEST) {
     return res.status(413).json({
+      request_id: req.requestId,
       error: "REQUEST_TOO_LARGE",
       message: `Maximum allowed size is ${MAX_BYTES_PER_REQUEST} bytes per request.`,
       max_bytes_per_request: MAX_BYTES_PER_REQUEST,
@@ -205,6 +215,7 @@ function checkQuota(req, res, next) {
 
   if (usedRequests >= quota_daily) {
     return res.status(429).json({
+      request_id: req.requestId,
       error: "QUOTA_EXCEEDED",
       message: `Cota diária de ${quota_daily} requests atingida. Resetará à meia-noite UTC.`,
       quota_daily_requests: quota_daily,
@@ -215,6 +226,7 @@ function checkQuota(req, res, next) {
   const requestedBytes = req.requestedBytes || 0;
   if (requestedBytes > 0 && usedBytes + requestedBytes > DAILY_QUOTA_BYTES) {
     return res.status(429).json({
+      request_id: req.requestId,
       error: "QUOTA_BYTES_EXCEEDED",
       message: `Cota diária de ${DAILY_QUOTA_BYTES} bytes atingida. Resetará à meia-noite UTC.`,
       quota_daily_bytes: DAILY_QUOTA_BYTES,
@@ -498,8 +510,8 @@ app.get("/v1/admin/users", requireAuth, requireAdmin, (req, res) => {
 
 // ── GET /v1/health ────────────────────────────────────────────────────────────
 
-app.get("/v1/health", requireToken, checkTokenRate, async (req, res) => {
-  const requestId = newRequestId();
+app.get("/v1/health", requireToken, attachRequestId, checkTokenRate, async (req, res) => {
+  const requestId = req.requestId;
   const t0        = Date.now();
   const ip        = req.ip || req.socket.remoteAddress;
   const ua        = req.headers["user-agent"];
@@ -542,12 +554,12 @@ function parseUpstreamRandom(buffer, requestedBytes) {
 
 // ── GET /v1/random ────────────────────────────────────────────────────────────
 
-app.get("/v1/random", requireToken, checkTokenRate, parseBytes, checkQuota, async (req, res) => {
+app.get("/v1/random", requireToken, attachRequestId, checkTokenRate, parseBytes, checkQuota, async (req, res) => {
   const bytes     = req.requestedBytes;
   const format    = req.query.format || "hex";
   const ip        = req.ip || req.socket.remoteAddress;
   const ua        = req.headers["user-agent"];
-  const requestId = newRequestId();
+  const requestId = req.requestId;
   const t0        = Date.now();
 
   if (!["hex", "base64", "uint8"].includes(format)) {
