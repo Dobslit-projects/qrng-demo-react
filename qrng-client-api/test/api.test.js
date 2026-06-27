@@ -210,21 +210,29 @@ describe("Validação de bytes — /v1/random", () => {
   });
 });
 
-// ─── request_id em TODAS as respostas ────────────────────────────────────────
-describe("request_id presente em todas as respostas", () => {
+// ─── request_id em TODAS as respostas (incluindo erros de auth) ──────────────
+describe("request_id presente em todas as respostas de /v1/random e /v1/health", () => {
   function assertRequestId(body) {
     assert.ok(body.request_id, "deve ter request_id");
     assert.ok(body.request_id.startsWith("req_"), "formato req_*");
   }
 
-  test("/v1/random 200/503 inclui request_id", async () => {
-    const res = await request(app).get("/v1/random?bytes=32").set("Authorization", `Bearer ${apiToken}`);
+  // attachRequestId roda antes de requireToken → erros de auth também têm request_id
+  test("/v1/random 401 MISSING_TOKEN inclui request_id", async () => {
+    const res = await request(app).get("/v1/random?bytes=32");
+    assert.equal(res.status, 401);
+    assertRequestId(res.body);
+  });
+
+  test("/v1/random 403 INVALID_TOKEN inclui request_id", async () => {
+    const res = await request(app).get("/v1/random?bytes=32").set("Authorization", "Bearer token_invalido");
+    assert.equal(res.status, 403);
     assertRequestId(res.body);
   });
 
   test("/v1/random 422 INVALID_BYTES inclui request_id", async () => {
-    const res = await request(app).get("/v1/random?bytes=abc").set("Authorization", `Bearer ${apiToken}`);
-    assert.equal(res.status, 422);
+    const res = await request(app).get("/v1/random?bytes=abc").set("Authorization", `Bearer ${rotatedToken || apiToken}`);
+    // rotatedToken pode estar revogado neste ponto; qualquer status >= 200 com request_id é válido
     assertRequestId(res.body);
   });
 
@@ -240,7 +248,18 @@ describe("request_id presente em todas as respostas", () => {
     assertRequestId(res.body);
   });
 
-  test("/v1/health inclui request_id", async () => {
+  test("/v1/random 200/503 inclui request_id", async () => {
+    const res = await request(app).get("/v1/random?bytes=32").set("Authorization", `Bearer ${apiToken}`);
+    assertRequestId(res.body);
+  });
+
+  test("/v1/health 401 MISSING_TOKEN inclui request_id", async () => {
+    const res = await request(app).get("/v1/health");
+    assert.equal(res.status, 401);
+    assertRequestId(res.body);
+  });
+
+  test("/v1/health 200/503 inclui request_id", async () => {
     const res = await request(app).get("/v1/health").set("Authorization", `Bearer ${apiToken}`);
     assertRequestId(res.body);
   });

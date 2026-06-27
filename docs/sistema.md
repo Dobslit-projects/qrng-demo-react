@@ -180,7 +180,7 @@ Todos os erros retornam JSON com os campos `request_id`, `error` (SCREAMING_SNAK
 | 503 | `QRNG_UNAVAILABLE` | Upstream FPGA indisponível ou timeout |
 | 503 | `INSUFFICIENT_ENTROPY` | Upstream retornou bytes insuficientes |
 
-**Nota:** `request_id` está presente em **todas** as respostas de `/v1/random` e `/v1/health`, incluindo erros de middleware (413, 422, 429). Isso é garantido pelo middleware `attachRequestId` que executa antes de qualquer validação.
+**Nota:** `request_id` está presente em **todas** as respostas de `/v1/random` e `/v1/health`, incluindo erros de auth (401, 403) e de middleware (413, 422, 429). Isso é garantido pelo middleware `attachRequestId` que executa como **primeiro middleware da rota**, antes inclusive de `requireToken`.
 
 ---
 
@@ -344,10 +344,22 @@ Requer API token. Retorna bytes quânticos aleatórios do FPGA.
 **Cadeia de middlewares:**
 
 ```
-requireToken → attachRequestId → checkTokenRate → parseBytes → checkQuota → handler
+attachRequestId → requireToken → checkTokenRate → parseBytes → checkQuota → handler
 ```
 
-O `request_id` é gerado por `attachRequestId` antes de qualquer validação, garantindo que todos os erros (422, 413, 429, 503) o incluam.
+`attachRequestId` é o **primeiro** middleware: gera `req.requestId = "req_<16 hex>"` antes de qualquer validação. Todos os erros subsequentes — incluindo 401 (token ausente), 403 (token inválido), 429, 422, 413 e 503 — incluem o campo `request_id`.
+
+**Sobre o tamanho do payload de resposta:**
+
+`MAX_BYTES_PER_REQUEST` limita **bytes de entropia**, não o payload HTTP final. O tamanho da resposta JSON varia conforme o formato:
+
+| Formato | Bytes de entropia | Payload aproximado |
+|---|---|---|
+| `hex` | N bytes | ~2× N (1 byte → 2 chars hex) + JSON overhead |
+| `base64` | N bytes | ~1,33× N + JSON overhead |
+| `uint8` | N bytes | ~3-4× N (array de inteiros em texto JSON) |
+
+Para `bytes=1048576` (1 MiB) com `format=hex`, o corpo da resposta será **~2,1 MiB**. Para `format=base64`, **~1,4 MiB**. Planeje `MAX_RESPONSE_PAYLOAD_BYTES` separado se houver restrição de payload no proxy.
 
 **Response 200:**
 
@@ -615,13 +627,14 @@ systemctl reload nginx # aplica sem downtime
 
 | Limitação | Impacto | Solução futura |
 |---|---|---|
-| Rate limit por token é in-memory | Zera ao reiniciar; não funciona com múltiplas instâncias | Migrar para Redis |
+| Rate limit por token é in-memory | Zera ao reiniciar; **não escala horizontalmente** (múltiplas instâncias contam separado) | Redis com `INCR`/`EXPIRE` — primeiro passo antes de escalar |
 | Cota de bytes é global (env var) | Não configurável por token individualmente | Coluna `quota_daily_bytes` em `api_tokens` |
 | Sem streaming HTTP chunked | Volumes > 1 MiB requerem múltiplas chamadas | `GET /v1/random/stream` |
 | Bulk jobs não implementados | 501 para POST/GET em `/v1/bulk-random-jobs` | Implementar fila de jobs assíncronos |
-| SQLite (WAL mode) | Adequado para ~50 req/s; gargalo em escala | Migrar para PostgreSQL |
-| Sem health check próprio | Balanceadores não conseguem verificar liveness | `GET /v1/health/self` sem auth |
-| Sem renovação automática de JWT | JWT de 30 dias; usuário precisa logar novamente | Implementar refresh token |
+| SQLite (WAL mode) | Adequado para ~50 req/s sustentados; **cada request gera log + upsert em `daily_usage`** — gargalo pode aparecer antes dos 200 VUs | PostgreSQL para persistência; Redis para cotas/rate-limit em memória; fila assíncrona para logs |
+| `MAX_BYTES_PER_REQUEST` limita entropia, não payload | Para `format=hex`, a resposta HTTP pode ser 2× maior que o limite (ex.: 1 MiB → ~2,1 MiB) | Adicionar `MAX_RESPONSE_PAYLOAD_BYTES`; ou limitar `bytes` dinamicamente por formato |
+| Sem health check próprio | Balanceadores não conseguem verificar liveness da API sem um token válido | `GET /v1/health/self` sem auth |
+| Sem renovação automática de JWT | JWT de 30 dias; usuário precisa logar novamente ao expirar | Refresh token com expiração curta |
 
 ---
 
