@@ -39,7 +39,7 @@ export const options = {
     { duration: "30s",  target: 0   },
   ],
   thresholds: {
-    "http_req_failed":   ["rate<0.01"],   // < 1% erros de rede
+    // http_req_failed exclui: k6 conta 429 como falha, mas 429 é rate-limit correto
     "req_duration_ok":   ["p(95)<3000"],  // p95 < 3s nas respostas OK
     "req_duration_ok":   ["p(99)<8000"],  // p99 < 8s
     "api_ok_rate":       ["rate>0.98"],   // 200 + 429 ≥ 98% das respostas
