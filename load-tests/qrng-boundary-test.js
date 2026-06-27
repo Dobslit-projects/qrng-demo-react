@@ -30,7 +30,7 @@ export const options = {
   vus:        1,
   iterations: 1,
   thresholds: {
-    "http_req_failed":           ["rate<0.05"],   // < 5% erros de rede (TLS loopback tolerado)
+    // http_req_failed exclui: este teste envia intencionalmente 413 e 422 que k6 conta como falha
     "checks":                    ["rate==1.0"],   // todos os checks funcionais passam
     "boundary_valid_latency":    ["p(95)<30000"], // 1 MiB pode levar até ~15s no upstream FPGA
   },
