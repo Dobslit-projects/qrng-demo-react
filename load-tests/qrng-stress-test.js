@@ -114,7 +114,10 @@ export function handleSummary(data) {
   const p95    = data.metrics.stress_p95?.values?.["p(95)"]?.toFixed(0) || "—";
   const p99    = data.metrics.stress_p95?.values?.["p(99)"]?.toFixed(0) || "—";
   const rps    = data.metrics.http_reqs?.values?.rate?.toFixed(1) || "—";
-  const netErr = ((data.metrics.http_req_failed?.values?.rate || 0) * 100).toFixed(2);
+  // http_req_failed conta 4xx/5xx — usar apenas para erros reais de conexão TCP
+  // Calculamos a taxa de erro TCP como: 1 - (total_com_resposta / total_tentativas)
+  const totalReqs = data.metrics.http_reqs?.values?.count || 1;
+  const netErrPct = total > 0 ? Math.max(0, ((totalReqs - total) / totalReqs) * 100).toFixed(2) : "0.00";
   const okPct  = total > 0 ? (((s200 + s429) / total) * 100).toFixed(1) : "—";
   const dnPct  = total > 0 ? ((s503 / total) * 100).toFixed(1) : "—";
 
@@ -129,7 +132,7 @@ export function handleSummary(data) {
 ║  API Node saudável (200+429):     ${okPct}%                         ║
 ║  Upstream FPGA indisponível(503): ${dnPct}%                         ║
 ║  Erros de servidor (500/502):     ${sErr > 0 ? "⚠ " : ""}${sErr}   ║
-║  Erros de rede TCP:               ${netErr}%                        ║
+║  Erros de rede TCP (sem resposta): ${netErrPct}%                    ║
 ║  Latência (200): p50=${p50}ms  p95=${p95}ms  p99=${p99}ms          ║
 ╠═══════════════════════════════════════════════════════════════════════╣
 ║  INTERPRETAÇÃO:                                                       ║
