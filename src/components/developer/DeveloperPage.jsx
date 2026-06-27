@@ -62,7 +62,7 @@ function DocsCard() {
           Endpoints disponíveis
         </span>
         {[
-          ["GET",  "/v1/random",          "?bytes=N&format=hex|base64|uint8", "Bytes aleatórios (máx. 4096)"],
+          ["GET",  "/v1/random",          "?bytes=N&format=hex|base64|uint8", "Bytes aleatórios (máx. 1 MiB)"],
           ["GET",  "/v1/health",          "", "Status do QRNG upstream"],
           ["GET",  "/v1/me/token",        "", "Informações do seu token"],
           ["GET",  "/v1/me/usage",        "", "Estatísticas de uso"],

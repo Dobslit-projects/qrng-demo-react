@@ -13,7 +13,7 @@ const ENDPOINTS = [
     path: "/random",
     label: "GET /v1/random — Bytes aleatórios",
     params: [
-      { key: "bytes",  type: "number", default: 32,    label: "Bytes", min: 1, max: 4096 },
+      { key: "bytes",  type: "number", default: 32,    label: "Bytes", min: 1, max: 1048576 },
       { key: "format", type: "select", default: "hex", label: "Formato", options: ["hex", "base64", "uint8"] },
     ],
   },
