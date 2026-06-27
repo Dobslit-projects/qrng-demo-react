@@ -334,6 +334,62 @@ Consultável via `GET /v1/me/requests?limit=100` (máx. 10.000 registros).
 
 ---
 
+## Números oficiais do piloto
+
+| Parâmetro | Valor padrão | Nota |
+|---|---|---|
+| `MAX_BYTES_PER_REQUEST` | **1 MiB** (1 048 576 B) | Limite por chamada síncrona |
+| `DAILY_QUOTA_BYTES` | **100 MiB/dia** por token | Ajustável via admin |
+| `DAILY_QUOTA_REQUESTS` | **10 000 req/dia** por token | Ajustável via admin |
+| `RATE_LIMIT_PER_TOKEN_PER_MINUTE` | **60 req/min** por token | In-memory, reseta no restart |
+| `RATE_LIMIT_PER_IP_PER_MINUTE` | **120 req/min** por IP | Global, via express-rate-limit |
+
+**Recomendações de tamanho por caso de uso:**
+
+| Uso | bytes recomendados | Motivo |
+|---|---|---|
+| Demo / geração pontual | 256 B | Exibe resultado imediatamente na UI |
+| Integração em API | 64 KiB | Bom equilíbrio latência × volume |
+| Experimentos científicos | 1 MiB | Máximo por chamada — use em loop se precisar de mais |
+| Volumes > 1 MiB | bulk jobs (501) | Ainda não implementado — use múltiplas chamadas |
+
+---
+
+## Observabilidade
+
+### Liveness check (sem autenticação)
+
+```bash
+curl https://bongo.vps-uni5.net/qrng/v1/health/self
+# {"status":"ok","service":"qrng-client-api","uptime_seconds":3600,...}
+```
+
+Use para Nginx `health_check`, Docker `HEALTHCHECK` e balanceadores.
+
+### Métricas Prometheus
+
+```bash
+# Se METRICS_TOKEN não estiver configurado, sem autenticação:
+curl http://localhost:3010/metrics
+
+# Com METRICS_TOKEN configurado:
+curl -H "Authorization: Bearer <METRICS_TOKEN>" http://localhost:3010/metrics
+```
+
+Métricas disponíveis:
+- `qrng_requests_total{status}` — histórico completo por status HTTP
+- `qrng_random_bytes_total` — bytes de entropia entregues (status=200)
+- `qrng_errors_total` — erros em /v1/random
+- `qrng_rate_limited_total` — rate limits desde o último restart
+- `qrng_quota_exceeded_total{type}` — cotas esgotadas (`requests` ou `bytes`)
+- `qrng_upstream_status` — 1=up, 0=down, -1=unknown
+- `qrng_upstream_latency_ms` — latência da última verificação do upstream
+- `qrng_active_tokens` — tokens ativos no banco
+- `qrng_registered_users` — usuários registrados
+- `qrng_process_uptime_seconds` — uptime do processo Node.js
+
+---
+
 ## Limitações conhecidas (next steps)
 
 1. **Rate limit por token é in-memory** — reiniciar o processo zera os contadores. Para multi-instância, migrar para Redis.
@@ -341,4 +397,3 @@ Consultável via `GET /v1/me/requests?limit=100` (máx. 10.000 registros).
 3. **Sem streaming** — volumes acima de 1 MiB requerem múltiplas chamadas.
 4. **Bulk jobs não implementados** — stubs retornam 501.
 5. **SQLite com WAL** — adequado para dezenas de req/s; para centenas, avaliar migração para PostgreSQL.
-6. **Sem health check próprio** — adicionar `GET /v1/health/self` (sem auth) para balanceadores.
