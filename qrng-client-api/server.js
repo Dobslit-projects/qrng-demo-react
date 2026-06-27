@@ -146,6 +146,14 @@ function attachRequestId(req, _res, next) {
   next();
 }
 
+// ── Contadores in-memory para métricas (resetam no restart) ──────────────────
+
+const metricsCounters = {
+  rate_limited_total:         0,
+  quota_requests_exceeded:    0,
+  quota_bytes_exceeded:       0,
+};
+
 // ── Rate limiting — por token (in-memory) ─────────────────────────────────────
 
 const tokenRateMap = new Map(); // tokenId → { count, resetAt }
@@ -166,6 +174,7 @@ function checkTokenRate(req, res, next) {
     return next();
   }
   if (entry.count >= RATE_LIMIT_PER_TOKEN_MIN) {
+    metricsCounters.rate_limited_total++;
     const retryAfter = Math.ceil((entry.resetAt - now) / 1000);
     res.setHeader("Retry-After", retryAfter);
     return res.status(429).json({
@@ -214,6 +223,7 @@ function checkQuota(req, res, next) {
   const usedBytes    = usage?.bytes_count    || 0;
 
   if (usedRequests >= quota_daily) {
+    metricsCounters.quota_requests_exceeded++;
     return res.status(429).json({
       request_id: req.requestId,
       error: "QUOTA_EXCEEDED",
@@ -225,6 +235,7 @@ function checkQuota(req, res, next) {
 
   const requestedBytes = req.requestedBytes || 0;
   if (requestedBytes > 0 && usedBytes + requestedBytes > DAILY_QUOTA_BYTES) {
+    metricsCounters.quota_bytes_exceeded++;
     return res.status(429).json({
       request_id: req.requestId,
       error: "QUOTA_BYTES_EXCEEDED",
@@ -609,6 +620,100 @@ const BULK_NOT_IMPLEMENTED = {
 app.post("/v1/bulk-random-jobs",                 requireToken, (_req, res) => res.status(501).json(BULK_NOT_IMPLEMENTED));
 app.get ("/v1/bulk-random-jobs/:job_id",         requireToken, (_req, res) => res.status(501).json(BULK_NOT_IMPLEMENTED));
 app.get ("/v1/bulk-random-jobs/:job_id/download",requireToken, (_req, res) => res.status(501).json(BULK_NOT_IMPLEMENTED));
+
+// ── GET /v1/health/self — liveness sem autenticação ──────────────────────────
+
+app.get("/v1/health/self", (_req, res) => {
+  res.json({
+    status: "ok",
+    service: "qrng-client-api",
+    uptime_seconds: Math.floor(process.uptime()),
+    timestamp: new Date().toISOString(),
+  });
+});
+
+// ── GET /metrics — formato Prometheus ─────────────────────────────────────────
+
+const METRICS_TOKEN = process.env.METRICS_TOKEN || null;
+
+app.get("/metrics", (req, res) => {
+  if (METRICS_TOKEN) {
+    const auth = req.headers.authorization || "";
+    if (auth.slice(7).trim() !== METRICS_TOKEN) {
+      return res.status(401).json({ error: "UNAUTHORIZED" });
+    }
+  }
+
+  // Totais históricos do banco
+  const byStatus = db.prepare(`
+    SELECT status_code, COUNT(*) as n, COALESCE(SUM(bytes_requested),0) as b
+    FROM api_usage_logs WHERE endpoint = '/v1/random' GROUP BY status_code
+  `).all();
+
+  const totalReqs   = byStatus.reduce((a, r) => a + r.n, 0);
+  const totalBytes  = byStatus.find(r => r.status_code === 200)?.b || 0;
+  const totalErrors = byStatus.filter(r => r.status_code >= 400).reduce((a, r) => a + r.n, 0);
+
+  const p50 = db.prepare(`
+    SELECT AVG(duration_ms) as v FROM (
+      SELECT duration_ms FROM api_usage_logs WHERE status_code=200 AND duration_ms IS NOT NULL
+      ORDER BY duration_ms LIMIT (SELECT MAX(1, COUNT(*)/2) FROM api_usage_logs WHERE status_code=200)
+    )
+  `).get()?.v || 0;
+
+  const activeTokens = db.prepare("SELECT COUNT(*) as n FROM api_tokens WHERE status='active'").get().n;
+  const totalUsers   = db.prepare("SELECT COUNT(*) as n FROM users").get().n;
+
+  const upstreamUp     = upstreamState.status === "up" ? 1 : 0;
+  const upstreamLatMs  = upstreamState.responseMs ?? 0;
+
+  const lines = [
+    "# HELP qrng_requests_total Total requests to /v1/random (desde a criação do banco)",
+    "# TYPE qrng_requests_total counter",
+    ...byStatus.map(r => `qrng_requests_total{status="${r.status_code}"} ${r.n}`),
+    "",
+    "# HELP qrng_random_bytes_total Total bytes de entropia entregues (status=200)",
+    "# TYPE qrng_random_bytes_total counter",
+    `qrng_random_bytes_total ${totalBytes}`,
+    "",
+    "# HELP qrng_errors_total Total erros registrados em /v1/random",
+    "# TYPE qrng_errors_total counter",
+    `qrng_errors_total ${totalErrors}`,
+    "",
+    "# HELP qrng_rate_limited_total Eventos de rate limit desde o último restart",
+    "# TYPE qrng_rate_limited_total counter",
+    `qrng_rate_limited_total ${metricsCounters.rate_limited_total}`,
+    "",
+    "# HELP qrng_quota_exceeded_total Eventos de cota esgotada desde o último restart",
+    "# TYPE qrng_quota_exceeded_total counter",
+    `qrng_quota_exceeded_total{type="requests"} ${metricsCounters.quota_requests_exceeded}`,
+    `qrng_quota_exceeded_total{type="bytes"}    ${metricsCounters.quota_bytes_exceeded}`,
+    "",
+    "# HELP qrng_upstream_status 1=up, 0=down, -1=unknown",
+    "# TYPE qrng_upstream_status gauge",
+    `qrng_upstream_status ${upstreamState.status === "unknown" ? -1 : upstreamUp}`,
+    "",
+    "# HELP qrng_upstream_latency_ms Latência da última verificação do upstream (ms)",
+    "# TYPE qrng_upstream_latency_ms gauge",
+    `qrng_upstream_latency_ms ${upstreamLatMs}`,
+    "",
+    "# HELP qrng_active_tokens Tokens de API ativos",
+    "# TYPE qrng_active_tokens gauge",
+    `qrng_active_tokens ${activeTokens}`,
+    "",
+    "# HELP qrng_registered_users Usuários registrados",
+    "# TYPE qrng_registered_users gauge",
+    `qrng_registered_users ${totalUsers}`,
+    "",
+    "# HELP qrng_process_uptime_seconds Uptime do processo Node.js em segundos",
+    "# TYPE qrng_process_uptime_seconds gauge",
+    `qrng_process_uptime_seconds ${Math.floor(process.uptime())}`,
+    "",
+  ];
+
+  res.set("Content-Type", "text/plain; version=0.0.4; charset=utf-8");
+  res.send(lines.join("\n"));
+});
 
 // ── Upstream monitor ──────────────────────────────────────────────────────────
 
