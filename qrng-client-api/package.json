@@ -11,9 +11,11 @@
   "author": "",
   "license": "ISC",
   "dependencies": {
+    "bcryptjs": "^2.4.3",
     "better-sqlite3": "^9.4.3",
     "express": "^4.22.2",
     "express-rate-limit": "^6.11.2",
+    "jsonwebtoken": "^9.0.2",
     "node-fetch": "^2.7.0"
   },
   "devDependencies": {

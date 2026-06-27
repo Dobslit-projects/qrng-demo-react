@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { theme } from "../../theme";
-import { devCreateToken, devCreateTokenWithInvite, devRotateToken, devRevokeToken } from "../../qrngApi";
+import { devCreateToken, devRotateToken, devRevokeToken } from "../../qrngApi";
 
 const mono = "'IBM Plex Mono', monospace";
 
@@ -41,32 +41,22 @@ function ActionBtn({ onClick, color, disabled, children }) {
 export default function TokenCard({ tokenInfo, onTokenChange }) {
   const [showFull, setShowFull] = useState(false);
   const [newToken, setNewToken] = useState(null);
-  const [copied, setCopied] = useState(false);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState(null);
-  const [needsInvite, setNeedsInvite] = useState(false);
-  const [inviteCode, setInviteCode] = useState("");
+  const [copied, setCopied]     = useState(false);
+  const [loading, setLoading]   = useState(false);
+  const [error, setError]       = useState(null);
 
-  const hasToken = !!tokenInfo;
+  const hasToken = tokenInfo?.has_token;
   const isActive = tokenInfo?.status === "active";
 
   async function handleCreate() {
     setLoading(true);
     setError(null);
     try {
-      const res = needsInvite
-        ? await devCreateTokenWithInvite(inviteCode.trim())
-        : await devCreateToken();
-
+      const res = await devCreateToken();
       if (res.ok) {
         localStorage.setItem("qrng_api_token", res.data.token);
         setNewToken(res.data.token);
-        setNeedsInvite(false);
-        setInviteCode("");
         onTokenChange();
-      } else if (res.data.error === "invite_required") {
-        setNeedsInvite(true);
-        setError("Esta instância exige um código de convite para criar um token.");
       } else {
         setError(res.data.message || "Erro ao criar token.");
       }
@@ -125,7 +115,6 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
     setTimeout(() => setCopied(false), 2000);
   }
 
-  // Token display: se acabou de ser criado/rotacionado, mostra completo; senão, mascarado
   const displayToken = newToken
     ? (showFull ? newToken : `${newToken.slice(0, 28)}••••••••••••••••`)
     : tokenInfo
@@ -141,7 +130,7 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span style={{ fontSize: 14, fontWeight: 700, color: theme.text, fontFamily: mono }}>
-          Meu Token
+          Meu Token de API
         </span>
         {hasToken && (
           <span
@@ -197,14 +186,7 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
           {displayToken}
         </div>
       ) : (
-        <div
-          style={{
-            borderRadius: 10,
-            border: `1px solid ${theme.border}`,
-            overflow: "hidden",
-          }}
-        >
-          {/* Hero */}
+        <div style={{ borderRadius: 10, border: `1px solid ${theme.border}`, overflow: "hidden" }}>
           <div
             style={{
               background: theme.quantum + "08",
@@ -213,19 +195,17 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
             }}
           >
             <div style={{ fontSize: 13, fontWeight: 700, color: theme.text, fontFamily: mono, marginBottom: 6 }}>
-              Acesso à aleatoriedade quântica real
+              Gere seu token de acesso
             </div>
             <div style={{ fontSize: 11, color: theme.textDim, lineHeight: 1.7 }}>
-              A API QRNG da Dobslit/UFPE fornece bytes gerados por ruído quântico em hardware FPGA —
-              imprevisíveis por construção física, não por algoritmo.
+              Cada conta tem um token único de acesso à API. Use-o no header{" "}
+              <code style={{ fontFamily: mono, color: theme.quantum, background: theme.quantum + "14", padding: "1px 5px", borderRadius: 4 }}>
+                Authorization: Bearer
+              </code>{" "}
+              em todas as chamadas.
             </div>
           </div>
-
-          {/* O que você recebe */}
-          <div style={{ padding: "14px 22px", borderBottom: `1px solid ${theme.border}` }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: theme.textMuted, fontFamily: mono, marginBottom: 10, letterSpacing: 1 }}>
-              O QUE VOCÊ RECEBE
-            </div>
+          <div style={{ padding: "14px 22px 12px" }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
               {[
                 ["1 000 req/dia", "Cota diária para chamadas autenticadas"],
@@ -243,62 +223,14 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
               ))}
             </div>
           </div>
-
-          {/* Como usar */}
-          <div style={{ padding: "14px 22px" }}>
-            <div style={{ fontSize: 10, fontWeight: 700, color: theme.textMuted, fontFamily: mono, marginBottom: 10, letterSpacing: 1 }}>
-              COMO COMEÇAR
-            </div>
-            <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-              {["1. Clique em Gerar Token", "2. Copie e guarde o token", "3. Use no header Authorization: Bearer"].map((step, i) => (
-                <div
-                  key={i}
-                  style={{
-                    fontSize: 10,
-                    fontFamily: mono,
-                    color: theme.textDim,
-                    padding: "4px 10px",
-                    borderRadius: 6,
-                    background: theme.quantum + "08",
-                    border: `1px solid ${theme.border}`,
-                  }}
-                >
-                  {step}
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Campo de convite — aparece só quando o servidor exige */}
-      {!hasToken && needsInvite && (
-        <div style={{ display: "flex", gap: 8 }}>
-          <input
-            type="text"
-            value={inviteCode}
-            onChange={(e) => setInviteCode(e.target.value)}
-            placeholder="Cole o código de convite aqui..."
-            style={{
-              flex: 1,
-              padding: "8px 12px",
-              borderRadius: 8,
-              border: `1px solid ${theme.quantum}40`,
-              background: "#0a0e17",
-              color: theme.text,
-              fontFamily: mono,
-              fontSize: 12,
-              outline: "none",
-            }}
-          />
         </div>
       )}
 
       {/* Ações */}
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         {!hasToken && (
-          <ActionBtn onClick={handleCreate} color={theme.quantum} disabled={loading || (needsInvite && !inviteCode.trim())}>
-            {loading ? "Gerando..." : needsInvite ? "Confirmar com Convite" : "Gerar Token"}
+          <ActionBtn onClick={handleCreate} color={theme.quantum} disabled={loading}>
+            {loading ? "Gerando..." : "Gerar Token"}
           </ActionBtn>
         )}
         {hasToken && isActive && (
@@ -325,7 +257,7 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
       </div>
 
       {/* Info adicional */}
-      {tokenInfo && (
+      {tokenInfo?.has_token && (
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
           {tokenInfo.created_at && (
             <span style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>
@@ -337,9 +269,11 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
               Último uso: {new Date(tokenInfo.last_used_at).toLocaleString("pt-BR")}
             </span>
           )}
-          <span style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>
-            Nome: {tokenInfo.name}
-          </span>
+          {tokenInfo.name && (
+            <span style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>
+              Nome: {tokenInfo.name}
+            </span>
+          )}
         </div>
       )}
 

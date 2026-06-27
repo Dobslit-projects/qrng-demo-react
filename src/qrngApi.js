@@ -26,10 +26,6 @@ export async function fetchHealth(apiPrefix = "/api") {
 
 export async function fetchQRNGBytes(count, apiPrefix = "/api") {
   const t0 = performance.now();
-  // The QRNG backend source file has one decimal number (0-255) per line.
-  // Both /api/seed and /api/random return the raw text bytes of that file.
-  // Each number line averages ~4 bytes of text ("136\n"), so we request ~5x.
-  // /api/random supports up to 50MB, /api/seed only 1024 bytes.
   const requestBytes = Math.min(count * 5, 50 * 1024 * 1024);
   const r = await fetch(`${apiPrefix}/random?bytes=${requestBytes}`, { signal: AbortSignal.timeout(30000) });
   if (!r.ok) throw new Error(`QRNG error: ${r.status}`);
@@ -41,9 +37,7 @@ export async function fetchQRNGBytes(count, apiPrefix = "/api") {
 
 export async function fetchQRNGRandInt(min, max, apiPrefix = "/api") {
   const t0 = performance.now();
-  const r = await fetch(`${apiPrefix}/randint?min=${min}&max=${max}`, {
-    signal: AbortSignal.timeout(10000),
-  });
+  const r = await fetch(`${apiPrefix}/randint?min=${min}&max=${max}`, { signal: AbortSignal.timeout(10000) });
   if (!r.ok) throw new Error(`QRNG randint error: ${r.status}`);
   const data = await r.json();
   return { value: data.value, latencyMs: Math.round(performance.now() - t0) };
@@ -51,76 +45,63 @@ export async function fetchQRNGRandInt(min, max, apiPrefix = "/api") {
 
 export async function fetchQRNGSeed(bytes, apiPrefix = "/api") {
   const t0 = performance.now();
-  const r = await fetch(`${apiPrefix}/seed?bytes=${bytes}`, {
-    signal: AbortSignal.timeout(15000),
-  });
+  const r = await fetch(`${apiPrefix}/seed?bytes=${bytes}`, { signal: AbortSignal.timeout(15000) });
   if (!r.ok) throw new Error(`QRNG seed error: ${r.status}`);
   const data = await r.json();
   return { bytes: data.bytes, hex: data.hex, latencyMs: Math.round(performance.now() - t0) };
 }
 
-// ── Developer API (gestão de tokens) ─────────────────────────────────────────
+// ── Auth & Developer API ───────────────────────────────────────────────────────
 
-// CLIENT_API = "/qrng/v1" → paths abaixo são relativos a esse prefixo (sem /v1/ duplicado)
+// devFetch envia o JWT (qrng_auth_jwt) — usado para todos os endpoints autenticados da UI
 async function devFetch(path, options = {}) {
-  const token = localStorage.getItem("qrng_api_token");
+  const jwt  = localStorage.getItem("qrng_auth_jwt");
   const headers = { "Content-Type": "application/json", ...options.headers };
-  if (token) headers["Authorization"] = `Bearer ${token}`;
+  if (jwt) headers["Authorization"] = `Bearer ${jwt}`;
   const r = await fetch(`${CLIENT_API}${path}`, { ...options, headers, signal: AbortSignal.timeout(10000) });
   const data = await r.json();
   return { ok: r.ok, status: r.status, data };
 }
 
+// Auth
+export async function authRegister(email, password) {
+  return devFetch("/auth/register", { method: "POST", body: JSON.stringify({ email, password }) });
+}
+export async function authLogin(email, password) {
+  return devFetch("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
+}
+export async function authMe() {
+  return devFetch("/auth/me");
+}
+
+// Token management
 export async function devCreateToken() {
   return devFetch("/tokens", { method: "POST" });
 }
-
 export async function devGetToken() {
   return devFetch("/me/token");
 }
-
 export async function devRotateToken() {
   return devFetch("/me/token/rotate", { method: "POST" });
 }
-
 export async function devRevokeToken() {
   return devFetch("/me/token/revoke", { method: "POST" });
 }
-
 export async function devGetUsage() {
   return devFetch("/me/usage");
 }
-
 export async function devGetRequests(limit = 20) {
   return devFetch(`/me/requests?limit=${limit}`);
 }
-
 export async function devGetUpstreamStatus() {
   return devFetch("/upstream/status");
 }
 
-export async function devCreateTokenWithInvite(invite_code) {
-  return devFetch("/tokens", { method: "POST", body: JSON.stringify({ invite_code }) });
-}
-
-// ── Admin API ─────────────────────────────────────────────────────────────────
-
-async function adminFetch(path, options = {}) {
-  const secret = localStorage.getItem("qrng_admin_secret");
-  const headers = { "Content-Type": "application/json", ...options.headers };
-  if (secret) headers["Authorization"] = `Bearer ${secret}`;
-  const r = await fetch(`${CLIENT_API}${path}`, { ...options, headers, signal: AbortSignal.timeout(10000) });
-  const data = await r.json();
-  return { ok: r.ok, status: r.status, data };
-}
-
-export async function adminCreateInvite()          { return adminFetch("/admin/invite", { method: "POST" }); }
-export async function adminGetInvites()            { return adminFetch("/admin/invites"); }
-export async function adminGetTokens()             { return adminFetch("/admin/tokens"); }
-export async function adminRevokeToken(id)         { return adminFetch(`/admin/tokens/${id}/revoke`, { method: "POST" }); }
-export async function adminSetQuota(id, quota_daily) {
-  return adminFetch(`/admin/tokens/${id}/quota`, { method: "PATCH", body: JSON.stringify({ quota_daily }) });
-}
+// Admin (usa o mesmo JWT — o servidor valida role=admin)
+export async function adminGetTokens()                { return devFetch("/admin/tokens"); }
+export async function adminRevokeToken(id)            { return devFetch(`/admin/tokens/${id}/revoke`, { method: "POST" }); }
+export async function adminSetQuota(id, quota_daily)  { return devFetch(`/admin/tokens/${id}/quota`, { method: "PATCH", body: JSON.stringify({ quota_daily }) }); }
+export async function adminGetUsers()                 { return devFetch("/admin/users"); }
 
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -138,14 +119,11 @@ export function connectQRNGStream(onChunk, onError, onClose, onStall, apiPrefix 
 
   (async () => {
     try {
-      // 10s timeout for initial connection
       const connectTimeout = setTimeout(() => {
         if (!userAborted) controller.abort();
       }, 10000);
 
-      const response = await fetch(`${apiPrefix}/stream`, {
-        signal: controller.signal,
-      });
+      const response = await fetch(`${apiPrefix}/stream`, { signal: controller.signal });
       clearTimeout(connectTimeout);
 
       if (!response.ok) {
@@ -155,27 +133,23 @@ export function connectQRNGStream(onChunk, onError, onClose, onStall, apiPrefix 
 
       const reader = response.body.getReader();
 
-      // Two-tier stall detection:
-      // - 45s: notify UI "aguardando dados" (soft stall, keep connection)
-      // - 90s: kill connection (hard stall, something is really wrong)
       const resetStall = () => {
         cleanup();
         if (isStalled) {
           isStalled = false;
-          if (onStall) onStall(false); // clear stall indicator
+          if (onStall) onStall(false);
         }
         stallTimer = setTimeout(() => {
           if (!userAborted) {
             isStalled = true;
-            if (onStall) onStall(true); // show "aguardando dados..."
-            // Set critical timer - if still no data after 90s total, kill
+            if (onStall) onStall(true);
             criticalTimer = setTimeout(() => {
               if (!userAborted) {
                 cleanup();
                 controller.abort();
                 onError(new Error("Stream sem dados por 90s — conexao encerrada"));
               }
-            }, 45000); // 45s more = 90s total
+            }, 45000);
           }
         }, 45000);
       };
@@ -183,11 +157,7 @@ export function connectQRNGStream(onChunk, onError, onClose, onStall, apiPrefix 
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) {
-          cleanup();
-          onClose();
-          break;
-        }
+        if (done) { cleanup(); onClose(); break; }
         resetStall();
         onChunk(new Uint8Array(value.buffer || value));
       }
