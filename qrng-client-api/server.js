@@ -264,10 +264,10 @@ function requireAdmin(req, res, next) {
 function requireToken(req, res, next) {
   const auth = req.headers.authorization || "";
   if (!auth.startsWith("Bearer ")) {
-    return res.status(401).json({ error: "MISSING_TOKEN", message: "Use Authorization: Bearer <api_token>" });
+    return res.status(401).json({ request_id: req.requestId, error: "MISSING_TOKEN", message: "Use Authorization: Bearer <api_token>" });
   }
   const row = db.prepare("SELECT * FROM api_tokens WHERE token_hash = ? AND status = 'active'").get(hashToken(auth.slice(7).trim()));
-  if (!row) return res.status(403).json({ error: "INVALID_TOKEN", message: "Token inválido ou revogado." });
+  if (!row) return res.status(403).json({ request_id: req.requestId, error: "INVALID_TOKEN", message: "Token inválido ou revogado." });
   req.tokenRow = row;
   next();
 }
@@ -510,7 +510,7 @@ app.get("/v1/admin/users", requireAuth, requireAdmin, (req, res) => {
 
 // ── GET /v1/health ────────────────────────────────────────────────────────────
 
-app.get("/v1/health", requireToken, attachRequestId, checkTokenRate, async (req, res) => {
+app.get("/v1/health", attachRequestId, requireToken, checkTokenRate, async (req, res) => {
   const requestId = req.requestId;
   const t0        = Date.now();
   const ip        = req.ip || req.socket.remoteAddress;
@@ -554,7 +554,7 @@ function parseUpstreamRandom(buffer, requestedBytes) {
 
 // ── GET /v1/random ────────────────────────────────────────────────────────────
 
-app.get("/v1/random", requireToken, attachRequestId, checkTokenRate, parseBytes, checkQuota, async (req, res) => {
+app.get("/v1/random", attachRequestId, requireToken, checkTokenRate, parseBytes, checkQuota, async (req, res) => {
   const bytes     = req.requestedBytes;
   const format    = req.query.format || "hex";
   const ip        = req.ip || req.socket.remoteAddress;

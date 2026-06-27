@@ -155,11 +155,22 @@ k6 run load-tests/qrng-load-test.js \
 | Sustentação | 60s | 200 |
 | Descida | 30s | 200 → 0 |
 
+**Métricas separadas por categoria:**
+
+| Métrica k6 | O que mede |
+|---|---|
+| `api_ok_rate` | Taxa de 200 + 429 — Node.js saudável |
+| `upstream_down_rate` | Taxa de 503 — FPGA saturado (não é falha do Node) |
+| `server_error_rate` | Taxa de 500/502 — erros reais de servidor |
+| `req_duration_ok` | Latência apenas das respostas 200 |
+
+503 **não** é contado como falha da API — é o upstream FPGA que está indisponível.
+
 **Thresholds:**
-- `http_req_failed < 1%` — erros de rede
-- `p(95) < 3000ms` — latência de respostas bem-sucedidas
-- `p(99) < 8000ms`
-- `expected_status_rate > 98%` — 200/429/503 são aceitos
+- `http_req_failed < 1%` — erros de rede TCP
+- `api_ok_rate > 98%` — 200 + 429 ≥ 98%
+- `server_error_rate < 0.5%` — 500/502 quase zero
+- `p(95) < 3000ms` e `p(99) < 8000ms` — latência das respostas OK
 
 ---
 
@@ -183,15 +194,59 @@ k6 run load-tests/qrng-stress-test.js \
 | Nível 4 (pico) | 30s + 60s | 600 → 1000 |
 | Descida | 60s | 1000 → 0 |
 
+**Métricas separadas por categoria** (mesma filosofia do load test):
+
+| Métrica | O que mede |
+|---|---|
+| `stress_api_ok_rate` | 200 + 429 — Node.js saudável |
+| `stress_upstream_down` | 503 — FPGA saturado |
+| `stress_server_error` | 500/502 — erro real |
+
 **Como interpretar:**
 
 | Resultado | Significado |
 |---|---|
 | `429` aumenta | Rate limit funcionando corretamente |
-| `503` aumenta | Upstream FPGA sobrecarregado (não é falha da API Node) |
-| `p95 > 8000ms` | Node.js começou a enfileirar requests |
-| Erros de rede > 5% | Limite de conexões TCP do sistema atingido |
-| `500` / `502` | Bug ou falha de infra — investigar imediatamente |
+| `503` aumenta | Upstream FPGA saturado (não é falha do Node.js) |
+| `api_ok_rate` cai | Node.js começou a rejeitar conexões |
+| `p95 > 8000ms` | Node.js enfileirando requests |
+| Erros TCP > 5% | Limite de conexões do sistema atingido |
+| `500` / `502` | Bug real — investigar imediatamente |
+
+---
+
+### Teste de throughput de bytes
+
+Mede bytes de entropia por segundo para diferentes tamanhos de payload e formatos.
+
+```bash
+k6 run load-tests/qrng-throughput-test.js \
+  -e API_TOKEN=$API_TOKEN \
+  -e BASE_URL=$BASE_URL
+```
+
+**Matriz de cenários (execução sequencial ~12 min):**
+
+| Cenário | bytes | format | VUs | Mede |
+|---|---|---|---|---|
+| `32b_hex_200vus` | 32 | hex | 200 | RPS máximo / latência baseline |
+| `1kb_hex_200vus` | 1 024 | hex | 200 | Impacto do payload no throughput |
+| `64kb_base64_100vus` | 65 536 | base64 | 100 | Throughput médio |
+| `1mib_base64_10vus` | 1 048 576 | base64 | 10 | Saturação do upstream |
+| `1mib_hex_10vus` | 1 048 576 | hex | 10 | hex vs base64 (resposta 2× maior) |
+
+**Nota crítica — bytes de entropia ≠ payload HTTP:**
+
+`MAX_BYTES_PER_REQUEST` limita **bytes de entropia**, não o tamanho da resposta JSON:
+
+| Format | Bytes solicitados | Payload da resposta |
+|---|---|---|
+| `hex` | N | ~2× N (cada byte → 2 chars) |
+| `base64` | N | ~1,33× N |
+| `uint8` | N | ~3-4× N (array JSON de inteiros) |
+
+Para 1 MiB com `format=hex`: corpo JSON ≈ **2,1 MiB**.
+Configure `client_max_body_size` no Nginx se necessário.
 
 ---
 

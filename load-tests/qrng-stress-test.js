@@ -59,77 +59,84 @@ export const options = {
   },
 };
 
-const stressP95       = new Trend("stress_p95", true);
-const expectedRate    = new Rate("expected_responses");
-const count200        = new Counter("stress_200");
-const count429        = new Counter("stress_429");
-const count503        = new Counter("stress_503");
-const countError      = new Counter("stress_error");
+// ── Métricas separadas por categoria ─────────────────────────────────────────
+
+const stressP95        = new Trend("stress_p95", true);
+const apiOkRate        = new Rate("stress_api_ok_rate");      // 200 + 429 → Node saudável
+const upstreamDownRate = new Rate("stress_upstream_down");    // 503 → FPGA
+const serverErrorRate  = new Rate("stress_server_error");     // 500 + 502 → bug real
+
+const count200   = new Counter("stress_200");
+const count429   = new Counter("stress_429");
+const count503   = new Counter("stress_503");
+const countError = new Counter("stress_server_errors");
 
 // ── Cenário ───────────────────────────────────────────────────────────────────
 
 export default function () {
-  // Usa bytes pequenos para maximizar throughput e reduzir carga no upstream
   const res = http.get(`${BASE_URL}/random?bytes=32&format=hex`, {
     headers,
     timeout: "15s",
     tags: { name: "stress_random" },
   });
 
-  const isExpected = [200, 429, 503].includes(res.status);
-  expectedRate.add(isExpected);
+  const isApiOk    = res.status === 200 || res.status === 429;
+  const isUpstream = res.status === 503;
+  const isServerEr = res.status === 500 || res.status === 502;
+
+  apiOkRate.add(isApiOk);
+  upstreamDownRate.add(isUpstream);
+  serverErrorRate.add(isServerEr);
 
   check(res, {
-    "resposta esperada (200/429/503)": () => isExpected,
-    "não houve erro 5xx inesperado":   (r) => r.status !== 500 && r.status !== 502,
-    "body é JSON":                     (r) => {
+    "Node saudável (200 ou 429)":     () => isApiOk,
+    "sem erros 5xx inesperados":      () => !isServerEr,
+    "body é JSON":                    (r) => {
       try { JSON.parse(r.body); return true; } catch { return false; }
     },
   });
 
-  if (res.status === 200) {
-    stressP95.add(res.timings.duration);
-    count200.add(1);
-  } else if (res.status === 429) {
-    count429.add(1);
-  } else if (res.status === 503) {
-    count503.add(1);
-  } else {
-    countError.add(1);
-  }
+  if (res.status === 200) { stressP95.add(res.timings.duration); count200.add(1); }
+  else if (res.status === 429) count429.add(1);
+  else if (res.status === 503) count503.add(1);
+  else countError.add(1);
 
-  // Sleep mínimo — queremos máxima pressão
   sleep(0.05 + Math.random() * 0.1);
 }
 
 export function handleSummary(data) {
-  const s200   = data.metrics.stress_200?.values?.count   || 0;
-  const s429   = data.metrics.stress_429?.values?.count   || 0;
-  const s503   = data.metrics.stress_503?.values?.count   || 0;
-  const sErr   = data.metrics.stress_error?.values?.count || 0;
+  const s200   = data.metrics.stress_200?.values?.count          || 0;
+  const s429   = data.metrics.stress_429?.values?.count          || 0;
+  const s503   = data.metrics.stress_503?.values?.count          || 0;
+  const sErr   = data.metrics.stress_server_errors?.values?.count || 0;
   const total  = s200 + s429 + s503 + sErr;
   const p50    = data.metrics.stress_p95?.values?.["p(50)"]?.toFixed(0) || "—";
   const p95    = data.metrics.stress_p95?.values?.["p(95)"]?.toFixed(0) || "—";
   const p99    = data.metrics.stress_p95?.values?.["p(99)"]?.toFixed(0) || "—";
   const rps    = data.metrics.http_reqs?.values?.rate?.toFixed(1) || "—";
-  const failed = ((data.metrics.http_req_failed?.values?.rate || 0) * 100).toFixed(2);
+  const netErr = ((data.metrics.http_req_failed?.values?.rate || 0) * 100).toFixed(2);
+  const okPct  = total > 0 ? (((s200 + s429) / total) * 100).toFixed(1) : "—";
+  const dnPct  = total > 0 ? ((s503 / total) * 100).toFixed(1) : "—";
 
   return {
     stdout: `
 ╔═══════════════════════════════════════════════════════════════════════╗
 ║                   QRNG Stress Test — Resultados                      ║
 ╠═══════════════════════════════════════════════════════════════════════╣
-║  Total requisições: ${String(total).padEnd(10)}                               ║
-║  200=${s200}  429=${s429}  503=${s503}  erro=${sErr}                    ║
-║  Throughput: ${rps} req/s                                          ║
-║  Latência (reqs OK):  p50=${p50}ms  p95=${p95}ms  p99=${p99}ms    ║
-║  Falhas de rede: ${failed}%                                        ║
+║  Total: ${String(total).padEnd(10)}  Throughput: ${rps} req/s               ║
+║  200=${s200}  429=${s429}  503=${s503}  500/502=${sErr}             ║
+╠═══════════════════════════════════════════════════════════════════════╣
+║  API Node saudável (200+429):     ${okPct}%                         ║
+║  Upstream FPGA indisponível(503): ${dnPct}%                         ║
+║  Erros de servidor (500/502):     ${sErr > 0 ? "⚠ " : ""}${sErr}   ║
+║  Erros de rede TCP:               ${netErr}%                        ║
+║  Latência (200): p50=${p50}ms  p95=${p95}ms  p99=${p99}ms          ║
 ╠═══════════════════════════════════════════════════════════════════════╣
 ║  INTERPRETAÇÃO:                                                       ║
-║  • 429 = rate limit funcionando (esperado)                           ║
-║  • 503 = upstream down ou sem entropia (não é falha da API)          ║
+║  • 503 ≠ falha do Node (é o FPGA que está saturado/off)             ║
+║  • 429 = rate limit / cota funcionando corretamente                  ║
 ║  • p95 < 3000ms = saudável  |  > 8000ms = degradação significativa  ║
-║  • Erros de rede > 5% indicam que Node.js atingiu limite de conexões ║
+║  • Erros TCP > 5% = Node.js atingiu limite de conexões do sistema   ║
 ╚═══════════════════════════════════════════════════════════════════════╝
 `,
   };
