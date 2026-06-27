@@ -69,11 +69,10 @@ const cases = [
 export default function () {
   group("Boundary tests — /v1/random", () => {
     for (const tc of cases) {
-      const params = new URLSearchParams({ bytes: tc.bytes });
-      if (tc.format) params.set("format", tc.format);
-      if (tc.bytes === "") params.delete("bytes");
+      let qs = tc.bytes !== "" ? `bytes=${encodeURIComponent(tc.bytes)}` : "";
+      if (tc.format) qs += (qs ? "&" : "") + `format=${encodeURIComponent(tc.format)}`;
 
-      const url = `${BASE_URL}/random?${params.toString()}`;
+      const url = `${BASE_URL}/random${qs ? "?" + qs : ""}`;
       const res = http.get(url, { headers, tags: { name: "boundary" } });
 
       // Registra métricas por status
