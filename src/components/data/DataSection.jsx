@@ -1,7 +1,7 @@
 import { useState, useContext, useRef, useEffect } from "react";
 import { theme, formatBytes } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
-import { fetchQRNGSeed, getApiPrefix } from "../../qrngApi";
+import { fetchQRNGSeed, getApiPrefix, CLIENT_API } from "../../qrngApi";
 import Btn from "../ui/Btn";
 import GlowTag from "../ui/GlowTag";
 
@@ -30,12 +30,10 @@ const useCaseTags = {
 /* ── Download presets ──────────────────────────────────────── */
 
 const dlPresets = [
-  { label: "1 KB", value: 1024 },
-  { label: "10 KB", value: 10 * 1024 },
+  { label: "1 KB",   value: 1024 },
+  { label: "10 KB",  value: 10 * 1024 },
   { label: "100 KB", value: 100 * 1024 },
-  { label: "1 MB", value: 1024 * 1024 },
-  { label: "10 MB", value: 10 * 1024 * 1024 },
-  { label: "50 MB", value: 50 * 1024 * 1024 },
+  { label: "1 MiB",  value: 1048576 },
 ];
 
 /* ── Shared styles ─────────────────────────────────────────── */
@@ -128,17 +126,24 @@ export default function DataSection() {
   const handleDownload = async () => {
     setDownloading(true);
     try {
-      const response = await fetch(`${apiPrefix}/random?bytes=${downloadSize}`, {
+      const jwt = localStorage.getItem("qrng_auth_jwt");
+      const headers = jwt ? { Authorization: `Bearer ${jwt}` } : {};
+      const response = await fetch(`${CLIENT_API}/random?bytes=${downloadSize}&format=hex`, {
+        headers,
         signal: AbortSignal.timeout(60000),
       });
-      const text = await response.text();
-      const numbers = text.split("\n").filter((s) => s.trim()).map(Number).filter((n) => !isNaN(n) && n >= 0 && n <= 255);
-      const bytes = new Uint8Array(numbers);
+      if (!response.ok) throw new Error(`API error: ${response.status}`);
+      const json = await response.json();
+      const hex = json.random || "";
+      const bytes = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < bytes.length; i++) {
+        bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+      }
       const blob = new Blob([bytes], { type: "application/octet-stream" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `qrng_${downloadSize}.bin`;
+      a.download = `qrng_${downloadSize}_bytes.bin`;
       document.body.appendChild(a);
       a.click();
       document.body.removeChild(a);
@@ -152,7 +157,7 @@ export default function DataSection() {
 
   const handleCustom = () => {
     const val = parseInt(customInput);
-    if (val > 0 && val <= 50 * 1024 * 1024) setDownloadSize(val);
+    if (val > 0 && val <= 1048576) setDownloadSize(val);
   };
 
   const tags = useCaseTags[seedLength] || useCaseTags[32];
@@ -282,7 +287,7 @@ export default function DataSection() {
         {/* Custom + Download */}
         <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
           <input
-            placeholder="Bytes customizado"
+            placeholder="Bytes (máx. 1 MiB)"
             value={customInput}
             onChange={(e) => setCustomInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleCustom()}
