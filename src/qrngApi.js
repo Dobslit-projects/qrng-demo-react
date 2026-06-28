@@ -24,31 +24,55 @@ export async function fetchHealth(apiPrefix = "/api") {
   }
 }
 
-export async function fetchQRNGBytes(count, apiPrefix = "/api") {
+function getAuthHeaders() {
+  const jwt = localStorage.getItem("qrng_auth_jwt");
+  return jwt ? { Authorization: `Bearer ${jwt}` } : {};
+}
+
+function hexToBytes(hex) {
+  const bytes = [];
+  for (let i = 0; i + 1 < hex.length; i += 2) {
+    bytes.push(parseInt(hex.substr(i, 2), 16));
+  }
+  return bytes;
+}
+
+export async function fetchQRNGBytes(count, _apiPrefix) {
   const t0 = performance.now();
-  const requestBytes = Math.min(count * 5, 50 * 1024 * 1024);
-  const r = await fetch(`${apiPrefix}/random?bytes=${requestBytes}`, { signal: AbortSignal.timeout(30000) });
+  const requestBytes = Math.min(count * 5, 1048576);
+  const r = await fetch(`${CLIENT_API}/random?bytes=${requestBytes}&format=hex`, {
+    headers: getAuthHeaders(),
+    signal: AbortSignal.timeout(30000),
+  });
   if (!r.ok) throw new Error(`QRNG error: ${r.status}`);
-  const buf = await r.arrayBuffer();
-  const text = new TextDecoder().decode(buf);
-  const bytes = text.split("\n").filter(s => s.trim()).map(Number).filter(n => !isNaN(n) && n >= 0 && n <= 255);
+  const json = await r.json();
+  const bytes = hexToBytes(json.random || "");
   return { bytes: bytes.slice(0, count), latencyMs: Math.round(performance.now() - t0) };
 }
 
-export async function fetchQRNGRandInt(min, max, apiPrefix = "/api") {
+export async function fetchQRNGRandInt(min, max, _apiPrefix) {
   const t0 = performance.now();
-  const r = await fetch(`${apiPrefix}/randint?min=${min}&max=${max}`, { signal: AbortSignal.timeout(10000) });
+  const r = await fetch(`${CLIENT_API}/random?bytes=4&format=hex`, {
+    headers: getAuthHeaders(),
+    signal: AbortSignal.timeout(10000),
+  });
   if (!r.ok) throw new Error(`QRNG randint error: ${r.status}`);
-  const data = await r.json();
-  return { value: data.value, latencyMs: Math.round(performance.now() - t0) };
+  const json = await r.json();
+  const n = parseInt((json.random || "00000000").slice(0, 8), 16);
+  const range = max - min + 1;
+  return { value: min + (n % range), latencyMs: Math.round(performance.now() - t0) };
 }
 
-export async function fetchQRNGSeed(bytes, apiPrefix = "/api") {
+export async function fetchQRNGSeed(bytes, _apiPrefix) {
   const t0 = performance.now();
-  const r = await fetch(`${apiPrefix}/seed?bytes=${bytes}`, { signal: AbortSignal.timeout(15000) });
+  const r = await fetch(`${CLIENT_API}/random?bytes=${bytes}&format=hex`, {
+    headers: getAuthHeaders(),
+    signal: AbortSignal.timeout(15000),
+  });
   if (!r.ok) throw new Error(`QRNG seed error: ${r.status}`);
-  const data = await r.json();
-  return { bytes: data.bytes, hex: data.hex, latencyMs: Math.round(performance.now() - t0) };
+  const json = await r.json();
+  const hex = json.random || "";
+  return { bytes: hexToBytes(hex), hex, latencyMs: Math.round(performance.now() - t0) };
 }
 
 // ── Auth & Developer API ───────────────────────────────────────────────────────
