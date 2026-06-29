@@ -1,4 +1,4 @@
-import { useState, useContext, useRef, useEffect } from "react";
+﻿import { useState, useContext, useRef, useEffect } from "react";
 import { theme, formatBytes } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
 import { fetchQRNGSeed, getApiPrefix, CLIENT_API } from "../../qrngApi";
@@ -70,6 +70,8 @@ export default function DataSection() {
   const [animHex, setAnimHex] = useState(null);
   const [copied, setCopied] = useState(false);
   const [seedLatency, setSeedLatency] = useState(null);
+  const [seedSource, setSeedSource] = useState(null);
+  const [downloadError, setDownloadError] = useState(null);
   const animRef = useRef(null);
 
   // Download state
@@ -88,8 +90,8 @@ export default function DataSection() {
     setGenerating(true);
     setCopied(false);
     setGeneratedHex(null);
+    setSeedSource(null);
 
-    // Start random hex animation
     animRef.current = setInterval(() => {
       const fake = Array.from({ length: seedLength * 2 }, () =>
         "0123456789abcdef"[Math.floor(Math.random() * 16)]
@@ -97,18 +99,27 @@ export default function DataSection() {
       setAnimHex(fake);
     }, 40);
 
+    const stopAnim = () => {
+      clearInterval(animRef.current);
+      animRef.current = null;
+      setAnimHex(null);
+    };
+
     try {
       const result = await fetchQRNGSeed(seedLength, apiPrefix);
-      clearInterval(animRef.current);
-      animRef.current = null;
-      setAnimHex(null);
+      stopAnim();
       setGeneratedHex(result.hex);
       setSeedLatency(result.latencyMs);
+      setSeedSource("quantum");
     } catch {
-      clearInterval(animRef.current);
-      animRef.current = null;
-      setAnimHex(null);
-      setGeneratedHex(null);
+      // Fallback: crypto.getRandomValues (CSPRNG local, não quântico)
+      stopAnim();
+      const buf = new Uint8Array(seedLength);
+      crypto.getRandomValues(buf);
+      const hex = Array.from(buf).map(b => b.toString(16).padStart(2, "0")).join("");
+      setGeneratedHex(hex);
+      setSeedLatency(null);
+      setSeedSource("local");
     } finally {
       setGenerating(false);
     }
@@ -125,13 +136,21 @@ export default function DataSection() {
 
   const handleDownload = async () => {
     setDownloading(true);
+    setDownloadError(null);
     try {
       const jwt = localStorage.getItem("qrng_auth_jwt");
-      const headers = jwt ? { Authorization: `Bearer ${jwt}` } : {};
+      if (!jwt) {
+        setDownloadError("Faça login na aba Desenvolvedor para baixar dados quânticos.");
+        return;
+      }
       const response = await fetch(`${CLIENT_API}/random?bytes=${downloadSize}&format=hex`, {
-        headers,
+        headers: { Authorization: `Bearer ${jwt}` },
         signal: AbortSignal.timeout(60000),
       });
+      if (response.status === 401 || response.status === 403) {
+        setDownloadError("Sessão expirada. Faça login novamente na aba Desenvolvedor.");
+        return;
+      }
       if (!response.ok) throw new Error(`API error: ${response.status}`);
       const json = await response.json();
       const hex = json.random || "";
@@ -149,6 +168,7 @@ export default function DataSection() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch (err) {
+      setDownloadError("Erro ao baixar dados. Verifique sua conexão e tente novamente.");
       console.error("Download failed:", err);
     } finally {
       setDownloading(false);
@@ -157,7 +177,7 @@ export default function DataSection() {
 
   const handleCustom = () => {
     const val = parseInt(customInput);
-    if (val > 0 && val <= 1048576) setDownloadSize(val);
+    if (val > 0 && val <= 1048576) { setDownloadSize(val); setDownloadError(null); }
   };
 
   const tags = useCaseTags[seedLength] || useCaseTags[32];
@@ -177,7 +197,7 @@ export default function DataSection() {
       <div style={sectionStyle}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
           <span style={{ fontSize: 14, fontWeight: 700, color: theme.text, fontFamily: mono }}>
-            Gerar Chave Qu\u00e2ntica
+            Gerar Chave Quântica
           </span>
           <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
             {tags.map((t) => <GlowTag key={t} color={theme.quantum}>{t}</GlowTag>)}
@@ -234,7 +254,7 @@ export default function DataSection() {
           >
             {displayHex || (
               <span style={{ color: theme.textMuted, fontSize: 11 }}>
-                Clique em "Gerar Seed" para gerar uma chave criptogr\u00e1fica qu\u00e2ntica...
+                Clique em "Gerar Seed" para gerar uma chave criptográfica quântica...
               </span>
             )}
           </div>
@@ -248,8 +268,12 @@ export default function DataSection() {
             </Btn>
           )}
           <span style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>
-            {seedLength * 8} bits \u00B7 {seedLength} bytes
-            {seedLatency !== null && ` \u00B7 ${seedLatency}ms`}
+            {seedLength * 8} bits · {seedLength} bytes
+            {seedLatency !== null && ` · ${seedLatency}ms`}
+            {seedSource === "quantum" && " · ⚛ quântico"}
+            {seedSource === "local" && (
+              <span style={{ color: theme.warning }}> · CSPRNG local (faça login para entropia quântica)</span>
+            )}
           </span>
         </div>
       </div>
@@ -265,7 +289,7 @@ export default function DataSection() {
           {dlPresets.map((p) => (
             <button
               key={p.value}
-              onClick={() => setDownloadSize(p.value)}
+              onClick={() => { setDownloadSize(p.value); setDownloadError(null); }}
               style={{
                 padding: "5px 12px",
                 borderRadius: 16,
@@ -312,8 +336,13 @@ export default function DataSection() {
           </span>
         </div>
 
+        {downloadError && (
+          <span style={{ fontSize: 11, color: theme.warning, lineHeight: 1.6 }}>
+            {downloadError}
+          </span>
+        )}
         <span style={{ fontSize: 11, color: theme.textDim, lineHeight: 1.6 }}>
-          Formato bin\u00e1rio raw (.bin) \u2014 cada byte possui 8 bits de entropia qu\u00e2ntica.
+          Formato binário raw (.bin) — cada byte possui 8 bits de entropia quântica.
         </span>
       </div>
     </div>
