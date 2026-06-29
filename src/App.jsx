@@ -8,6 +8,7 @@ import InteractiveDemos from "./components/games/InteractiveDemos";
 import DataSection from "./components/data/DataSection";
 import SettingsSection from "./components/settings/SettingsSection";
 import DeveloperPage from "./components/developer/DeveloperPage";
+import NISTSection from "./components/nist/NISTSection";
 
 function AppContent() {
   const { activePage } = useContext(AppContext);
@@ -31,6 +32,7 @@ function AppContent() {
         {activePage === "analysis"   && <AnalysisSection />}
         {activePage === "games"      && <InteractiveDemos />}
         {activePage === "data"       && <DataSection />}
+        {activePage === "nist"       && <NISTSection />}
         {activePage === "developer"  && <DeveloperPage />}
         {activePage === "settings"   && <SettingsSection />}
       </div>

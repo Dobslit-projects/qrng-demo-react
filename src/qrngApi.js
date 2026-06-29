@@ -127,6 +127,41 @@ export async function adminRevokeToken(id)            { return devFetch(`/admin/
 export async function adminSetQuota(id, quota_daily)  { return devFetch(`/admin/tokens/${id}/quota`, { method: "PATCH", body: JSON.stringify({ quota_daily }) }); }
 export async function adminGetUsers()                 { return devFetch("/admin/users"); }
 
+// ── NIST SP 800-90B API ───────────────────────────────────────────────────────
+
+const NIST_API = "/qrng/nist";
+
+async function nistFetch(path, options = {}) {
+  const r = await fetch(`${NIST_API}${path}`, {
+    ...options,
+    signal: AbortSignal.timeout(options._timeout || 30000),
+  });
+  const data = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(data.detail || `NIST API error ${r.status}`);
+  return data;
+}
+
+export async function nistStatus()         { return nistFetch("/nist/status"); }
+export async function nistJobs(limit = 50) { return nistFetch(`/nist/jobs?limit=${limit}`); }
+export async function nistJob(id)          { return nistFetch(`/nist/jobs/${id}`); }
+export async function nistJobLog(id)       { return nistFetch(`/nist/jobs/${id}/log`); }
+
+export async function nistRun(testType = "both", format = "auto", source = "latest") {
+  const body = new FormData();
+  body.append("test_type", testType);
+  body.append("format",    format);
+  body.append("source",    source);
+  return nistFetch("/nist/run", { method: "POST", body, _timeout: 60000 });
+}
+
+export async function nistUpload(file, testType = "both", format = "auto") {
+  const body = new FormData();
+  body.append("file",      file);
+  body.append("test_type", testType);
+  body.append("format",    format);
+  return nistFetch("/nist/upload", { method: "POST", body, _timeout: 120000 });
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function connectQRNGStream(onChunk, onError, onClose, onStall, apiPrefix = "/api") {
