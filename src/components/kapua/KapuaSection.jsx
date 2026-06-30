@@ -1,5 +1,5 @@
 import { useRef, useEffect, useState, useContext } from "react";
-import { theme, formatBytes } from "../../theme";
+import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
 import { fetchQRNGBytes, CLIENT_API } from "../../qrngApi";
 
@@ -105,6 +105,130 @@ function QuantumParticles() {
       ref={canvasRef}
       style={{ position: "absolute", inset: 0, width: "100%", height: "100%", display: "block" }}
     />
+  );
+}
+
+/* ── Server Hardware 3D ─────────────────────────────────────── */
+
+function ServerHardware3D() {
+  const ledStyle = (color, delay = "0s") => ({
+    width: 7, height: 7, borderRadius: "50%",
+    background: color,
+    boxShadow: `0 0 6px ${color}`,
+    animation: `qled 2s ${delay} ease-in-out infinite`,
+  });
+
+  return (
+    <div style={{ display: "flex", justifyContent: "center", alignItems: "center", padding: "10px 0 0" }}>
+      <style>{`
+        @keyframes qled { 0%,100%{opacity:.5} 50%{opacity:1} }
+        @keyframes qledFast { 0%,100%{opacity:.3} 50%{opacity:1} }
+      `}</style>
+      <div style={{
+        perspective: "1100px", perspectiveOrigin: "50% 35%",
+        width: "100%", maxWidth: 520,
+      }}>
+        <div style={{
+          width: "100%", maxWidth: 480,
+          margin: "0 auto",
+          position: "relative",
+          transformStyle: "preserve-3d",
+          transform: "rotateX(28deg) rotateY(-36deg)",
+          filter: "drop-shadow(0 18px 36px rgba(0,0,0,0.7))",
+        }}>
+          {/* Top face */}
+          <div style={{
+            position: "absolute",
+            width: "100%", height: 190,
+            background: "linear-gradient(135deg, #1c1c2e 0%, #12121e 60%, #0d0d18 100%)",
+            transformOrigin: "0% 100%",
+            transform: "rotateX(90deg)",
+            borderTop: "1px solid #333355",
+            borderLeft: "1px solid #333355",
+            borderRight: "1px solid #222235",
+            display: "flex", alignItems: "center",
+            padding: "0 20px", gap: 0, overflow: "hidden",
+          }}>
+            {/* DOBSLIT brand area */}
+            <div style={{ flex: 1, display: "flex", flexDirection: "column", gap: 6 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <svg width="22" height="22" viewBox="0 0 100 100" fill="none">
+                  <path d="M50 10 C20 10 10 30 10 50 C10 70 25 85 50 90 C75 85 90 70 90 50 C90 30 80 10 50 10Z" fill="#0c8ce9" opacity="0.9"/>
+                  <path d="M35 45 L50 25 L65 45 L55 45 L55 70 L45 70 L45 45Z" fill="white"/>
+                </svg>
+                <span style={{
+                  fontSize: 20, fontWeight: 800, letterSpacing: "0.12em",
+                  fontFamily: "'IBM Plex Mono', monospace", color: "#fff",
+                  textShadow: "0 0 20px rgba(12,140,233,0.6)",
+                }}>DOBSLIT</span>
+              </div>
+              <div style={{ fontSize: 9, color: "#4466aa", fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.15em" }}>
+                KUAPOÃ QRNG · FPGA HARDWARE
+              </div>
+            </div>
+            {/* Vent grid */}
+            <div style={{ display: "flex", flexDirection: "column", gap: 6, paddingRight: 10 }}>
+              {Array.from({length: 9}).map((_, i) => (
+                <div key={i} style={{ display: "flex", gap: 3 }}>
+                  {Array.from({length: 18}).map((_, j) => (
+                    <div key={j} style={{ width: 5, height: 3, background: "#0a0a14", borderRadius: 1 }} />
+                  ))}
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Front face */}
+          <div style={{
+            width: "100%", height: 56,
+            background: "linear-gradient(180deg, #161625 0%, #0e0e1c 100%)",
+            border: "1px solid #282840",
+            borderTop: "1px solid #3a3a5a",
+            display: "flex", alignItems: "center",
+            padding: "0 16px", gap: 12,
+            position: "relative", zIndex: 2,
+          }}>
+            {/* Rack ear left */}
+            <div style={{ width: 18, height: 36, background: "#1a1a2e", border: "1px solid #333355", borderRadius: 3, flexShrink: 0 }} />
+            {/* LEDs */}
+            <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+              <div style={ledStyle("#0fa968", "0s")} />
+              <div style={ledStyle("#0fa968", "0.3s")} />
+              <div style={ledStyle("#0c8ce9", "0.6s")} />
+              <div style={{ ...ledStyle("#e8a317", "0.9s"), animation: "qledFast 0.8s 0.9s ease-in-out infinite" }} />
+            </div>
+            {/* USB / ports */}
+            <div style={{ display: "flex", gap: 4, marginLeft: 8 }}>
+              {[0,1].map(i => <div key={i} style={{ width: 12, height: 8, background: "#0a0a14", border: "1px solid #333", borderRadius: 1 }} />)}
+            </div>
+            <div style={{ flex: 1 }} />
+            {/* QRNG label */}
+            <div style={{ fontSize: 8, color: "#0c8ce9", fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.1em", opacity: 0.7 }}>
+              QRNG
+            </div>
+            {/* Rack ear right */}
+            <div style={{ width: 18, height: 36, background: "#1a1a2e", border: "1px solid #333355", borderRadius: 3, flexShrink: 0 }} />
+          </div>
+
+          {/* Right face */}
+          <div style={{
+            position: "absolute",
+            right: -38, top: 0,
+            width: 38, height: 56,
+            background: "linear-gradient(180deg, #0a0a14 0%, #080810 100%)",
+            transformOrigin: "0% 50%",
+            transform: "rotateY(90deg)",
+            borderTop: "1px solid #222235",
+            display: "flex", flexDirection: "column",
+            justifyContent: "center", padding: "0 4px", gap: 3,
+          }}>
+            {Array.from({length: 6}).map((_, i) => (
+              <div key={i} style={{ height: 2, background: "#1a1a28", borderRadius: 1 }} />
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -251,7 +375,7 @@ export default function KapuaSection() {
                 margin: 0, fontSize: 46, fontWeight: 800, fontFamily: sans,
                 color: "#fff", letterSpacing: "-0.02em", lineHeight: 1.1,
               }}>
-                Kapuã
+                Kuapoã
               </h1>
               <div style={{
                 fontSize: 13, color: theme.quantum,
@@ -261,11 +385,13 @@ export default function KapuaSection() {
               </div>
             </div>
 
+            <ServerHardware3D />
+
             <p style={{
               margin: 0, fontSize: 14, color: "#aac4e8", lineHeight: 1.75,
               maxWidth: 580, fontFamily: sans,
             }}>
-              O Kapuã é o sistema de geração de números aleatórios quânticos da Dobslit.
+              O Kuapoã é o sistema de geração de números aleatórios quânticos da Dobslit.
               Ele utiliza dados provenientes de uma fonte física quântica baseada em FPGA
               para gerar entropia real, permitindo aplicações em criptografia, simulações,
               autenticação, pesquisa e testes estatísticos.

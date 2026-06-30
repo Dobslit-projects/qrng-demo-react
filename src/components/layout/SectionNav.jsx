@@ -3,7 +3,7 @@ import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
 
 const pages = [
-  { id: "kapua",        label: "Kapu\u00e3" },
+  { id: "kapua",        label: "Kuapo\u00e3" },
   { id: "visuals",      label: "Representa\u00e7\u00f5es Visuais" },
   { id: "data",         label: "Dados" },
   { id: "applications", label: "Aplica\u00e7\u00f5es" },
