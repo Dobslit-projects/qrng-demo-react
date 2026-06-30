@@ -3,12 +3,13 @@ import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
 
 const pages = [
-  { id: "analysis",  label: "An\u00e1lise" },
-  { id: "games",     label: "Representa\u00e7\u00f5es Visuais" },
-  { id: "data",      label: "Dados" },
-  { id: "nist",      label: "NIST SP 800-90B" },
-  { id: "developer", label: "Desenvolvedor" },
-  { id: "settings",  label: "\u2699 Configura\u00e7\u00f5es" },
+  { id: "kapua",        label: "Kapu\u00e3" },
+  { id: "visuals",      label: "Representa\u00e7\u00f5es Visuais" },
+  { id: "data",         label: "Dados" },
+  { id: "applications", label: "Aplica\u00e7\u00f5es" },
+  { id: "nist",         label: "Teste NIST" },
+  { id: "developer",    label: "Desenvolvedor" },
+  { id: "settings",     label: "\u2699 Configura\u00e7\u00f5es" },
 ];
 
 export default function SectionNav() {

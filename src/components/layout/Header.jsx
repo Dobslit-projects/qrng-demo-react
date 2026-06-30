@@ -1,6 +1,31 @@
-import { useContext } from "react";
+import { useContext, useState } from "react";
 import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
+
+function LogoImg({ height }) {
+  const [broken, setBroken] = useState(false);
+  if (broken) {
+    return (
+      <span style={{
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontWeight: 700,
+        fontSize: height * 0.7,
+        color: theme.quantum,
+        letterSpacing: "0.08em",
+      }}>
+        DOBSLIT
+      </span>
+    );
+  }
+  return (
+    <img
+      src="/LOGOMARCA_DOBSLIT.PNG"
+      alt="DOBSLIT"
+      style={{ height }}
+      onError={() => setBroken(true)}
+    />
+  );
+}
 
 export default function Header() {
   const { isOnline } = useContext(AppContext);
@@ -15,7 +40,7 @@ export default function Header() {
           marginBottom: 16,
         }}
       >
-        <img src="/LOGOMARCA_DOBSLIT.PNG" alt="DOBSLIT" style={{ height: 38 }} />
+        <LogoImg height={38} />
         <div style={{ width: 1, height: 28, background: theme.border }} />
         <span
           style={{
