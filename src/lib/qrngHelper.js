@@ -1,28 +1,22 @@
-import { CLIENT_API } from "../qrngApi";
-
-function getAuthHeaders() {
-  const jwt = localStorage.getItem("qrng_auth_jwt");
-  return jwt ? { Authorization: `Bearer ${jwt}` } : {};
-}
+import { API_ROUTES } from "../qrngApi";
 
 /**
- * Fetch N bytes from QRNG backend. NO client-side fallback.
- * Throws "AUTH_REQUIRED" string if 401/403.
- * Throws error message string for other failures.
+ * Fetch N bytes from QRNG backend using the direct API route.
+ * Does NOT require developer auth — use the source API route directly.
+ * Pass apiPrefix from getApiPrefix(qrngSource) or leave default for remote.
+ * Throws error message string for failures.
  */
-export async function fetchQrngBytes(byteCount) {
+export async function fetchQrngBytes(byteCount, apiPrefix = API_ROUTES.remote) {
   const t0 = performance.now();
-  const r = await fetch(`${CLIENT_API}/random?bytes=${byteCount}&format=hex`, {
-    headers: getAuthHeaders(),
+  const r = await fetch(`${apiPrefix}/random?bytes=${byteCount}&format=hex`, {
     signal: AbortSignal.timeout(60000),
   });
   if (!r.ok) {
     const body = await r.json().catch(() => ({}));
-    if (r.status === 401 || r.status === 403) throw new Error("AUTH_REQUIRED");
-    throw new Error(body.detail || `QRNG API error ${r.status}`);
+    throw new Error(body.detail || body.error || body.message || `QRNG API error ${r.status}`);
   }
   const json = await r.json();
-  const hex = json.random || "";
+  const hex = json.random || json.hex || "";
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
   return {
@@ -59,7 +53,5 @@ export function uniformIntFromBytes(min, max, bytes) {
 }
 
 export function errorMessage(err) {
-  if (err?.message === "AUTH_REQUIRED")
-    return "Para usar esta funcionalidade, faça login na aba Desenvolvedor.";
-  return err?.message || "API QRNG indisponível. Tente novamente.";
+  return err?.message || "Backend QRNG indisponível. Verifique a conexão e tente novamente.";
 }
