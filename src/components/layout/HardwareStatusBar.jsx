@@ -1,6 +1,31 @@
-import { useContext } from "react";
+import { useContext, useState } from "react";
 import { theme, formatBytes } from "../../theme";
 import { AppContext, SOURCE_LABELS } from "../../contexts/AppContext";
+
+function LogoImg({ height }) {
+  const [broken, setBroken] = useState(false);
+  if (broken) {
+    return (
+      <span style={{
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontWeight: 700,
+        fontSize: height * 0.7,
+        color: theme.quantum,
+        letterSpacing: "0.08em",
+      }}>
+        DOBSLIT
+      </span>
+    );
+  }
+  return (
+    <img
+      src="/LOGOMARCA_DOBSLIT.PNG"
+      alt="DOBSLIT"
+      style={{ height }}
+      onError={() => setBroken(true)}
+    />
+  );
+}
 
 export default function HardwareStatusBar() {
   const { health, latency, isOnline, qrngSource } = useContext(AppContext);
@@ -23,7 +48,7 @@ export default function HardwareStatusBar() {
       }}
     >
       <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-        <img src="/LOGOMARCA_DOBSLIT.PNG" alt="DOBSLIT" style={{ height: 20 }} />
+        <LogoImg height={20} />
         <div style={{ width: 1, height: 16, background: theme.border }} />
         <div
           style={{

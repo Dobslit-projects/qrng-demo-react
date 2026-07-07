@@ -26,7 +26,7 @@ export function AppProvider({ children }) {
   const [fpgaLatency, setFpgaLatency] = useState(null);
   const [qrngSource, setQrngSourceRaw] = useState(loadSource);
   const [streamError, setStreamError] = useState(null);
-  const [activePage, setActivePage] = useState("analysis");
+  const [activePage, setActivePage] = useState("kapua");
 
   // Persistir fonte selecionada
   const setQrngSource = useCallback((src) => {
