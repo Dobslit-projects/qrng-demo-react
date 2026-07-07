@@ -1,7 +1,6 @@
 import { useState, useContext, useRef, useEffect, useCallback } from "react";
 import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
-import { getApiPrefix } from "../../qrngApi";
 import {
   fetchQrngBytes, bytesToHex, bytesToUint32Array,
   uint32ToFloat, uniformIntFromBytes, errorMessage,
@@ -100,7 +99,7 @@ const keyTags = {
   256: ["High-Entropy Pool"], 512: ["Multi-Key Derivation"], 1024: ["Bulk Entropy"],
 };
 
-function KeyCard({ onGoLogin, apiPrefix }) {
+function KeyCard({ onGoLogin, source }) {
   const [size, setSize] = useState(32);
   const [hex, setHex] = useState("");
   const [meta, setMeta] = useState(null);
@@ -117,7 +116,7 @@ function KeyCard({ onGoLogin, apiPrefix }) {
       setHex(Array.from({length: size * 2}, () => "0123456789abcdef"[Math.floor(Math.random() * 16)]).join(""));
     }, 40);
     try {
-      const r = await fetchQrngBytes(size, apiPrefix);
+      const r = await fetchQrngBytes(size, source);
       stopAnim();
       setHex(r.hex.slice(0, size * 2));
       setMeta(r);
@@ -167,7 +166,7 @@ function KeyCard({ onGoLogin, apiPrefix }) {
 
 /* ── Card 2: Seed para IA ─────────────────────────────────────────────────── */
 
-function AISeedCard({ onGoLogin, apiPrefix }) {
+function AISeedCard({ onGoLogin, source }) {
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -175,7 +174,7 @@ function AISeedCard({ onGoLogin, apiPrefix }) {
   const generate = async () => {
     setBusy(true); setErr(""); setResult(null);
     try {
-      const r = await fetchQrngBytes(8, apiPrefix);
+      const r = await fetchQrngBytes(8, source);
       const u32a = bytesToUint32Array(r.bytes);
       const seed32 = u32a[0];
       const seed64hi = u32a[0]; const seed64lo = u32a[1];
@@ -238,7 +237,7 @@ function AISeedCard({ onGoLogin, apiPrefix }) {
 
 /* ── Card 3: Monte Carlo π ────────────────────────────────────────────────── */
 
-function MonteCarloCard({ onGoLogin, apiPrefix }) {
+function MonteCarloCard({ onGoLogin, source }) {
   const canvasRef = useRef(null);
   const [nPoints, setNPoints] = useState(1000);
   const [result, setResult] = useState(null);
@@ -252,7 +251,7 @@ function MonteCarloCard({ onGoLogin, apiPrefix }) {
     setBusy(true); setErr(""); setResult(null);
     try {
       const bytesNeeded = nPoints * 8;
-      const r = await fetchQrngBytes(bytesNeeded, apiPrefix);
+      const r = await fetchQrngBytes(bytesNeeded, source);
       const u32s = bytesToUint32Array(r.bytes);
 
       let inside = 0;
@@ -341,7 +340,7 @@ function MonteCarloCard({ onGoLogin, apiPrefix }) {
 
 /* ── Card 4: Sorteio Auditável ────────────────────────────────────────────── */
 
-function RaffleCard({ onGoLogin, apiPrefix }) {
+function RaffleCard({ onGoLogin, source }) {
   const [names, setNames] = useState("");
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -353,7 +352,7 @@ function RaffleCard({ onGoLogin, apiPrefix }) {
     if (list.length < 2) { setErr("Insira pelo menos 2 participantes."); return; }
     setBusy(true); setErr(""); setResult(null);
     try {
-      const r = await fetchQrngBytes(32, apiPrefix);
+      const r = await fetchQrngBytes(32, source);
       const winner = uniformIntFromBytes(0, list.length - 1, r.bytes);
       setResult({ winner: list[winner], idx: winner, total: list.length, meta: r, ts: new Date().toISOString() });
     } catch (e) {
@@ -429,7 +428,7 @@ function RaffleCard({ onGoLogin, apiPrefix }) {
 
 /* ── Card 5: Jogos ────────────────────────────────────────────────────────── */
 
-function GamesCard({ onGoLogin, apiPrefix }) {
+function GamesCard({ onGoLogin, source }) {
   const [coin, setCoin] = useState(null);
   const [dice, setDice] = useState(null);
   const [coinMeta, setCoinMeta] = useState(null);
@@ -440,7 +439,7 @@ function GamesCard({ onGoLogin, apiPrefix }) {
   const flipCoin = async () => {
     setBusy(true); setErr(""); setCoin(null); setCoinMeta(null);
     try {
-      const r = await fetchQrngBytes(1, apiPrefix);
+      const r = await fetchQrngBytes(1, source);
       setCoin((r.bytes[0] & 1) === 0 ? "CARA" : "COROA");
       setCoinMeta(r);
     } catch (e) { setErr(errorMessage(e)); } finally { setBusy(false); }
@@ -449,7 +448,7 @@ function GamesCard({ onGoLogin, apiPrefix }) {
   const rollDice = async () => {
     setBusy(true); setErr(""); setDice(null); setDiceMeta(null);
     try {
-      const r = await fetchQrngBytes(16, apiPrefix);
+      const r = await fetchQrngBytes(16, source);
       const val = uniformIntFromBytes(1, 6, r.bytes);
       setDice(val);
       setDiceMeta(r);
@@ -507,7 +506,7 @@ function GamesCard({ onGoLogin, apiPrefix }) {
 
 /* ── Card 6: Random Walk ──────────────────────────────────────────────────── */
 
-function RandomWalkCard({ onGoLogin, apiPrefix }) {
+function RandomWalkCard({ onGoLogin, source }) {
   const canvasRef = useRef(null);
   const [steps, setSteps] = useState(256);
   const [result, setResult] = useState(null);
@@ -520,7 +519,7 @@ function RandomWalkCard({ onGoLogin, apiPrefix }) {
     setBusy(true); setErr(""); setResult(null);
     try {
       const bytesNeeded = Math.ceil(steps / 4);
-      const r = await fetchQrngBytes(bytesNeeded, apiPrefix);
+      const r = await fetchQrngBytes(bytesNeeded, source);
       const dirs = []; // 0=up, 1=down, 2=left, 3=right
       for (const byte of r.bytes) {
         dirs.push(byte & 3, (byte >> 2) & 3, (byte >> 4) & 3, (byte >> 6) & 3);
@@ -620,7 +619,7 @@ function RandomWalkCard({ onGoLogin, apiPrefix }) {
 
 /* ── Card 7: Otimização ───────────────────────────────────────────────────── */
 
-function OptimCard({ onGoLogin, apiPrefix }) {
+function OptimCard({ onGoLogin, source }) {
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -632,7 +631,7 @@ function OptimCard({ onGoLogin, apiPrefix }) {
   const run = async () => {
     setBusy(true); setErr(""); setResult(null);
     try {
-      const r = await fetchQrngBytes(n * 4, apiPrefix);
+      const r = await fetchQrngBytes(n * 4, source);
       const u32s = bytesToUint32Array(r.bytes);
       let best = -Infinity, bestX = 0, bestIdx = 0;
       const TWO_PI = Math.PI * 2;
@@ -697,7 +696,7 @@ function OptimCard({ onGoLogin, apiPrefix }) {
 export default function ApplicationsSection() {
   const { setActivePage, qrngSource } = useContext(AppContext);
   const goLogin = useCallback(() => setActivePage("developer"), [setActivePage]);
-  const apiPrefix = getApiPrefix(qrngSource);
+  const source = qrngSource;
 
   return (
     <div style={{ height: "100%", overflowY: "auto" }}>
@@ -718,13 +717,13 @@ export default function ApplicationsSection() {
           </div>
         </div>
 
-        <KeyCard onGoLogin={goLogin} apiPrefix={apiPrefix} />
-        <AISeedCard onGoLogin={goLogin} apiPrefix={apiPrefix} />
-        <MonteCarloCard onGoLogin={goLogin} apiPrefix={apiPrefix} />
-        <RaffleCard onGoLogin={goLogin} apiPrefix={apiPrefix} />
-        <GamesCard onGoLogin={goLogin} apiPrefix={apiPrefix} />
-        <RandomWalkCard onGoLogin={goLogin} apiPrefix={apiPrefix} />
-        <OptimCard onGoLogin={goLogin} apiPrefix={apiPrefix} />
+        <KeyCard onGoLogin={goLogin} source={source} />
+        <AISeedCard onGoLogin={goLogin} source={source} />
+        <MonteCarloCard onGoLogin={goLogin} source={source} />
+        <RaffleCard onGoLogin={goLogin} source={source} />
+        <GamesCard onGoLogin={goLogin} source={source} />
+        <RandomWalkCard onGoLogin={goLogin} source={source} />
+        <OptimCard onGoLogin={goLogin} source={source} />
       </div>
     </div>
   );
