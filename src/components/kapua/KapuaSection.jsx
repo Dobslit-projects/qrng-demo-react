@@ -2,7 +2,7 @@ import { useRef, useEffect, useState, useContext, useCallback } from "react";
 import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
 import { fetchQrngBytes, errorMessage } from "../../lib/qrngHelper";
-import { CLIENT_API } from "../../qrngApi";
+import { getApiPrefix } from "../../qrngApi";
 
 const mono  = "'IBM Plex Mono', monospace";
 const sans  = "'Outfit', sans-serif";
@@ -460,7 +460,7 @@ function sourceLabel(source) {
 /* ── Main Section ─────────────────────────────────────────────────────────── */
 
 export default function KapuaSection() {
-  const { isOnline, setActivePage } = useContext(AppContext);
+  const { isOnline, setActivePage, qrngSource } = useContext(AppContext);
 
   /* Device explorer state */
   const [selected,      setSelected]      = useState(0);
@@ -518,7 +518,7 @@ export default function KapuaSection() {
     }, 220);
 
     try {
-      const r = await fetchQrngBytes(4);
+      const r = await fetchQrngBytes(4, getApiPrefix(qrngSource));
       const b = r.bytes;
       const n = ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
       setRandHex({ value: n, hex: r.hex.slice(0, 8), latency: r.latencyMs, source: r.source });
@@ -534,24 +534,20 @@ export default function KapuaSection() {
   const handleDownload = async () => {
     setDownloading(true); setDlError(null);
     try {
-      const jwt = localStorage.getItem("qrng_auth_jwt");
-      if (!jwt) { setDlError("Faça login na aba Desenvolvedor para baixar dados quânticos."); return; }
-      const response = await fetch(`${CLIENT_API}/random?bytes=1048576&format=hex`, {
-        headers: { Authorization: `Bearer ${jwt}` }, signal: AbortSignal.timeout(60000),
+      const apiPrefix = getApiPrefix(qrngSource);
+      const response = await fetch(`${apiPrefix}/random?bytes=1048576&format=hex`, {
+        signal: AbortSignal.timeout(60000),
       });
-      if (response.status === 401 || response.status === 403) {
-        setDlError("Sessão expirada. Faça login novamente na aba Desenvolvedor."); return;
-      }
       if (!response.ok) throw new Error(`API error: ${response.status}`);
       const json = await response.json();
-      const hex  = json.random || "";
+      const hex  = json.random || json.hex || "";
       const raw  = new Uint8Array(hex.length / 2);
       for (let i = 0; i < raw.length; i++) raw[i] = parseInt(hex.substr(i * 2, 2), 16);
       const blob = new Blob([raw], { type: "application/octet-stream" });
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement("a"); a.href = url; a.download = "qrng_1MiB.bin";
       document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
-    } catch { setDlError("Erro ao baixar. Verifique a conexão ou acesse a aba Dados.");
+    } catch { setDlError("Backend QRNG offline ou indisponível. Acesse a aba Dados para mais opções.");
     } finally { setDownloading(false); }
   };
 
@@ -660,21 +656,13 @@ export default function KapuaSection() {
                   padding: "8px 10px", borderRadius: 8, background: theme.warning + "0d",
                   border: `1px solid ${theme.warning}25` }}>
                   {genError}
-                  {genError.includes("Desenvolvedor") && (
-                    <span onClick={() => setActivePage("developer")}
-                      style={{ marginLeft: 6, color: theme.quantum, cursor: "pointer", textDecoration: "underline" }}>
-                      Ir para Desenvolvedor
-                    </span>
-                  )}
                 </div>
               )}
               {dlError && (
-                <div style={{ fontSize: 11, color: theme.warning, fontFamily: mono }}>
+                <div style={{ fontSize: 11, color: theme.warning, fontFamily: mono,
+                  padding: "8px 10px", borderRadius: 8, background: theme.warning + "0d",
+                  border: `1px solid ${theme.warning}25` }}>
                   {dlError}
-                  <span onClick={() => setActivePage("developer")}
-                    style={{ marginLeft: 6, color: theme.quantum, cursor: "pointer", textDecoration: "underline" }}>
-                    Ir para Desenvolvedor
-                  </span>
                 </div>
               )}
             </div>

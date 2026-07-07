@@ -1,7 +1,7 @@
 import { useState, useContext } from "react";
 import { theme, formatBytes } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
-import { CLIENT_API } from "../../qrngApi";
+import { getApiPrefix } from "../../qrngApi";
 import Btn from "../ui/Btn";
 
 const MONO = "'IBM Plex Mono', monospace";
@@ -193,7 +193,6 @@ const DL_SIZES = [
 
 export default function DataSection() {
   const { isOnline, health, latency, qrngSource } = useContext(AppContext);
-  const hasJwt = !!localStorage.getItem("qrng_auth_jwt");
 
   // Modo de exportação
   const [mode, setMode] = useState("raw");
@@ -250,7 +249,6 @@ export default function DataSection() {
   // ── Validação ───────────────────────────────────────────────────
 
   function validate() {
-    if (!hasJwt)    return "Faça login na aba Desenvolvedor para gerar dados quânticos.";
     if (!isOnline)  return "Backend QRNG offline. Não é possível gerar dados reais agora.";
     if (mode === "raw" || mode === "hex" || mode === "uint8") {
       if (dlSize < 1 || dlSize > MAX_BYTES)
@@ -300,20 +298,18 @@ export default function DataSection() {
     };
 
     try {
-      const jwt    = localStorage.getItem("qrng_auth_jwt");
-      const needed = bytesNeeded();
-      const t0     = performance.now();
+      const needed    = bytesNeeded();
+      const t0        = performance.now();
+      const apiPrefix = getApiPrefix(qrngSource);
 
-      const r = await fetch(`${CLIENT_API}/random?bytes=${needed}&format=hex`, {
-        headers: { Authorization: `Bearer ${jwt}` },
+      const r = await fetch(`${apiPrefix}/random?bytes=${needed}&format=hex`, {
         signal: AbortSignal.timeout(90_000),
       });
 
-      if (r.status === 401 || r.status === 403) {
-        setErrorMsg("Sessão expirada. Faça login novamente na aba Desenvolvedor.");
-        setStatus("error"); return;
+      if (!r.ok) {
+        const body = await r.json().catch(() => ({}));
+        throw new Error(body.detail || body.error || `API QRNG retornou erro ${r.status}`);
       }
-      if (!r.ok) throw new Error(`API QRNG retornou erro ${r.status}`);
 
       const json = await r.json();
       const hex  = json.random || "";
@@ -487,7 +483,7 @@ export default function DataSection() {
 
   // ── Render ───────────────────────────────────────────────────────
 
-  const canGenerate = isOnline && hasJwt && status !== "generating";
+  const canGenerate = isOnline && status !== "generating";
   const hasDone     = status === "done" && !!resultData;
   const bufferInfo  = health?.buffer_level ?? health?.buffer ?? null;
 
@@ -526,12 +522,6 @@ export default function DataSection() {
               </span>
             )}
           </div>
-          {!hasJwt && (
-            <div style={{ fontSize: 12, color: theme.warning, fontFamily: SANS,
-              background: theme.warning + "10", padding: "6px 10px", borderRadius: 6 }}>
-              ⚠ JWT ausente — faça login na aba <strong>Desenvolvedor</strong> para gerar dados.
-            </div>
-          )}
         </div>
 
         {/* ── Card 2: Modo de exportação ─────────────────────────── */}
