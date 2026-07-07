@@ -1,12 +1,38 @@
 import { API_ROUTES } from "../qrngApi";
+import { QRNG_PRECOLLECTED } from "../qrngFallbackData";
+
+/** Total bytes available in the pre-collected fallback buffer. */
+export const PRECOLLECTED_LIMIT = QRNG_PRECOLLECTED.length;
+
+let fallbackOffset = 0;
+
+function getPrecollectedBytes(byteCount) {
+  const t0 = performance.now();
+  const bytes = new Uint8Array(byteCount);
+  for (let i = 0; i < byteCount; i++) {
+    bytes[i] = QRNG_PRECOLLECTED[(fallbackOffset + i) % PRECOLLECTED_LIMIT];
+  }
+  fallbackOffset = (fallbackOffset + byteCount) % PRECOLLECTED_LIMIT;
+  const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
+  return {
+    bytes, hex,
+    source: "pré-coletado",
+    requestId: null,
+    timestamp: new Date().toISOString(),
+    latencyMs: Math.round(performance.now() - t0),
+  };
+}
 
 /**
- * Fetch N bytes from QRNG backend using the direct API route.
- * Does NOT require developer auth — use the source API route directly.
- * Pass apiPrefix from getApiPrefix(qrngSource) or leave default for remote.
- * Throws error message string for failures.
+ * Fetch N bytes from the active QRNG source.
+ * source: "remote" | "fpga" | "pre-collected"
+ * When source is "pre-collected", reads from local QRNG_PRECOLLECTED — no network call.
  */
-export async function fetchQrngBytes(byteCount, apiPrefix = API_ROUTES.remote) {
+export async function fetchQrngBytes(byteCount, source = "remote") {
+  if (source === "pre-collected") {
+    return getPrecollectedBytes(byteCount);
+  }
+  const apiPrefix = API_ROUTES[source] || API_ROUTES.remote;
   const t0 = performance.now();
   const r = await fetch(`${apiPrefix}/random?bytes=${byteCount}&format=hex`, {
     signal: AbortSignal.timeout(60000),

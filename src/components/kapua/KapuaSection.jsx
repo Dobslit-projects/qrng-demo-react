@@ -2,7 +2,7 @@ import { useRef, useEffect, useState, useContext, useCallback } from "react";
 import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
 import { fetchQrngBytes, errorMessage } from "../../lib/qrngHelper";
-import { getApiPrefix } from "../../qrngApi";
+import { API_ROUTES } from "../../qrngApi";
 
 const mono  = "'IBM Plex Mono', monospace";
 const sans  = "'Outfit', sans-serif";
@@ -518,7 +518,7 @@ export default function KapuaSection() {
     }, 220);
 
     try {
-      const r = await fetchQrngBytes(4, getApiPrefix(qrngSource));
+      const r = await fetchQrngBytes(4, qrngSource);
       const b = r.bytes;
       const n = ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
       setRandHex({ value: n, hex: r.hex.slice(0, 8), latency: r.latencyMs, source: r.source });
@@ -532,9 +532,13 @@ export default function KapuaSection() {
 
   /* ── Download 1 MiB ── */
   const handleDownload = async () => {
+    if (qrngSource === "pre-collected") {
+      setDlError("Fonte pré-coletada tem apenas 10.000 bytes. Use a aba Dados para exportar até 10 KB, ou selecione Remote / FPGA para o download de 1 MiB.");
+      return;
+    }
     setDownloading(true); setDlError(null);
     try {
-      const apiPrefix = getApiPrefix(qrngSource);
+      const apiPrefix = API_ROUTES[qrngSource] || API_ROUTES.remote;
       const response = await fetch(`${apiPrefix}/random?bytes=1048576&format=hex`, {
         signal: AbortSignal.timeout(60000),
       });

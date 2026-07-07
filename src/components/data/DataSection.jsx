@@ -1,7 +1,7 @@
 import { useState, useContext } from "react";
 import { theme, formatBytes } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
-import { getApiPrefix } from "../../qrngApi";
+import { fetchQrngBytes, PRECOLLECTED_LIMIT } from "../../lib/qrngHelper";
 import Btn from "../ui/Btn";
 
 const MONO = "'IBM Plex Mono', monospace";
@@ -250,6 +250,11 @@ export default function DataSection() {
 
   function validate() {
     if (!isOnline)  return "Backend QRNG offline. Não é possível gerar dados reais agora.";
+    if (qrngSource === "pre-collected") {
+      const needed = bytesNeeded();
+      if (needed > PRECOLLECTED_LIMIT)
+        return `Fonte pré-coletada tem apenas ${PRECOLLECTED_LIMIT.toLocaleString()} bytes. Reduza o tamanho ou a quantidade para continuar (máx: ${formatBytes(PRECOLLECTED_LIMIT)}).`;
+    }
     if (mode === "raw" || mode === "hex" || mode === "uint8") {
       if (dlSize < 1 || dlSize > MAX_BYTES)
         return `Tamanho inválido. Use entre 1 e ${formatBytes(MAX_BYTES)}.`;
@@ -298,26 +303,11 @@ export default function DataSection() {
     };
 
     try {
-      const needed    = bytesNeeded();
-      const t0        = performance.now();
-      const apiPrefix = getApiPrefix(qrngSource);
-
-      const r = await fetch(`${apiPrefix}/random?bytes=${needed}&format=hex`, {
-        signal: AbortSignal.timeout(90_000),
-      });
-
-      if (!r.ok) {
-        const body = await r.json().catch(() => ({}));
-        throw new Error(body.detail || body.error || `API QRNG retornou erro ${r.status}`);
-      }
-
-      const json = await r.json();
-      const hex  = json.random || "";
-      const bytes = new Uint8Array(hex.length / 2);
-      for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
-
-      const latencyMs = Math.round(performance.now() - t0);
-      const source    = json.source ?? json.generator ?? "qrng";
+      const needed  = bytesNeeded();
+      const result  = await fetchQrngBytes(needed, qrngSource);
+      const { bytes, hex } = result;
+      const latencyMs = result.latencyMs;
+      const source    = result.source ?? (qrngSource === "pre-collected" ? "pré-coletado" : "qrng");
 
       // ── Processamento por modo ────────────────────────────────
       let numbers = null;
@@ -505,7 +495,11 @@ export default function DataSection() {
               }} />
               <span style={{ fontSize: 12, fontWeight: 700, fontFamily: MONO,
                 color: isOnline ? theme.success : theme.danger }}>
-                {isOnline ? "Backend QRNG online. Dados prontos para exportação." : "Backend QRNG offline. Não é possível gerar dados reais agora."}
+                {qrngSource === "pre-collected"
+                  ? `Fonte pré-coletada ativa. ${PRECOLLECTED_LIMIT.toLocaleString()} bytes QRNG reais disponíveis localmente.`
+                  : isOnline
+                    ? "Backend QRNG online. Dados prontos para exportação."
+                    : "Backend QRNG offline. Não é possível gerar dados reais agora."}
               </span>
             </div>
             {latency && (
