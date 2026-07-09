@@ -460,7 +460,7 @@ function sourceLabel(source) {
 /* ── Main Section ─────────────────────────────────────────────────────────── */
 
 export default function KapuaSection() {
-  const { isOnline, setActivePage, qrngSource } = useContext(AppContext);
+  const { isOnline, setActivePage, qrngSource, status: qrngStatus } = useContext(AppContext);
 
   /* Device explorer state */
   const [selected,      setSelected]      = useState(0);
@@ -588,11 +588,11 @@ export default function KapuaSection() {
                   letterSpacing: "0.18em", color: theme.quantum + "cc" }}>DOBSLIT · QRNG</span>
                 <span style={{
                   fontSize: 9, fontFamily: mono, fontWeight: 700,
-                  color: isOnline ? theme.success : theme.warning,
-                  background: (isOnline ? theme.success : theme.warning) + "18",
-                  border: `1px solid ${(isOnline ? theme.success : theme.warning)}40`,
+                  color: isOnline ? theme.success : qrngStatus === "degraded" ? theme.warning : theme.danger,
+                  background: (isOnline ? theme.success : qrngStatus === "degraded" ? theme.warning : theme.danger) + "18",
+                  border: `1px solid ${(isOnline ? theme.success : qrngStatus === "degraded" ? theme.warning : theme.danger)}40`,
                   borderRadius: 20, padding: "2px 9px",
-                }}>{isOnline ? "● ONLINE" : "○ OFFLINE"}</span>
+                }}>{isOnline ? "● ONLINE" : qrngStatus === "degraded" ? "◐ DEGRADADO" : "○ OFFLINE"}</span>
               </div>
 
               {/* Title */}

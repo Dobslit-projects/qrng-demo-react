@@ -1,9 +1,12 @@
-import { createContext, useState, useEffect, useMemo, useCallback } from "react";
+import { createContext, useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { fetchHealth, API_ROUTES } from "../qrngApi";
 
 export const AppContext = createContext();
 
-const STORAGE_KEY = "qrng-source";
+const STORAGE_KEY     = "qrng-source";
+const HEALTH_POLL_MS  = 15000; // 15s — reduced load, no more 3s flapping
+const FAIL_THRESHOLD  = 3;     // 3 consecutive failures → mark OFFLINE
+const OK_THRESHOLD    = 2;     // 2 consecutive successes → recover from OFFLINE
 
 function loadSource() {
   try {
@@ -19,77 +22,95 @@ export const SOURCE_LABELS = {
   "pre-collected": "Pré-coletado",
 };
 
-export function AppProvider({ children }) {
-  const [remoteHealth, setRemoteHealth] = useState(null);
-  const [remoteLatency, setRemoteLatency] = useState(null);
-  const [fpgaHealth, setFpgaHealth] = useState(null);
-  const [fpgaLatency, setFpgaLatency] = useState(null);
-  const [qrngSource, setQrngSourceRaw] = useState(loadSource);
-  const [streamError, setStreamError] = useState(null);
-  const [activePage, setActivePage] = useState("kapua");
+/**
+ * Polls health endpoint with hysteresis:
+ * - First success → immediately ONLINE
+ * - After ONLINE: 3 consecutive failures → OFFLINE
+ * - After OFFLINE: 2 consecutive successes → ONLINE
+ * - DEGRADED: health responds 200 but buffer_bytes_available === 0
+ */
+function useHysteresisHealth(apiPrefix) {
+  const [health, setHealth]   = useState(null);
+  const [latency, setLatency] = useState(null);
+  const failsRef    = useRef(0);
+  const successRef  = useRef(0);
+  const isOfflineRef = useRef(true); // starts unknown/offline
 
-  // Persistir fonte selecionada
+  useEffect(() => {
+    const poll = async () => {
+      const h = await fetchHealth(apiPrefix);
+      if (h !== null) {
+        failsRef.current   = 0;
+        successRef.current += 1;
+        const wasOffline = isOfflineRef.current;
+        if (!wasOffline || successRef.current >= OK_THRESHOLD) {
+          isOfflineRef.current = false;
+          setHealth(h);
+          if (h._latencyMs) setLatency(h._latencyMs);
+        }
+      } else {
+        successRef.current = 0;
+        failsRef.current  += 1;
+        if (failsRef.current >= FAIL_THRESHOLD || isOfflineRef.current) {
+          isOfflineRef.current = true;
+          setHealth(null);
+        }
+      }
+    };
+    poll();
+    const t = setInterval(poll, HEALTH_POLL_MS);
+    return () => clearInterval(t);
+  }, [apiPrefix]);
+
+  return { health, latency };
+}
+
+function computeStatus(qrngSource, health) {
+  if (qrngSource === "pre-collected") return "pre-collected";
+  if (health === null) return "offline";
+  if (typeof health.buffer_bytes_available === "number" && health.buffer_bytes_available === 0)
+    return "degraded";
+  return "online";
+}
+
+export function AppProvider({ children }) {
+  const { health: remoteHealth, latency: remoteLatency } = useHysteresisHealth(API_ROUTES.remote);
+  const { health: fpgaHealth,   latency: fpgaLatency   } = useHysteresisHealth(API_ROUTES.fpga);
+
+  const [qrngSource, setQrngSourceRaw] = useState(loadSource);
+  const [streamError, setStreamError]  = useState(null);
+  const [activePage,  setActivePage]   = useState("kapua");
+
   const setQrngSource = useCallback((src) => {
     setQrngSourceRaw(src);
     try { localStorage.setItem(STORAGE_KEY, src); } catch {}
   }, []);
 
-  // Poll remote health
-  useEffect(() => {
-    const poll = async () => {
-      const h = await fetchHealth(API_ROUTES.remote);
-      setRemoteHealth(h);
-      if (h && h._latencyMs) setRemoteLatency(h._latencyMs);
-    };
-    poll();
-    const t = setInterval(poll, 3000);
-    return () => clearInterval(t);
-  }, []);
+  const health  = qrngSource === "remote" ? remoteHealth  : qrngSource === "fpga" ? fpgaHealth  : null;
+  const latency = qrngSource === "remote" ? remoteLatency : qrngSource === "fpga" ? fpgaLatency : null;
 
-  // Poll FPGA health
-  useEffect(() => {
-    const poll = async () => {
-      const h = await fetchHealth(API_ROUTES.fpga);
-      setFpgaHealth(h);
-      if (h && h._latencyMs) setFpgaLatency(h._latencyMs);
-    };
-    poll();
-    const t = setInterval(poll, 3000);
-    return () => clearInterval(t);
-  }, []);
-
-  // Derivados: health/latency da fonte ativa
-  const health = qrngSource === "remote" ? remoteHealth
-    : qrngSource === "fpga" ? fpgaHealth
-    : null;
-
-  const latency = qrngSource === "remote" ? remoteLatency
-    : qrngSource === "fpga" ? fpgaLatency
-    : null;
-
-  const isOnline = qrngSource === "pre-collected" ? true : health !== null;
+  const status   = computeStatus(qrngSource, health);
+  const isOnline = status === "online" || status === "pre-collected";
 
   const value = useMemo(() => ({
-    // Fonte ativa
     health,
     latency,
     qrngSource,
     setQrngSource,
     isOnline,
+    status,      // "online" | "degraded" | "offline" | "pre-collected"
     streamError,
     setStreamError,
     activePage,
     setActivePage,
-    // Status de todas as fontes (para SettingsSection)
     remoteHealth,
     remoteLatency,
     fpgaHealth,
     fpgaLatency,
     setLatency: (v) => {
-      if (qrngSource === "remote") setRemoteLatency(v);
-      else if (qrngSource === "fpga") setFpgaLatency(v);
+      // kept for backward compat — hysteresis hook manages latency internally
     },
-  }), [health, latency, qrngSource, isOnline, streamError, activePage,
+  }), [health, latency, qrngSource, isOnline, status, streamError, activePage,
        remoteHealth, remoteLatency, fpgaHealth, fpgaLatency, setQrngSource]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

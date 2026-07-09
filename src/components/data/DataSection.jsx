@@ -192,7 +192,7 @@ const DL_SIZES = [
 // ─── Componente principal ─────────────────────────────────────────
 
 export default function DataSection() {
-  const { isOnline, health, latency, qrngSource } = useContext(AppContext);
+  const { isOnline, health, latency, qrngSource, status: qrngStatus } = useContext(AppContext);
 
   // Modo de exportação
   const [mode, setMode] = useState("raw");
@@ -249,6 +249,7 @@ export default function DataSection() {
   // ── Validação ───────────────────────────────────────────────────
 
   function validate() {
+    if (qrngStatus === "degraded") return "Backend conectado, mas buffer de entropia vazio. Aguarde recarga do FPGA e tente novamente.";
     if (!isOnline)  return "Backend QRNG offline. Não é possível gerar dados reais agora.";
     if (qrngSource === "pre-collected") {
       const needed = bytesNeeded();
@@ -490,16 +491,18 @@ export default function DataSection() {
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{
                 width: 9, height: 9, borderRadius: "50%", display: "inline-block",
-                background: isOnline ? theme.success : theme.danger,
-                boxShadow: `0 0 6px ${isOnline ? theme.success : theme.danger}`,
+                background: isOnline ? theme.success : qrngStatus === "degraded" ? theme.warning : theme.danger,
+                boxShadow: `0 0 6px ${isOnline ? theme.success : qrngStatus === "degraded" ? theme.warning : theme.danger}`,
               }} />
               <span style={{ fontSize: 12, fontWeight: 700, fontFamily: MONO,
-                color: isOnline ? theme.success : theme.danger }}>
+                color: isOnline ? theme.success : qrngStatus === "degraded" ? theme.warning : theme.danger }}>
                 {qrngSource === "pre-collected"
                   ? `Fonte pré-coletada ativa. ${PRECOLLECTED_LIMIT.toLocaleString()} bytes QRNG reais disponíveis localmente.`
-                  : isOnline
-                    ? "Backend QRNG online. Dados prontos para exportação."
-                    : "Backend QRNG offline. Não é possível gerar dados reais agora."}
+                  : qrngStatus === "degraded"
+                    ? "Backend conectado, mas buffer de entropia vazio. Aguarde recarga do FPGA..."
+                    : isOnline
+                      ? "Backend QRNG online. Dados prontos para exportação."
+                      : "Backend QRNG offline. Não é possível gerar dados reais agora."}
               </span>
             </div>
             {latency && (
