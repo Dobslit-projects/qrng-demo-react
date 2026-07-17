@@ -588,11 +588,11 @@ export default function KapuaSection() {
                   letterSpacing: "0.18em", color: theme.quantum + "cc" }}>DOBSLIT · QRNG</span>
                 <span style={{
                   fontSize: 9, fontFamily: mono, fontWeight: 700,
-                  color: isOnline ? theme.success : qrngStatus === "degraded" ? theme.warning : theme.danger,
-                  background: (isOnline ? theme.success : qrngStatus === "degraded" ? theme.warning : theme.danger) + "18",
-                  border: `1px solid ${(isOnline ? theme.success : qrngStatus === "degraded" ? theme.warning : theme.danger)}40`,
+                  color: isOnline ? theme.success : qrngStatus === "checking" ? theme.textMuted : qrngStatus === "degraded" ? theme.warning : theme.danger,
+                  background: (isOnline ? theme.success : qrngStatus === "checking" ? theme.textMuted : qrngStatus === "degraded" ? theme.warning : theme.danger) + "18",
+                  border: `1px solid ${(isOnline ? theme.success : qrngStatus === "checking" ? theme.textMuted : qrngStatus === "degraded" ? theme.warning : theme.danger)}40`,
                   borderRadius: 20, padding: "2px 9px",
-                }}>{isOnline ? "● ONLINE" : qrngStatus === "degraded" ? "◐ DEGRADADO" : "○ OFFLINE"}</span>
+                }}>{isOnline ? "● ONLINE" : qrngStatus === "checking" ? "◌ VERIFICANDO" : qrngStatus === "degraded" ? "◐ DEGRADADO" : "○ OFFLINE"}</span>
               </div>
 
               {/* Title */}

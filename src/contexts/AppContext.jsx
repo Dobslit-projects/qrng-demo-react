@@ -24,17 +24,20 @@ export const SOURCE_LABELS = {
 
 /**
  * Polls health endpoint with hysteresis:
- * - First success → immediately ONLINE
+ * - checking=true until the first poll completes (no false OFFLINE on mount)
+ * - First success → immediately ONLINE (isOfflineRef starts false)
  * - After ONLINE: 3 consecutive failures → OFFLINE
- * - After OFFLINE: 2 consecutive successes → ONLINE
+ * - After OFFLINE (confirmed): 2 consecutive successes → ONLINE
  * - DEGRADED: health responds 200 but buffer_bytes_available === 0
  */
 function useHysteresisHealth(apiPrefix) {
-  const [health, setHealth]   = useState(null);
-  const [latency, setLatency] = useState(null);
-  const failsRef    = useRef(0);
-  const successRef  = useRef(0);
-  const isOfflineRef = useRef(true); // starts unknown/offline
+  const [health, setHealth]     = useState(null);
+  const [latency, setLatency]   = useState(null);
+  const [checking, setChecking] = useState(true); // neutral until first poll completes
+  const failsRef     = useRef(0);
+  const successRef   = useRef(0);
+  const isOfflineRef = useRef(false); // false: first success accepted immediately
+  const firstDone    = useRef(false); // guards the one-time setChecking(false)
 
   useEffect(() => {
     const poll = async () => {
@@ -56,17 +59,23 @@ function useHysteresisHealth(apiPrefix) {
           setHealth(null);
         }
       }
+      // After any poll completion, leave the checking state
+      if (!firstDone.current) {
+        firstDone.current = true;
+        setChecking(false);
+      }
     };
     poll();
     const t = setInterval(poll, HEALTH_POLL_MS);
     return () => clearInterval(t);
   }, [apiPrefix]);
 
-  return { health, latency };
+  return { health, latency, checking };
 }
 
-function computeStatus(qrngSource, health) {
+function computeStatus(qrngSource, health, checking) {
   if (qrngSource === "pre-collected") return "pre-collected";
+  if (checking) return "checking";
   if (health === null) return "offline";
   if (typeof health.buffer_bytes_available === "number" && health.buffer_bytes_available === 0)
     return "degraded";
@@ -74,8 +83,8 @@ function computeStatus(qrngSource, health) {
 }
 
 export function AppProvider({ children }) {
-  const { health: remoteHealth, latency: remoteLatency } = useHysteresisHealth(API_ROUTES.remote);
-  const { health: fpgaHealth,   latency: fpgaLatency   } = useHysteresisHealth(API_ROUTES.fpga);
+  const { health: remoteHealth, latency: remoteLatency, checking: remoteChecking } = useHysteresisHealth(API_ROUTES.remote);
+  const { health: fpgaHealth,   latency: fpgaLatency,   checking: fpgaChecking   } = useHysteresisHealth(API_ROUTES.fpga);
 
   const [qrngSource, setQrngSourceRaw] = useState(loadSource);
   const [streamError, setStreamError]  = useState(null);
@@ -86,10 +95,11 @@ export function AppProvider({ children }) {
     try { localStorage.setItem(STORAGE_KEY, src); } catch {}
   }, []);
 
-  const health  = qrngSource === "remote" ? remoteHealth  : qrngSource === "fpga" ? fpgaHealth  : null;
-  const latency = qrngSource === "remote" ? remoteLatency : qrngSource === "fpga" ? fpgaLatency : null;
+  const health    = qrngSource === "remote" ? remoteHealth    : qrngSource === "fpga" ? fpgaHealth    : null;
+  const latency   = qrngSource === "remote" ? remoteLatency   : qrngSource === "fpga" ? fpgaLatency   : null;
+  const checking  = qrngSource === "remote" ? remoteChecking  : qrngSource === "fpga" ? fpgaChecking  : false;
 
-  const status   = computeStatus(qrngSource, health);
+  const status   = computeStatus(qrngSource, health, checking);
   const isOnline = status === "online" || status === "pre-collected";
 
   const value = useMemo(() => ({
@@ -98,7 +108,8 @@ export function AppProvider({ children }) {
     qrngSource,
     setQrngSource,
     isOnline,
-    status,      // "online" | "degraded" | "offline" | "pre-collected"
+    status,      // "checking" | "online" | "degraded" | "offline" | "pre-collected"
+    checking,
     streamError,
     setStreamError,
     activePage,
@@ -110,7 +121,7 @@ export function AppProvider({ children }) {
     setLatency: (v) => {
       // kept for backward compat — hysteresis hook manages latency internally
     },
-  }), [health, latency, qrngSource, isOnline, status, streamError, activePage,
+  }), [health, latency, qrngSource, isOnline, status, checking, streamError, activePage,
        remoteHealth, remoteLatency, fpgaHealth, fpgaLatency, setQrngSource]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

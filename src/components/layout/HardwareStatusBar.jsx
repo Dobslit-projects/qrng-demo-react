@@ -28,9 +28,20 @@ function LogoImg({ height }) {
 }
 
 export default function HardwareStatusBar() {
-  const { health, latency, isOnline, qrngSource } = useContext(AppContext);
-  const isFallback = qrngSource === "pre-collected";
-  const statusColor = isOnline ? theme.success : theme.danger;
+  const { health, latency, isOnline, qrngSource, status } = useContext(AppContext);
+  const isFallback  = qrngSource === "pre-collected";
+  const isChecking  = status === "checking";
+  const isDegraded  = status === "degraded";
+
+  const statusColor = isOnline   ? theme.success
+                    : isChecking ? theme.textMuted
+                    : isDegraded ? theme.warning
+                    : theme.danger;
+
+  const statusLabel = isOnline   ? "ONLINE"
+                    : isChecking ? "VERIFICANDO"
+                    : isDegraded ? "DEGRADADO"
+                    : "OFFLINE";
 
   return (
     <div
@@ -60,7 +71,7 @@ export default function HardwareStatusBar() {
           }}
         />
         <span style={{ color: statusColor, fontWeight: 600 }}>
-          {isOnline ? "ONLINE" : "OFFLINE"}
+          {statusLabel}
         </span>
         <span style={{ color: theme.textMuted }}>
           {SOURCE_LABELS[qrngSource] || qrngSource}
@@ -89,7 +100,7 @@ export default function HardwareStatusBar() {
             Usando 1K amostras pre-coletadas
           </span>
         )}
-        {!isFallback && !isOnline && (
+        {!isFallback && !isOnline && !isChecking && (
           <span style={{ color: theme.warning }}>
             Fonte indisponivel — fallback ativo
           </span>

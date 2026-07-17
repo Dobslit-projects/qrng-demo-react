@@ -249,6 +249,7 @@ export default function DataSection() {
   // ── Validação ───────────────────────────────────────────────────
 
   function validate() {
+    if (qrngStatus === "checking") return null; // still verifying — don't block
     if (qrngStatus === "degraded") return "Backend conectado, mas buffer de entropia vazio. Aguarde recarga do FPGA e tente novamente.";
     if (!isOnline)  return "Backend QRNG offline. Não é possível gerar dados reais agora.";
     if (qrngSource === "pre-collected") {
@@ -474,7 +475,7 @@ export default function DataSection() {
 
   // ── Render ───────────────────────────────────────────────────────
 
-  const canGenerate = isOnline && status !== "generating";
+  const canGenerate = (isOnline || qrngStatus === "checking") && status !== "generating";
   const hasDone     = status === "done" && !!resultData;
   const bufferInfo  = health?.buffer_level ?? health?.buffer ?? null;
 
@@ -491,18 +492,20 @@ export default function DataSection() {
             <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
               <span style={{
                 width: 9, height: 9, borderRadius: "50%", display: "inline-block",
-                background: isOnline ? theme.success : qrngStatus === "degraded" ? theme.warning : theme.danger,
-                boxShadow: `0 0 6px ${isOnline ? theme.success : qrngStatus === "degraded" ? theme.warning : theme.danger}`,
+                background: isOnline ? theme.success : qrngStatus === "checking" ? theme.textMuted : qrngStatus === "degraded" ? theme.warning : theme.danger,
+                boxShadow: `0 0 6px ${isOnline ? theme.success : qrngStatus === "checking" ? theme.textMuted : qrngStatus === "degraded" ? theme.warning : theme.danger}`,
               }} />
               <span style={{ fontSize: 12, fontWeight: 700, fontFamily: MONO,
-                color: isOnline ? theme.success : qrngStatus === "degraded" ? theme.warning : theme.danger }}>
+                color: isOnline ? theme.success : qrngStatus === "checking" ? theme.textMuted : qrngStatus === "degraded" ? theme.warning : theme.danger }}>
                 {qrngSource === "pre-collected"
                   ? `Fonte pré-coletada ativa. ${PRECOLLECTED_LIMIT.toLocaleString()} bytes QRNG reais disponíveis localmente.`
-                  : qrngStatus === "degraded"
-                    ? "Backend conectado, mas buffer de entropia vazio. Aguarde recarga do FPGA..."
-                    : isOnline
-                      ? "Backend QRNG online. Dados prontos para exportação."
-                      : "Backend QRNG offline. Não é possível gerar dados reais agora."}
+                  : qrngStatus === "checking"
+                    ? "Verificando conexão com o backend QRNG..."
+                    : qrngStatus === "degraded"
+                      ? "Backend conectado, mas buffer de entropia vazio. Aguarde recarga do FPGA..."
+                      : isOnline
+                        ? "Backend QRNG online. Dados prontos para exportação."
+                        : "Backend QRNG offline. Não é possível gerar dados reais agora."}
               </span>
             </div>
             {latency && (
