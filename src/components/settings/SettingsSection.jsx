@@ -28,16 +28,17 @@ const SOURCES = [
   },
 ];
 
-function StatusDot({ online }) {
+function StatusDot({ online, degraded }) {
+  const color = online ? theme.success : degraded ? theme.warning : theme.danger;
   return (
     <span style={{
       display: "inline-block",
       width: 10,
       height: 10,
       borderRadius: "50%",
-      background: online ? theme.success : theme.danger,
+      background: color,
       marginRight: 8,
-      boxShadow: online ? `0 0 6px ${theme.success}40` : "none",
+      boxShadow: `0 0 6px ${color}40`,
     }} />
   );
 }
@@ -47,7 +48,8 @@ function SourceCard({ source, isActive, health, latency, onSelect, onTest }) {
   const [testResult, setTestResult] = useState(null);
 
   const isFallback = source.key === "pre-collected";
-  const online = isFallback ? true : health !== null;
+  const online   = isFallback ? true : (health !== null && health.buffer_bytes_available !== 0);
+  const degraded = !isFallback && health !== null && health.buffer_bytes_available === 0;
 
   const handleTest = useCallback(async () => {
     if (isFallback) return;
@@ -124,8 +126,8 @@ function SourceCard({ source, isActive, health, latency, onSelect, onTest }) {
         color: theme.textDim,
       }}>
         <span>
-          <StatusDot online={online} />
-          {online ? "Online" : "Offline"}
+          <StatusDot online={online} degraded={degraded} />
+          {online ? "Online" : degraded ? "Degradado (buffer vazio)" : "Offline"}
         </span>
 
         {!isFallback && source.route && (

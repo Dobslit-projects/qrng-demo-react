@@ -28,3 +28,8 @@ qrng-web-demo-main/
 *.njsproj
 *.sln
 *.sw?
+
+# Bancos SQLite de runtime (nunca versionar)
+*.db
+*.db-shm
+*.db-wal

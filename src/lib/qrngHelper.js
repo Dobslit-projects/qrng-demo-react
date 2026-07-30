@@ -79,5 +79,19 @@ export function uniformIntFromBytes(min, max, bytes) {
 }
 
 export function errorMessage(err) {
-  return err?.message || "Backend QRNG indisponível. Verifique a conexão e tente novamente.";
+  const msg = err?.message || "";
+  if (!msg) return "Backend QRNG indisponível. Verifique a conexão e tente novamente.";
+  if (msg.includes("QRNG_UNAVAILABLE"))
+    return "QRNG indisponível no momento (túnel FPGA offline). Tente novamente em alguns segundos ou use a fonte Pré-coletada.";
+  if (msg.includes("502") || msg.includes("503"))
+    return "Backend QRNG inacessível (502/503). O serviço pode estar reiniciando. Tente novamente em breve.";
+  if (msg.includes("504") || msg.includes("timeout") || msg.toLowerCase().includes("timeout"))
+    return "Tempo limite atingido aguardando dados QRNG. O hardware pode estar gerando entropia — tente novamente.";
+  if (msg.includes("aborted") || msg.includes("AbortError") || err?.name === "AbortError")
+    return "Requisição cancelada por tempo limite. Tente novamente.";
+  if (msg.includes("404"))
+    return "Endpoint QRNG não encontrado (404). Verifique a configuração da fonte.";
+  if (msg.includes("401") || msg.includes("403"))
+    return "Sem autorização para acessar a API QRNG. Verifique o token de acesso.";
+  return msg;
 }
