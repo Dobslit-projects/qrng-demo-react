@@ -107,7 +107,7 @@ export function AppProvider({ children }) {
     remoteLatency,
     fpgaHealth,
     fpgaLatency,
-    setLatency: (v) => {
+    setLatency: () => {
       // kept for backward compat — hysteresis hook manages latency internally
     },
   }), [health, latency, qrngSource, isOnline, status, streamError, activePage,
