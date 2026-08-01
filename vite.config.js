@@ -30,4 +30,12 @@ export default defineConfig({
     },
   },
   base: "/qrng",
+  test: {
+    environment: "jsdom",
+    setupFiles: "./src/test/setup.js",
+    globals: true,
+    // qrng-client-api/ é um projeto Node separado com sua própria suíte
+    // (node --test, supertest) — não faz parte dos testes do frontend.
+    exclude: ["**/node_modules/**", "qrng-client-api/**"],
+  },
 })
