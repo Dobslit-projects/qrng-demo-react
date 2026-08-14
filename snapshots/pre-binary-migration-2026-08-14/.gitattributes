@@ -1,0 +1,4 @@
+# Preserve LF for all server files in this snapshot
+* text eol=lf
+*.json text eol=lf
+*.md text eol=lf

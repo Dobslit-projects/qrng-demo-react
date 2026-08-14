@@ -1,0 +1,9 @@
+{
+  "buffer_bytes_available": 268435456,
+  "buffer_capacity": 268435456,
+  "total_pushed": 329482403840,
+  "total_popped": 11296,
+  "source_file": "/tmp/fifo_qrng",
+  "source_status": "online",
+  "source_stall_seconds": 0.0
+}

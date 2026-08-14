@@ -1,0 +1,18 @@
+[Unit]
+Description=QRNG FPGA stream TCP server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/root
+ExecStartPre=/opt/redpitaya/bin/fpgautil -b /root/stream_app.bit.bin
+ExecStart=/bin/bash -c '/root/fifo | nc -k -l 0.0.0.0 12345'
+Restart=always
+RestartSec=5
+KillMode=control-group
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

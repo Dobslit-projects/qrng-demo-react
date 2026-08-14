@@ -1,0 +1,18 @@
+# /etc/systemd/system/qrng-fifo.service
+[Unit]
+Description=QRNG FIFO - pipe TCP FPGA para named pipe
+After=network.target
+Before=qrng-api.service
+
+[Service]
+Type=simple
+User=dobslit
+ExecStartPre=/bin/bash -c 'test -p /tmp/fifo_qrng || mkfifo /tmp/fifo_qrng'
+ExecStart=/bin/bash -c 'exec /usr/bin/python3 /home/dobslit/qrng-connector.py > /tmp/fifo_qrng'
+Restart=always
+RestartSec=5
+TimeoutStopSec=10
+StartLimitIntervalSec=0
+
+[Install]
+WantedBy=multi-user.target
