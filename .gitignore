@@ -18,6 +18,11 @@ dist-ssr
 # Referencia externa
 qrng-web-demo-main/
 
+# Secrets (nunca commitar)
+.env
+*.env
+migration/**/.env
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

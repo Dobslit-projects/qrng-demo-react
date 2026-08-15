@@ -20,10 +20,20 @@ Uso:
 import sys, os, time, struct, argparse, base64, statistics
 import paramiko
 
-# ── Credenciais ────────────────────────────────────────────────────────────────
-JUMP_HOST = "100.78.196.107"; JUMP_USER = "root";    JUMP_PASS = "!2345678"
-QRNG_HOST = "192.168.0.42";   QRNG_USER = "dobslit"; QRNG_PASS = "dobslit"
-FPGA_HOST = "10.0.10.2";      FPGA_USER = "root";    FPGA_PASS = "root"
+# ── Credenciais (ler de variáveis de ambiente — nunca commitar senhas) ─────────
+# Defina em .env ou exporte antes de rodar:
+#   export QRNG_JUMP_HOST=... QRNG_JUMP_USER=... QRNG_JUMP_PASS=...
+#   export QRNG_HOST=...      QRNG_USER=...      QRNG_PASS=...
+#   export QRNG_FPGA_HOST=... QRNG_FPGA_USER=... QRNG_FPGA_PASS=...
+def _env(key):
+    val = os.environ.get(key)
+    if not val:
+        raise RuntimeError(f"Variável de ambiente obrigatória não definida: {key}")
+    return val
+
+JUMP_HOST = _env("QRNG_JUMP_HOST"); JUMP_USER = _env("QRNG_JUMP_USER"); JUMP_PASS = _env("QRNG_JUMP_PASS")
+QRNG_HOST = _env("QRNG_HOST");      QRNG_USER = _env("QRNG_USER");      QRNG_PASS = _env("QRNG_PASS")
+FPGA_HOST = _env("QRNG_FPGA_HOST"); FPGA_USER = _env("QRNG_FPGA_USER"); FPGA_PASS = _env("QRNG_FPGA_PASS")
 
 # ── Caminhos ──────────────────────────────────────────────────────────────────
 HERE = os.path.dirname(os.path.abspath(__file__))
