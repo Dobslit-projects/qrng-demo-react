@@ -540,26 +540,15 @@ app.get("/v1/health", attachRequestId, requireToken, checkTokenRate, async (req,
 // ── parseUpstreamRandom ───────────────────────────────────────────────────────
 
 function parseUpstreamRandom(buffer, requestedBytes) {
-  const text = buffer.toString("utf8").trim();
+  // Try JSON format (hex or byte-array fields) — handles any JSON-format upstream
   try {
+    const text = buffer.toString("utf8");
     const json = JSON.parse(text);
     if (Array.isArray(json.bytes))       return Buffer.from(json.bytes.slice(0, requestedBytes));
     if (typeof json.hex === "string")    return Buffer.from(json.hex, "hex").slice(0, requestedBytes);
     if (typeof json.random === "string") return Buffer.from(json.random, "hex").slice(0, requestedBytes);
   } catch (_) {}
-  if (/^[0-9,\s]+$/.test(text) && /[\s,]/.test(text)) {
-    const values = text.split(/[\s,]+/).map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n <= 255).slice(0, requestedBytes);
-    if (values.length >= requestedBytes) return Buffer.from(values);
-  }
-  // Packed decimal digit stream — formato UFPE/FPGA (rejection sampling)
-  if (/^[0-9]+$/.test(text)) {
-    const result = [];
-    for (let i = 0; i + 3 <= text.length && result.length < requestedBytes; i += 3) {
-      const val = parseInt(text.slice(i, i + 3), 10);
-      if (val <= 255) result.push(val);
-    }
-    if (result.length >= requestedBytes) return Buffer.from(result.slice(0, requestedBytes));
-  }
+  // Binary octet-stream — primary path (uint32-le stream, post-binary-migration)
   return buffer.slice(0, requestedBytes);
 }
 
@@ -582,7 +571,7 @@ app.get("/v1/random", attachRequestId, requireToken, checkTokenRate, parseBytes,
   }
 
   try {
-    const upBytes = Math.min(bytes * 20, 50 * 1024 * 1024);
+    const upBytes = bytes;  /* binary stream: 1 raw byte = 1 useful byte */
     const r = await fetchWithTimeout(`${QRNG_UPSTREAM}/random?bytes=${upBytes}`, QRNG_TIMEOUT_MS);
 
     if (!r.ok) {

@@ -39,7 +39,7 @@ function hexToBytes(hex) {
 
 export async function fetchQRNGBytes(count, _apiPrefix) {
   const t0 = performance.now();
-  const requestBytes = Math.min(count * 5, 1048576);
+  const requestBytes = Math.min(count, 1048576);  /* binary stream: no rejection sampling needed */
   const r = await fetch(`${CLIENT_API}/random?bytes=${requestBytes}&format=hex`, {
     headers: getAuthHeaders(),
     signal: AbortSignal.timeout(30000),
