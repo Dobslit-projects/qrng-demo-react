@@ -106,7 +106,7 @@ def close_all(jump, qrng, fpga):
 
 # ── Fase 1: Preflight ─────────────────────────────────────────────────────────
 
-def phase1_preflight(jump, qrng, fpga):
+def phase1_preflight(jump, qrng, fpga, auto=False):
     sep("Fase 1 — Preflight (apenas leitura)")
 
     # FPGA: verificar SHA-256 de fifo.c atual
@@ -258,16 +258,23 @@ def phase5_switch(jump, qrng, fpga, auto=False):
             print("  Abortado pelo usuário.")
             return
 
+    # Parar o serviço antes de sobrescrever o executável em uso (ETXTBSY)
+    run(fpga, "systemctl stop qrng-stream.service 2>&1", timeout=20)
+    time.sleep(2)
+
     # Copiar fifo.binary para fifo (fifo.old já existe como backup)
     out, err = run(fpga, f"cp {FPGA_FIFO_BINARY} {FPGA_FIFO_PROD} && chmod +x {FPGA_FIFO_PROD}")
     if err:
-        fail(f"Erro ao copiar fifo.binary: {err}")
+        # Tentar via rm + cp caso o processo ainda segure o inode
+        out2, err2 = run(fpga, f"rm -f {FPGA_FIFO_PROD} && cp {FPGA_FIFO_BINARY} {FPGA_FIFO_PROD} && chmod +x {FPGA_FIFO_PROD}")
+        if err2:
+            fail(f"Erro ao copiar fifo.binary: {err} / {err2}")
     ok(f"{FPGA_FIFO_BINARY} → {FPGA_FIFO_PROD}")
 
-    # Reiniciar qrng-stream.service
-    out, err = run(fpga, "systemctl restart qrng-stream.service 2>&1", timeout=30)
+    # Iniciar o serviço com o novo binário
+    out, err = run(fpga, "systemctl start qrng-stream.service 2>&1", timeout=30)
     if err and "WARNING" not in err:
-        warn(f"systemctl restart saída: {err}")
+        warn(f"systemctl start saída: {err}")
 
     # Aguardar serviço ativo
     time.sleep(5)
