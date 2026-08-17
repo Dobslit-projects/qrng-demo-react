@@ -23,13 +23,15 @@ export default function DataExport() {
   const handleDownload = async () => {
     setDownloading(true);
     try {
-      const response = await fetch(`${apiPrefix}/random?bytes=${downloadSize}`, {
+      const response = await fetch(`${apiPrefix}/random?bytes=${downloadSize}&format=hex`, {
         signal: AbortSignal.timeout(60000),
       });
-      const text = await response.text();
-      const numbers = text.split("\n").filter((s) => s.trim()).map(Number).filter((n) => !isNaN(n) && n >= 0 && n <= 255);
-      const bytes = new Uint8Array(numbers);
-      const blob = new Blob([bytes], { type: "application/octet-stream" });
+      if (!response.ok) throw new Error(`API error: ${response.status}`);
+      const json = await response.json();
+      const hex = json.random || json.hex || "";
+      const raw = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < raw.length; i++) raw[i] = parseInt(hex.substr(i * 2, 2), 16);
+      const blob = new Blob([raw], { type: "application/octet-stream" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;

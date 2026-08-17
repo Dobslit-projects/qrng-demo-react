@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useContext } from "react";
 import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
-import { fetchQRNGBytes } from "../../qrngApi";
+import { fetchQrngBytes } from "../../lib/qrngHelper";
 import { lcgNext } from "../../prng";
 
 const PI = Math.PI;
@@ -79,25 +79,29 @@ export default function MonteCarloPi() {
     }
     seedRef.current = s;
 
-    // QRNG: fetch count*2 bytes, pair as (x, y)
+    // QRNG: fetch count*8 bytes (2 uint32 per point), convert via uint32/2^32
     const newQrng = [];
     let qIn = 0;
     let source = "fallback";
     let qBytes;
     if (isOnline) {
       try {
-        const result = await fetchQRNGBytes(count * 2);
+        const result = await fetchQrngBytes(count * 8, "remote");
         qBytes = result.bytes;
-        source = "red-pitaya";
+        source = result.source || "red-pitaya";
       } catch {}
     }
-    if (!qBytes || qBytes.length < count * 2) {
-      qBytes = Array.from({ length: count * 2 }, () => Math.floor(Math.random() * 256));
+    if (!qBytes || qBytes.length < count * 8) {
+      qBytes = new Uint8Array(count * 8);
+      for (let i = 0; i < qBytes.length; i++) qBytes[i] = Math.floor(Math.random() * 256);
       source = "fallback";
     }
     for (let i = 0; i < count; i++) {
-      const x = qBytes[i * 2] / 255;
-      const y = qBytes[i * 2 + 1] / 255;
+      const o = i * 8;
+      const xi = ((qBytes[o]<<24)|(qBytes[o+1]<<16)|(qBytes[o+2]<<8)|qBytes[o+3]) >>> 0;
+      const yi = ((qBytes[o+4]<<24)|(qBytes[o+5]<<16)|(qBytes[o+6]<<8)|qBytes[o+7]) >>> 0;
+      const x = xi / 4294967296;
+      const y = yi / 4294967296;
       const inside = isInsideCircle(x, y);
       if (inside) qIn++;
       newQrng.push({ x, y, inside });
