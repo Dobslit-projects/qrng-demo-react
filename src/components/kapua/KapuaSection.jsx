@@ -520,7 +520,7 @@ export default function KapuaSection() {
     try {
       const r = await fetchQrngBytes(4, qrngSource);
       const b = r.bytes;
-      const n = ((b[0] << 24) | (b[1] << 16) | (b[2] << 8) | b[3]) >>> 0;
+      const n = ((b[3] << 24) | (b[2] << 16) | (b[1] << 8) | b[0]) >>> 0;
       setRandHex({ value: n, hex: r.hex.slice(0, 8), latency: r.latencyMs, source: r.source });
     } catch (e) {
       setGenError(errorMessage(e));

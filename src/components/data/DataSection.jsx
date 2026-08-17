@@ -25,12 +25,12 @@ function pickInt(bytes, offset, min, max) {
   const limit = Math.floor(4294967296 / range) * range;
   let i = offset;
   while (i + 3 < bytes.length) {
-    const n = ((bytes[i] << 24) | (bytes[i + 1] << 16) | (bytes[i + 2] << 8) | bytes[i + 3]) >>> 0;
+    const n = ((bytes[i + 3] << 24) | (bytes[i + 2] << 16) | (bytes[i + 1] << 8) | bytes[i]) >>> 0;
     i += 4;
     if (n < limit) return { value: min + (n % range), nextOffset: i };
   }
   // Fallback (buffer subdimensionado — shouldn't happen com bytesNeeded() correto)
-  const n = ((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]) >>> 0;
+  const n = ((bytes[3] << 24) | (bytes[2] << 16) | (bytes[1] << 8) | bytes[0]) >>> 0;
   return { value: min + (n % range), nextOffset: offset + 4 };
 }
 
@@ -70,7 +70,7 @@ function genWithoutRepeats(bytes, min, max, count) {
 function genMonteCarlo(bytes, count) {
   const nums = [];
   for (let i = 0; i + 3 < bytes.length && nums.length < count; i += 4) {
-    const n = ((bytes[i] << 24) | (bytes[i + 1] << 16) | (bytes[i + 2] << 8) | bytes[i + 3]) >>> 0;
+    const n = ((bytes[i + 3] << 24) | (bytes[i + 2] << 16) | (bytes[i + 1] << 8) | bytes[i]) >>> 0;
     nums.push(n / 4294967296);
   }
   return nums;

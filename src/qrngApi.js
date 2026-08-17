@@ -58,7 +58,10 @@ export async function fetchQRNGRandInt(min, max, _apiPrefix) {
   });
   if (!r.ok) throw new Error(`QRNG randint error: ${r.status}`);
   const json = await r.json();
-  const n = parseInt((json.random || "00000000").slice(0, 8), 16);
+  const hex = (json.random || "00000000").slice(0, 8);
+  const b0 = parseInt(hex.slice(0, 2), 16), b1 = parseInt(hex.slice(2, 4), 16);
+  const b2 = parseInt(hex.slice(4, 6), 16), b3 = parseInt(hex.slice(6, 8), 16);
+  const n = ((b3 << 24) | (b2 << 16) | (b1 << 8) | b0) >>> 0;
   const range = max - min + 1;
   return { value: min + (n % range), latencyMs: Math.round(performance.now() - t0) };
 }

@@ -61,7 +61,7 @@ export function bytesToHex(bytes) {
 export function bytesToUint32Array(bytes) {
   const out = [];
   for (let i = 0; i + 3 < bytes.length; i += 4)
-    out.push(((bytes[i] << 24) | (bytes[i+1] << 16) | (bytes[i+2] << 8) | bytes[i+3]) >>> 0);
+    out.push(((bytes[i+3] << 24) | (bytes[i+2] << 16) | (bytes[i+1] << 8) | bytes[i]) >>> 0);
   return out;
 }
 
@@ -72,10 +72,10 @@ export function uniformIntFromBytes(min, max, bytes) {
   const range = max - min + 1;
   const limit = (Math.floor(4294967296 / range)) * range;
   for (let i = 0; i + 3 < bytes.length; i += 4) {
-    const n = ((bytes[i] << 24) | (bytes[i+1] << 16) | (bytes[i+2] << 8) | bytes[i+3]) >>> 0;
+    const n = ((bytes[i+3] << 24) | (bytes[i+2] << 16) | (bytes[i+1] << 8) | bytes[i]) >>> 0;
     if (n < limit) return min + (n % range);
   }
-  return min + (((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]) >>> 0) % range;
+  return min + (((bytes[3] << 24) | (bytes[2] << 16) | (bytes[1] << 8) | bytes[0]) >>> 0) % range;
 }
 
 export function errorMessage(err) {

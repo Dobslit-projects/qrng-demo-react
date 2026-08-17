@@ -98,8 +98,8 @@ export default function MonteCarloPi() {
     }
     for (let i = 0; i < count; i++) {
       const o = i * 8;
-      const xi = ((qBytes[o]<<24)|(qBytes[o+1]<<16)|(qBytes[o+2]<<8)|qBytes[o+3]) >>> 0;
-      const yi = ((qBytes[o+4]<<24)|(qBytes[o+5]<<16)|(qBytes[o+6]<<8)|qBytes[o+7]) >>> 0;
+      const xi = ((qBytes[o+3]<<24)|(qBytes[o+2]<<16)|(qBytes[o+1]<<8)|qBytes[o]) >>> 0;
+      const yi = ((qBytes[o+7]<<24)|(qBytes[o+6]<<16)|(qBytes[o+5]<<8)|qBytes[o+4]) >>> 0;
       const x = xi / 4294967296;
       const y = yi / 4294967296;
       const inside = isInsideCircle(x, y);

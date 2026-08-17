@@ -8,11 +8,12 @@
  */
 
 // ── Funções puras extraídas de src/lib/qrngHelper.js ──────────────────────────
+// IMPORTANTE: mantidas em sincronia manual com o arquivo fonte (little-endian).
 
 function bytesToUint32Array(bytes) {
   const out = [];
   for (let i = 0; i + 3 < bytes.length; i += 4)
-    out.push(((bytes[i] << 24) | (bytes[i+1] << 16) | (bytes[i+2] << 8) | bytes[i+3]) >>> 0);
+    out.push(((bytes[i+3] << 24) | (bytes[i+2] << 16) | (bytes[i+1] << 8) | bytes[i]) >>> 0);
   return out;
 }
 
@@ -22,17 +23,17 @@ function uniformIntFromBytes(min, max, bytes) {
   const range = max - min + 1;
   const limit = Math.floor(4294967296 / range) * range;
   for (let i = 0; i + 3 < bytes.length; i += 4) {
-    const n = ((bytes[i] << 24) | (bytes[i+1] << 16) | (bytes[i+2] << 8) | bytes[i+3]) >>> 0;
+    const n = ((bytes[i+3] << 24) | (bytes[i+2] << 16) | (bytes[i+1] << 8) | bytes[i]) >>> 0;
     if (n < limit) return min + (n % range);
   }
-  return min + (((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]) >>> 0) % range;
+  return min + (((bytes[3] << 24) | (bytes[2] << 16) | (bytes[1] << 8) | bytes[0]) >>> 0) % range;
 }
 
 // Extraída de src/components/data/DataSection.jsx
 function genMonteCarlo(bytes, count) {
   const nums = [];
   for (let i = 0; i + 3 < bytes.length && nums.length < count; i += 4) {
-    const n = ((bytes[i] << 24) | (bytes[i+1] << 16) | (bytes[i+2] << 8) | bytes[i+3]) >>> 0;
+    const n = ((bytes[i+3] << 24) | (bytes[i+2] << 16) | (bytes[i+1] << 8) | bytes[i]) >>> 0;
     nums.push(n / 4294967296);
   }
   return nums;
@@ -94,25 +95,28 @@ assert(uint32ToFloat(0x80000000) === 0.5,  "uint32ToFloat(2^31) === 0.5");
 assert(uint32ToFloat(0x40000000) === 0.25, "uint32ToFloat(2^30) === 0.25");
 assert(uint32ToFloat(0xC0000000) === 0.75, "uint32ToFloat(3×2^30) === 0.75");
 
-// ── Test 3: Endianness — LE vs BE produzem uint32 distintos ──────────────────
-// O FPGA envia uint32 little-endian (LSB primeiro).
-// bytesToUint32Array interpreta bytes como big-endian (compatível com
-// fetch hex que entrega os bytes na ordem correta do campo JSON).
+// ── Test 3: Endianness — FPGA little-endian ───────────────────────────────────
+// O FPGA envia uint32 little-endian (LSB primeiro, htole32).
+// bytesToUint32Array DEVE interpretar byte[0] como LSB.
+// Vetores de teste com valores FPGA conhecidos:
 
-console.log("\n[3] Endianness — round-trip big-endian estável");
-const knownBytes = new Uint8Array([0xDE, 0xAD, 0xBE, 0xEF, 0xCA, 0xFE, 0xBA, 0xBE]);
-const knownU32s = bytesToUint32Array(knownBytes);
-assert(knownU32s[0] === 0xDEADBEEF >>> 0, `0xDEADBEEF → ${knownU32s[0].toString(16)}`);
-assert(knownU32s[1] === 0xCAFEBABE >>> 0, `0xCAFEBABE → ${knownU32s[1].toString(16)}`);
+console.log("\n[3] Endianness — FPGA uint32 little-endian");
+const le1   = new Uint8Array([0x01, 0x00, 0x00, 0x00]);  // FPGA envia uint32=1
+const le255 = new Uint8Array([0xFF, 0x00, 0x00, 0x00]);  // FPGA envia uint32=255
+const le256 = new Uint8Array([0x00, 0x01, 0x00, 0x00]);  // FPGA envia uint32=256
+const leMax = new Uint8Array([0xFF, 0xFF, 0xFF, 0xFF]);  // FPGA envia uint32=4294967295
 
-// LE ≠ BE quando bytes não são simétricos
-const leBytes = new Uint8Array([0x01, 0x00, 0x00, 0x00]);  // LE value=1
-const beBytes = new Uint8Array([0x00, 0x00, 0x00, 0x01]);  // BE value=1
-const leAssBE = bytesToUint32Array(leBytes)[0];  // 0x01000000 = 16777216
-const beAsBE  = bytesToUint32Array(beBytes)[0];  // 0x00000001 = 1
-assert(leAssBE !== beAsBE, `LE e BE são distintos: ${leAssBE} ≠ ${beAsBE}`);
-assert(beAsBE === 1,        `BE [0,0,0,1] → uint32=1`);
-assert(leAssBE === 16777216, `FPGA LE [1,0,0,0] lido como BE → 16777216 (ainda uniforme)`);
+assert(bytesToUint32Array(le1)[0]   === 1,          `[01,00,00,00] → uint32=1`);
+assert(bytesToUint32Array(le255)[0] === 255,         `[FF,00,00,00] → uint32=255`);
+assert(bytesToUint32Array(le256)[0] === 256,         `[00,01,00,00] → uint32=256`);
+assert(bytesToUint32Array(leMax)[0] === 4294967295,  `[FF,FF,FF,FF] → uint32=4294967295`);
+
+// Confirma que LE e BE produzem valores distintos para bytes assimétricos
+const beBytes = new Uint8Array([0x00, 0x00, 0x00, 0x01]);  // BE: value=1
+const leAsLE  = bytesToUint32Array(le1)[0];   // LE: deve ser 1
+const beAsLE  = bytesToUint32Array(beBytes)[0]; // BE bytes lidos como LE: 0x01000000=16777216
+assert(leAsLE === 1,        `LE [01,00,00,00] → 1 (correto FPGA)`);
+assert(beAsLE === 16777216, `BE bytes [00,00,00,01] lidos como LE → 16777216 (distinto de 1)`);
 
 // ── Test 4: genMonteCarlo — valores em [0, 1) ────────────────────────────────
 
@@ -125,17 +129,17 @@ const mcMin = Math.min(...mcVals), mcMax = Math.max(...mcVals);
 assert(mcMin >= 0, `min=${mcMin.toFixed(6)} >= 0`);
 assert(mcMax < 1,  `max=${mcMax.toFixed(6)} < 1`);
 
-// ── Test 5: MonteCarloPi.jsx path — uint32/2^32 por ponto ───────────────────
-// Simula o novo código de MonteCarloPi.jsx: 8 bytes por ponto (2 uint32)
+// ── Test 5: MonteCarloPi.jsx path — uint32 LE/2^32 por ponto ────────────────
+// Simula o novo código de MonteCarloPi.jsx: 8 bytes por ponto (2 uint32 LE)
 
-console.log("\n[5] MonteCarloPi path — uint32/2^32 por coordenada");
+console.log("\n[5] MonteCarloPi path — uint32 LE/2^32 por coordenada");
 const qBytes = new Uint8Array(800);
 for (let i = 0; i < 800; i++) qBytes[i] = (i * 37 + 13) % 256;  // pseudo-dados
 let inside = 0;
 for (let i = 0; i < 100; i++) {
   const o = i * 8;
-  const xi = ((qBytes[o]<<24)|(qBytes[o+1]<<16)|(qBytes[o+2]<<8)|qBytes[o+3]) >>> 0;
-  const yi = ((qBytes[o+4]<<24)|(qBytes[o+5]<<16)|(qBytes[o+6]<<8)|qBytes[o+7]) >>> 0;
+  const xi = ((qBytes[o+3]<<24)|(qBytes[o+2]<<16)|(qBytes[o+1]<<8)|qBytes[o]) >>> 0;
+  const yi = ((qBytes[o+7]<<24)|(qBytes[o+6]<<16)|(qBytes[o+5]<<8)|qBytes[o+4]) >>> 0;
   const x = xi / 4294967296;
   const y = yi / 4294967296;
   assert(x >= 0 && x < 1, `x=${x.toFixed(5)} em [0,1)`);
@@ -146,9 +150,10 @@ for (let i = 0; i < 100; i++) {
 // ── Test 6: uniformIntFromBytes — rejection sampling sem viés de módulo ──────
 
 console.log("\n[6] uniformIntFromBytes — rejection sampling");
-const rfBytes = new Uint8Array([0x00, 0x00, 0x00, 0x00,  // uint32=0
-                                 0xFF, 0xFF, 0xFF, 0xFF,  // uint32=4294967295
-                                 0x80, 0x00, 0x00, 0x00]); // uint32=2147483648
+// LE: [00,00,00,00]=0, [FF,FF,FF,FF]=4294967295, [80,00,00,00]=0x00000080=128
+const rfBytes = new Uint8Array([0x00, 0x00, 0x00, 0x00,  // LE uint32=0
+                                 0xFF, 0xFF, 0xFF, 0xFF,  // LE uint32=4294967295
+                                 0x80, 0x00, 0x00, 0x00]); // LE uint32=128
 const r1 = uniformIntFromBytes(1, 6, rfBytes);
 assert(r1 >= 1 && r1 <= 6, `uniformIntFromBytes(1,6) = ${r1} em [1,6]`);
 
