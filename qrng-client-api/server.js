@@ -4,6 +4,7 @@ require("dotenv").config();
 const express    = require("express");
 const rateLimit  = require("express-rate-limit");
 const fetch      = require("node-fetch");
+const http       = require("http");
 const crypto     = require("crypto");
 const bcrypt     = require("bcryptjs");
 const jwt        = require("jsonwebtoken");
@@ -18,7 +19,11 @@ app.use(express.json());
 const PORT                     = process.env.PORT                          || 3010;
 const QRNG_UPSTREAM            = process.env.QRNG_UPSTREAM                 || "http://127.0.0.1:18001";
 const DB_PATH                  = process.env.DB_PATH                       || path.join(__dirname, "qrng-tokens.db");
-const JWT_SECRET               = process.env.JWT_SECRET                    || crypto.randomBytes(32).toString("hex");
+const JWT_SECRET               = process.env.JWT_SECRET;
+if (!JWT_SECRET) {
+  console.error("[qrng-client-api] FATAL: JWT_SECRET não definido. Defina uma variável de ambiente segura antes de iniciar (ex.: openssl rand -hex 32).");
+  process.exit(1);
+}
 const ADMIN_EMAIL              = (process.env.ADMIN_EMAIL                  || "").toLowerCase();
 const MAX_BYTES_PER_REQUEST    = parseInt(process.env.MAX_BYTES_PER_REQUEST    || "1048576", 10); // 1 MiB
 const RATE_LIMIT_PER_IP_MIN    = parseInt(process.env.RATE_LIMIT_PER_IP_PER_MINUTE  || "120", 10);
@@ -26,6 +31,13 @@ const RATE_LIMIT_PER_TOKEN_MIN = parseInt(process.env.RATE_LIMIT_PER_TOKEN_PER_M
 const DAILY_QUOTA_REQUESTS     = parseInt(process.env.DAILY_QUOTA_REQUESTS    || "10000", 10);
 const DAILY_QUOTA_BYTES        = parseInt(process.env.DAILY_QUOTA_BYTES       || "104857600", 10); // 100 MiB
 const QRNG_TIMEOUT_MS          = parseInt(process.env.QRNG_REQUEST_TIMEOUT_MS || "10000", 10);
+// Número de falhas consecutivas do poller para marcar upstream como DOWN
+const UPSTREAM_FAIL_THRESHOLD  = parseInt(process.env.UPSTREAM_FAIL_THRESHOLD || "2", 10);
+
+// ── Agente HTTP sem keep-alive para upstream ──────────────────────────────────
+// Evita ECONNRESET em sockets reaproveitados quando o SSH tunnel reinicia.
+// Cada request cria uma nova conexão TCP — overhead mínimo para esta carga.
+const upstreamAgent = new http.Agent({ keepAlive: false });
 
 // ── Banco de dados ────────────────────────────────────────────────────────────
 
@@ -264,8 +276,12 @@ function requireAuth(req, res, next) {
   }
 }
 
+// Reconsulta o papel no banco em vez de confiar no claim do JWT — mesma
+// razão do bongosite-auth: um token só carrega o papel de quando foi
+// assinado, não o atual.
 function requireAdmin(req, res, next) {
-  if (req.user?.role !== "admin") {
+  const dbUser = db.prepare("SELECT role FROM users WHERE id = ?").get(req.user?.sub);
+  if (!dbUser || dbUser.role !== "admin") {
     return res.status(403).json({ error: "FORBIDDEN", message: "Acesso restrito a administradores." });
   }
   next();
@@ -307,7 +323,13 @@ function resolveUser(req, res, next) {
 async function fetchWithTimeout(url, ms) {
   const ctrl  = new AbortController();
   const timer = setTimeout(() => ctrl.abort(), ms);
-  try { return await fetch(url, { signal: ctrl.signal }); } finally { clearTimeout(timer); }
+  try {
+    // keepAlive: false → nova conexão TCP por request
+    // Evita ECONNRESET em sockets reaproveitados quando o SSH tunnel reinicia.
+    return await fetch(url, { signal: ctrl.signal, agent: upstreamAgent });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 // ── Auth: registro e login ────────────────────────────────────────────────────
@@ -644,7 +666,6 @@ app.get("/metrics", (req, res) => {
     }
   }
 
-  // Totais históricos do banco
   const byStatus = db.prepare(`
     SELECT status_code, COUNT(*) as n, COALESCE(SUM(bytes_requested),0) as b
     FROM api_usage_logs WHERE endpoint = '/v1/random' GROUP BY status_code
@@ -716,8 +737,12 @@ app.get("/metrics", (req, res) => {
 });
 
 // ── Upstream monitor ──────────────────────────────────────────────────────────
+// Poller: a cada 60s verifica a saúde do upstream.
+// Requer UPSTREAM_FAIL_THRESHOLD falhas CONSECUTIVAS para marcar DOWN.
+// Uma única falha transitória não derruba a API.
 
 let upstreamState = { status: "unknown", checkedAt: null, responseMs: null };
+let consecutiveFailures = 0;
 
 async function checkUpstream() {
   const t0 = Date.now();
@@ -728,16 +753,39 @@ async function checkUpstream() {
     status = r.ok ? "up" : "down";
     detail = r.ok ? null : `HTTP ${r.status}`;
   } catch (err) {
-    responseMs = null;
+    responseMs = Date.now() - t0;
     status = "down";
     detail = err.name === "AbortError" ? "timeout" : err.message;
   }
+
+  if (status === "up") {
+    consecutiveFailures = 0;
+  } else {
+    consecutiveFailures++;
+    // Não marca DOWN até atingir o threshold
+    if (consecutiveFailures < UPSTREAM_FAIL_THRESHOLD) {
+      // Mantém estado anterior; loga a falha sem mudar estado
+      console.log(
+        `[upstream-health] status=${upstreamState.status} warning=consecutive_failure ` +
+        `failures=${consecutiveFailures}/${UPSTREAM_FAIL_THRESHOLD} ` +
+        `latency_ms=${responseMs} error=${JSON.stringify(detail)}`
+      );
+      return;
+    }
+  }
+
   const now  = new Date().toISOString();
   const prev = upstreamState.status;
   upstreamState = { status, checkedAt: now, responseMs };
+
   if (prev !== status) {
     db.prepare("INSERT INTO upstream_health_log (status, response_ms, detail, checked_at) VALUES (?, ?, ?, ?)").run(status, responseMs ?? null, detail ?? null, now);
-    console.log(`[upstream] ${prev} → ${status}${detail ? ` (${detail})` : ""}`);
+    console.log(
+      `[upstream-health] status=${status} previous=${prev} ` +
+      `latency_ms=${responseMs ?? "N/A"} ` +
+      `consecutive_failures=${consecutiveFailures} ` +
+      `${detail ? `error=${JSON.stringify(detail)}` : ""}`
+    );
     db.prepare("DELETE FROM upstream_health_log WHERE id NOT IN (SELECT id FROM upstream_health_log ORDER BY id DESC LIMIT 500)").run();
   }
 }
@@ -755,6 +803,7 @@ if (require.main === module) {
     console.log(`Daily quota req  → ${DAILY_QUOTA_REQUESTS.toLocaleString()} requests`);
     console.log(`Daily quota bytes→ ${DAILY_QUOTA_BYTES.toLocaleString()} bytes`);
     console.log(`Upstream timeout → ${QRNG_TIMEOUT_MS}ms`);
+    console.log(`Upstream fail threshold → ${UPSTREAM_FAIL_THRESHOLD} consecutive failures`);
     checkUpstream();
     setInterval(checkUpstream, 60 * 1000);
   });

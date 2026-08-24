@@ -528,7 +528,7 @@ export default function NotebookPage() {
         }}
       >
         Todas as chamadas vão para{" "}
-        <span style={{ color: theme.quantum }}>bongo.vps-uni5.net/qrng/v1</span>
+        <span style={{ color: theme.quantum }}>bongo.dobslit.com/qrng/v1</span>
         {" "}com seu token Bearer.
         O botão <strong style={{ color: theme.textDim }}>curl</strong> copia o comando equivalente para o terminal.
       </div>

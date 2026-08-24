@@ -10,7 +10,7 @@ import AdminPage from "./AdminPage";
 
 const mono = "'IBM Plex Mono', monospace";
 
-const BASE_URL = "https://bongo.vps-uni5.net/qrng/v1";
+const BASE_URL = "https://bongo.dobslit.com/qrng/v1";
 
 function DocsCard() {
   const [copied, setCopied] = useState(null);
