@@ -33,3 +33,9 @@ qrng-web-demo-main/
 *.db
 *.db-shm
 *.db-wal
+
+# Backups locais e cache Python (nunca versionar)
+*.bak
+*.bak.*
+__pycache__/
+*.pyc
