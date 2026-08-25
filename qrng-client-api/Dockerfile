@@ -12,6 +12,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 COPY server.js ./
+COPY openapi ./openapi
 COPY test ./test
 
 # Persistencia do SQLite fora do filesystem do container, igual ao
