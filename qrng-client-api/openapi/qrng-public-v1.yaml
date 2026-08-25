@@ -12,13 +12,20 @@ info:
     pipeline físico). Bytes brutos são servidos sem processamento adicional; a avaliação de
     min-entropia é feita separadamente pela suíte NIST SP 800-90B (ver aba Teste NIST / /qrng/nist/
     no frontend) — nenhum endpoint aqui certifica ou garante um nível de entropia.
+
+
+    Unidade de TRANSPORTE (o que esta API entrega): bytes brutos, tal como lidos do registrador AXI
+    FIFO da FPGA (4 bytes little-endian por amostra uint32). Unidade de AVALIAÇÃO ESTATÍSTICA (o que
+    a suíte NIST SP 800-90B mede sobre uma amostra desses bytes): symbol width de 8 bits por
+    decomposição byte a byte -- ver assessment_symbol_width nos resultados de /nist/*. As duas
+    unidades são independentes: o formato de transporte não é uma alegação sobre quantos bits têm
+    significado físico nem sobre origem quântica comprovada -- isso é o que a avaliação estatística
+    separada existe para medir.
   contact:
     name: Dobslit
 servers:
   - url: https://bongo.dobslit.com/qrng/v1
     description: Produção (via nginx, proxy para o client-api)
-  - url: http://127.0.0.1:3010/v1
-    description: Local (client-api direto, sem nginx)
 tags:
   - name: Auth
     description: Registro, login e identidade do usuário
@@ -30,8 +37,6 @@ tags:
     description: Saúde da API e do upstream FPGA
   - name: Usage
     description: Cota, uso e histórico de chamadas do token
-  - name: Admin
-    description: Administração de tokens e usuários (role=admin)
 components:
   securitySchemes:
     bearerAuthJWT:
@@ -610,160 +615,6 @@ paths:
                           format: date-time
         '401':
           $ref: '#/components/responses/Unauthorized'
-  /admin/tokens:
-    get:
-      tags:
-        - Admin
-      summary: Lista todos os tokens de todos os usuários (requer role=admin).
-      security:
-        - bearerAuthJWT: []
-      responses:
-        '200':
-          description: Lista de tokens com uso de hoje.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  tokens:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        id:
-                          type: integer
-                        user_id:
-                          type: integer
-                        token_prefix:
-                          type: string
-                        name:
-                          type: string
-                        status:
-                          type: string
-                        quota_daily:
-                          type: integer
-                        created_at:
-                          type: string
-                          format: date-time
-                        last_used_at:
-                          type: string
-                          format: date-time
-                          nullable: true
-                        email:
-                          type: string
-                          format: email
-                        requests_today:
-                          type: integer
-                        bytes_today:
-                          type: integer
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-  /admin/tokens/{id}/revoke:
-    post:
-      tags:
-        - Admin
-      summary: Revoga o token de qualquer usuário (requer role=admin).
-      security:
-        - bearerAuthJWT: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-      responses:
-        '200':
-          description: Token revogado.
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          description: Token não encontrado.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /admin/tokens/{id}/quota:
-    patch:
-      tags:
-        - Admin
-      summary: Ajusta a cota diária de requisições de um token (requer role=admin).
-      security:
-        - bearerAuthJWT: []
-      parameters:
-        - name: id
-          in: path
-          required: true
-          schema:
-            type: integer
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              type: object
-              required:
-                - quota_daily
-              properties:
-                quota_daily:
-                  type: integer
-                  minimum: 1
-      responses:
-        '200':
-          description: Cota atualizada.
-        '400':
-          description: quota_daily ausente ou inválida.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          description: Token não encontrado.
-          content:
-            application/json:
-              schema:
-                $ref: '#/components/schemas/ErrorResponse'
-  /admin/users:
-    get:
-      tags:
-        - Admin
-      summary: Lista todos os usuários (requer role=admin).
-      security:
-        - bearerAuthJWT: []
-      responses:
-        '200':
-          description: Lista de usuários.
-          content:
-            application/json:
-              schema:
-                type: object
-                properties:
-                  users:
-                    type: array
-                    items:
-                      type: object
-                      properties:
-                        id:
-                          type: integer
-                        email:
-                          type: string
-                          format: email
-                        role:
-                          type: string
-                        created_at:
-                          type: string
-                          format: date-time
-        '401':
-          $ref: '#/components/responses/Unauthorized'
-        '403':
-          $ref: '#/components/responses/Forbidden'
   /health:
     get:
       tags:
@@ -869,6 +720,78 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         429_quota:
           description: (usa código 429) Cota diária de requisições ou bytes excedida.
+  /public/random:
+    get:
+      tags:
+        - Random
+      summary: Gera bytes aleatórios da fonte QRNG sem autenticação (acesso público, cota reduzida).
+      description: >
+        Mesma fonte física de /random (FPGA Red Pitaya via broker QRNG, uint32-LE, sem conditioning)
+        -- ver descrição completa em /random. Este caminho NÃO exige token, mas aplica limites bem
+        mais restritos por IP (rate limit, cota diária de requisições e bytes, tamanho máximo por
+        requisição). Para cotas maiores, crie uma conta e use um token pessoal em /random. Resposta
+        sempre com Cache-Control: no-store (nunca cacheie entropia). SEM fallback: se o broker
+        físico não responder ou responder em formato inesperado, a requisição falha explicitamente
+        (502/503) -- nunca substitui a resposta por dados pré-coletados ou gerados localmente
+        rotulados como se fossem esta fonte. `request_id` vem tanto no corpo quanto no header
+        `X-Request-Id` da resposta, útil para correlacionar com os logs do servidor em caso de
+        suporte. Versão do contrato desta API: ver `info.version` nesta spec.
+      parameters:
+        - name: bytes
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 32
+          description: >-
+            Quantidade de bytes a gerar. Limite por requisição = PUBLIC_MAX_BYTES_PER_REQUEST
+            (padrão 64 KiB).
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum:
+              - hex
+              - base64
+              - uint8
+          description: hex (padrão), base64, ou uint8 (array JSON de inteiros 0-255).
+      responses:
+        '200':
+          description: Bytes gerados.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RandomResponse'
+        '413':
+          description: bytes acima de PUBLIC_MAX_BYTES_PER_REQUEST.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: bytes ou format inválidos.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit por IP OU cota diária pública (requests/bytes) excedida.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Upstream retornou erro ou formato inesperado -- ver interpretUpstreamResponse().
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Upstream indisponível, timeout, ou entropia insuficiente no buffer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /bulk-random-jobs:
     post:
       tags:

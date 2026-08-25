@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Definição base da especificação OpenAPI da API pública do Kuapoã QRNG.
+ * Definição base da especificação OpenAPI do Kuapoã QRNG.
  *
  * A especificação é GERADA a partir do código real: swagger-jsdoc escaneia
  * os blocos de comentário `@openapi` posicionados diretamente acima de cada
@@ -10,8 +10,21 @@
  * compartilhados (info, servers, schemas reutilizáveis, esquema de auth) —
  * os paths em si vêm inteiramente dos comentários em server.js.
  *
- * Para regenerar a cópia estática versionada: npm run openapi:generate
- * (escreve openapi/qrng-public-v1.yaml a partir desta mesma definição).
+ * Item 7 da auditoria: a spec ÚNICA anterior incluía as rotas /admin/* (tag
+ * "Admin") no mesmo documento publicado publicamente em /v1/openapi.json,
+ * sem autenticação -- um scanner anônimo conseguia enumerar a forma exata
+ * da API administrativa sem nunca precisar de credenciais. Este arquivo
+ * agora constrói UMA spec completa internamente e expõe duas visões
+ * filtradas por tag:
+ *   - buildPublicSpec(): tudo MENOS a tag "Admin", sem o server local de
+ *     desenvolvimento (não faz sentido publicar um endereço 127.0.0.1 numa
+ *     spec destinada a consumidores externos).
+ *   - buildInternalAdminSpec(): SÓ a tag "Admin", mantém os dois servers.
+ *     Nunca deve ser servida numa rota pública sem autenticação -- ver
+ *     server.js, montada atrás de requireAuth+requireAdmin.
+ *
+ * Para regenerar as cópias estáticas versionadas: npm run openapi:generate
+ * (escreve openapi/qrng-public-v1.yaml e openapi/qrng-internal-admin-v1.yaml).
  */
 
 const swaggerJsdoc = require("swagger-jsdoc");
@@ -28,7 +41,15 @@ const definition = {
       "(confirmado no código-fonte do pipeline físico). " +
       "Bytes brutos são servidos sem processamento adicional; a avaliação de min-entropia " +
       "é feita separadamente pela suíte NIST SP 800-90B (ver aba Teste NIST / /qrng/nist/ " +
-      "no frontend) — nenhum endpoint aqui certifica ou garante um nível de entropia.",
+      "no frontend) — nenhum endpoint aqui certifica ou garante um nível de entropia.\n\n" +
+      "Unidade de TRANSPORTE (o que esta API entrega): bytes brutos, tal como lidos do " +
+      "registrador AXI FIFO da FPGA (4 bytes little-endian por amostra uint32). " +
+      "Unidade de AVALIAÇÃO ESTATÍSTICA (o que a suíte NIST SP 800-90B mede sobre uma " +
+      "amostra desses bytes): symbol width de 8 bits por decomposição byte a byte -- " +
+      "ver assessment_symbol_width nos resultados de /nist/*. As duas unidades são " +
+      "independentes: o formato de transporte não é uma alegação sobre quantos bits " +
+      "têm significado físico nem sobre origem quântica comprovada -- isso é o que a " +
+      "avaliação estatística separada existe para medir.",
     contact: { name: "Dobslit" },
   },
   servers: [
@@ -226,4 +247,76 @@ const options = {
   apis: [path.join(__dirname, "..", "server.js")],
 };
 
-module.exports = { buildSpec: () => swaggerJsdoc(options), definition };
+/** Spec completa, TODAS as tags incluídas -- uso interno/teste apenas, nunca servida diretamente. */
+function buildFullSpec() {
+  return swaggerJsdoc(options);
+}
+
+/**
+ * Filtra os paths de uma spec para manter só operações cuja tag bate com o
+ * predicado. Remove também o path inteiro se, depois do filtro, nenhum
+ * método restar nele (evita "/admin/tokens: {}" vazio na spec pública).
+ */
+function filterPathsByTag(spec, tagPredicate) {
+  const filteredPaths = {};
+  for (const [route, methods] of Object.entries(spec.paths || {})) {
+    const keptMethods = {};
+    for (const [verb, operation] of Object.entries(methods)) {
+      const tags = operation.tags || [];
+      if (tags.some(tagPredicate)) keptMethods[verb] = operation;
+    }
+    if (Object.keys(keptMethods).length > 0) filteredPaths[route] = keptMethods;
+  }
+  return filteredPaths;
+}
+
+/**
+ * Spec pública (item 7): tudo MENOS a tag "Admin", sem o server local de
+ * desenvolvimento. É esta que deve ser servida sem autenticação.
+ */
+function buildPublicSpec() {
+  const full = buildFullSpec();
+  return {
+    ...full,
+    info: {
+      ...full.info,
+      title: "Kuapoã QRNG — API Pública",
+    },
+    servers: full.servers.filter((s) => !s.url.includes("127.0.0.1")),
+    tags: full.tags.filter((t) => t.name !== "Admin"),
+    paths: filterPathsByTag(full, (tag) => tag !== "Admin"),
+  };
+}
+
+/**
+ * Spec administrativa interna (item 7): SÓ a tag "Admin". Nunca deve ser
+ * exposta numa rota pública sem autenticação -- ver server.js, montada
+ * atrás de requireAuth+requireAdmin, nunca em /v1/openapi.json.
+ */
+function buildInternalAdminSpec() {
+  const full = buildFullSpec();
+  return {
+    ...full,
+    info: {
+      ...full.info,
+      title: "Kuapoã QRNG — API Administrativa Interna",
+      description:
+        "Documentação da API administrativa (role=admin). NÃO É pública -- " +
+        "requer sessão JWT com role=admin (ver bearerAuthJWT). Servida apenas " +
+        "atrás de autenticação; nunca publicada num caminho anônimo.",
+    },
+    tags: full.tags.filter((t) => t.name === "Admin"),
+    paths: filterPathsByTag(full, (tag) => tag === "Admin"),
+  };
+}
+
+module.exports = {
+  // Mantido por compatibilidade com quem já importava buildSpec -- é
+  // deliberadamente a spec completa (equivalente a buildFullSpec), então
+  // NUNCA deve ser montada diretamente numa rota pública sem filtrar.
+  buildSpec: buildFullSpec,
+  buildFullSpec,
+  buildPublicSpec,
+  buildInternalAdminSpec,
+  definition,
+};

@@ -142,26 +142,36 @@ app.use((req, res, next) => {
   next();
 });
 
-// ── OpenAPI / Swagger (item 9 da auditoria do pipeline QRNG) ──────────────────
+// ── OpenAPI / Swagger (item 9, spec dividida no item 7 da auditoria) ──────────
 // Especificação GERADA a partir dos comentários @openapi acima de cada rota
 // deste arquivo (swagger-jsdoc) — nunca escrita manualmente à parte do
-// código, para não divergir dele. Cópia estática versionada em
-// openapi/qrng-public-v1.yaml (regenerar com `npm run openapi:generate`;
-// o CI falha se o arquivo commitado divergir do gerado).
+// código, para não divergir dele. Cópias estáticas versionadas em
+// openapi/qrng-public-v1.yaml e openapi/qrng-internal-admin-v1.yaml
+// (regenerar com `npm run openapi:generate`; o CI falha se os arquivos
+// commitados divergirem do gerado).
+//
+// Item 7: a spec pública NUNCA inclui as rotas /admin/* nem o server local
+// de desenvolvimento -- ver openapi/spec.js (buildPublicSpec filtra a tag
+// "Admin" e remove o server 127.0.0.1). A spec administrativa
+// (buildInternalAdminSpec) só documenta essas rotas, e só é servida atrás
+// de requireAuth+requireAdmin -- nunca num caminho anônimo.
 //
 // Montados ANTES do rate limiting global de propósito — documentação não
 // deve competir por cota com tráfego de produção, e os limites de
 // requisição do serviço em si não fazem sentido aplicados à própria UI de
 // docs (mantém as respostas do QRNG protegidas pelo rate limit normal,
-// que continua abaixo, aplicado só a partir daqui).
+// que continua abaixo, aplicado só a partir daqui). O rate limiting global
+// por IP AINDA se aplica aos endpoints internos abaixo -- só a autenticação
+// é que é adicional a eles.
 
 const swaggerUi = require("swagger-ui-express");
-const { buildSpec: buildOpenapiSpec } = require("./openapi/spec");
-const openapiSpec = buildOpenapiSpec();
+const { buildPublicSpec, buildInternalAdminSpec } = require("./openapi/spec");
+const publicOpenapiSpec       = buildPublicSpec();
+const internalAdminOpenapiSpec = buildInternalAdminSpec();
 
-app.get("/v1/openapi.json", (_req, res) => res.json(openapiSpec));
+app.get("/v1/openapi.json", (_req, res) => res.json(publicOpenapiSpec));
 
-app.use("/v1/docs", swaggerUi.serve, swaggerUi.setup(openapiSpec, {
+app.use("/v1/docs", swaggerUi.serve, swaggerUi.setup(publicOpenapiSpec, {
   customSiteTitle: "Kuapoã QRNG API — Docs",
 }));
 
@@ -179,6 +189,29 @@ app.get("/v1/redoc", (_req, res) => {
   </body>
 </html>`);
 });
+
+// ── Item 7: documentação da API administrativa, SÓ para admins autenticados ───
+// Rotas próprias, fora de /v1/openapi.json e /v1/docs públicos, para que um
+// scanner anônimo não consiga descobrir a forma da API admin sem antes ter
+// uma sessão JWT com role=admin.
+//
+// LIMITAÇÃO CONHECIDA (auth por header Bearer, não por cookie de sessão):
+// requireAuth exige o header Authorization em toda requisição, incluindo o
+// carregamento inicial do HTML/JS estático do Swagger UI -- um navegador
+// comum não anexa esse header sozinho ao navegar direto para a URL. Um
+// admin precisa de uma ferramenta que anexe o header (curl, Postman,
+// extensão de REST client) para efetivamente ver /v1/internal/docs; o JSON
+// em /v1/internal/admin-openapi.json funciona normalmente via
+// `curl -H "Authorization: Bearer <jwt>"`. Preferível a deixar sem
+// autenticação nenhuma, mas não é uma UI "clique e veja" para humanos --
+// registrado aqui em vez de fingir que é transparente.
+app.get("/v1/internal/admin-openapi.json", requireAuth, requireAdmin, (_req, res) => {
+  res.json(internalAdminOpenapiSpec);
+});
+
+app.use("/v1/internal/docs", requireAuth, requireAdmin, swaggerUi.serve, swaggerUi.setup(internalAdminOpenapiSpec, {
+  customSiteTitle: "Kuapoã QRNG API — Docs Internas (Admin)",
+}));
 
 // ── Rate limiting — global por IP ─────────────────────────────────────────────
 
@@ -1340,6 +1373,13 @@ function parsePublicBytes(req, res, next) {
  *       cota diária de requisições e bytes, tamanho máximo por requisição). Para
  *       cotas maiores, crie uma conta e use um token pessoal em /random.
  *       Resposta sempre com Cache-Control: no-store (nunca cacheie entropia).
+ *       SEM fallback: se o broker físico não responder ou responder em
+ *       formato inesperado, a requisição falha explicitamente (502/503) --
+ *       nunca substitui a resposta por dados pré-coletados ou gerados
+ *       localmente rotulados como se fossem esta fonte. `request_id` vem
+ *       tanto no corpo quanto no header `X-Request-Id` da resposta, útil
+ *       para correlacionar com os logs do servidor em caso de suporte.
+ *       Versão do contrato desta API: ver `info.version` nesta spec.
  *     parameters:
  *       - name: bytes
  *         in: query

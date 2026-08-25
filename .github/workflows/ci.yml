@@ -28,13 +28,13 @@ jobs:
       - name: Testes (unitários + integração + contrato OpenAPI)
         run: npm test
 
-      - name: Regenerar especificação OpenAPI e checar drift
+      - name: Regenerar especificações OpenAPI (pública + admin interna) e checar drift
         run: |
           npm run openapi:generate
-          if ! git diff --quiet -- openapi/qrng-public-v1.yaml; then
-            echo "::error::openapi/qrng-public-v1.yaml está desatualizado em relação ao código."
+          if ! git diff --quiet -- openapi/qrng-public-v1.yaml openapi/qrng-internal-admin-v1.yaml; then
+            echo "::error::openapi/qrng-public-v1.yaml e/ou openapi/qrng-internal-admin-v1.yaml estão desatualizados em relação ao código."
             echo "Rode 'npm run openapi:generate' em qrng-client-api/ e commite o resultado."
-            git diff -- openapi/qrng-public-v1.yaml
+            git diff -- openapi/qrng-public-v1.yaml openapi/qrng-internal-admin-v1.yaml
             exit 1
           fi
 
