@@ -9,6 +9,8 @@ function Probe() {
   const {
     status, isOnline, isLiveData, isFallbackSelected, health, qrngSource, setQrngSource,
     precollectedRemaining, precollectedLimit, restartPrecollectedDemo,
+    apiReachable, sourceConnected, freshDataAvailable, lastHealthCheckAt,
+    lastBlockReceivedAt, inputRateBytesPerSecond, fallbackSelected,
   } = useContext(AppContext);
   return (
     <div>
@@ -16,12 +18,19 @@ function Probe() {
       <span data-testid="isOnline">{String(isOnline)}</span>
       <span data-testid="isLiveData">{String(isLiveData)}</span>
       <span data-testid="isFallbackSelected">{String(isFallbackSelected)}</span>
+      <span data-testid="fallbackSelected">{String(fallbackSelected)}</span>
       <span data-testid="buffer">{health ? health.buffer_bytes_available : "null"}</span>
       <button data-testid="selectPreCollected" onClick={() => setQrngSource("pre-collected")}>seed</button>
       <span data-testid="qrngSource">{qrngSource}</span>
       <span data-testid="precollectedRemaining">{precollectedRemaining}</span>
       <span data-testid="precollectedLimit">{precollectedLimit}</span>
       <button data-testid="restartDemo" onClick={restartPrecollectedDemo}>restart</button>
+      <span data-testid="apiReachable">{String(apiReachable)}</span>
+      <span data-testid="sourceConnected">{String(sourceConnected)}</span>
+      <span data-testid="freshDataAvailable">{String(freshDataAvailable)}</span>
+      <span data-testid="lastHealthCheckAt">{String(lastHealthCheckAt !== null)}</span>
+      <span data-testid="lastBlockReceivedAt">{String(lastBlockReceivedAt !== null)}</span>
+      <span data-testid="inputRateBytesPerSecond">{String(inputRateBytesPerSecond)}</span>
     </div>
   );
 }
@@ -300,5 +309,71 @@ describe("AppContext — cursor do fallback pré-coletado exposto globalmente (i
       screen.getByTestId("restartDemo").click();
     });
     expect(screen.getByTestId("precollectedRemaining").textContent).toBe("10000");
+  });
+});
+
+describe("AppContext — semântica de saúde granular (item 5)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("apiReachable e lastHealthCheckAt refletem cada tentativa de poll, mesmo antes de 'online' ser confirmado", async () => {
+    globalThis.fetch = vi.fn(() => healthyResponse());
+    renderProbe();
+    await flushMicrotasks();
+    expect(screen.getByTestId("apiReachable").textContent).toBe("true");
+    expect(screen.getByTestId("lastHealthCheckAt").textContent).toBe("true");
+  });
+
+  it("apiReachable vira false imediatamente numa falha de rede (sem esperar o threshold de OFFLINE confirmado)", async () => {
+    globalThis.fetch = vi.fn(() => failedResponse());
+    renderProbe();
+    await flushMicrotasks();
+    // status ainda pode não ter confirmado "offline" (threshold=3), mas a
+    // ÚLTIMA tentativa já falhou -- apiReachable não tem hysteresis.
+    expect(screen.getByTestId("apiReachable").textContent).toBe("false");
+  });
+
+  it("freshDataAvailable e sourceConnected são false quando o buffer reportado está vazio, mesmo com apiReachable true", async () => {
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({ ok: true, json: async () => ({ buffer_bytes_available: 0, buffer_capacity: 2000, total_pushed: 5, total_popped: 5 }) })
+    );
+    renderProbe();
+    await flushMicrotasks();
+    expect(screen.getByTestId("apiReachable").textContent).toBe("true");
+    expect(screen.getByTestId("freshDataAvailable").textContent).toBe("false");
+    expect(screen.getByTestId("sourceConnected").textContent).toBe("false");
+  });
+
+  it("inputRateBytesPerSecond e lastBlockReceivedAt só populam quando total_pushed aumenta entre polls sucessivos", async () => {
+    let pushed = 1000;
+    globalThis.fetch = vi.fn(() =>
+      Promise.resolve({ ok: true, json: async () => ({ buffer_bytes_available: 500, buffer_capacity: 2000, total_pushed: pushed, total_popped: 0 }) })
+    );
+    renderProbe();
+    await flushMicrotasks();
+    // 1º poll: ainda não há um ponto anterior para comparar.
+    expect(screen.getByTestId("lastBlockReceivedAt").textContent).toBe("false");
+    expect(screen.getByTestId("inputRateBytesPerSecond").textContent).toBe("null");
+
+    pushed += 8000; // novo bloco chegou entre os dois polls
+    await act(async () => { await vi.advanceTimersByTimeAsync(15000); });
+    expect(screen.getByTestId("lastBlockReceivedAt").textContent).toBe("true");
+    expect(screen.getByTestId("inputRateBytesPerSecond").textContent).not.toBe("null");
+  });
+
+  it("fallbackSelected é alias de isFallbackSelected (mesmo nome pedido no schema da auditoria)", async () => {
+    globalThis.fetch = vi.fn(() => healthyResponse());
+    renderProbe();
+    await act(async () => { screen.getByTestId("selectPreCollected").click(); });
+    expect(screen.getByTestId("fallbackSelected").textContent).toBe(screen.getByTestId("isFallbackSelected").textContent);
+    expect(screen.getByTestId("fallbackSelected").textContent).toBe("true");
   });
 });

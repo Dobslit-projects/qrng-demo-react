@@ -41,16 +41,37 @@ export const SOURCE_LABELS = {
  * - A partir de OFFLINE confirmado: precisa de OK_THRESHOLD sucessos
  *   consecutivos para voltar a ONLINE (evita flapping).
  * - DEGRADED: health responde 200 mas buffer_bytes_available === 0.
+ *
+ * Item 5 da auditoria: um health-check HTTP bem-sucedido não prova que um
+ * bloco NOVO de entropia chegou -- só prova que o processo respondeu.
+ * Por isso este hook agora separa:
+ *   - apiReachable: a ÚLTIMA tentativa de poll obteve alguma resposta HTTP
+ *     (independente de hysteresis/threshold -- reflete o poll mais recente,
+ *     não o status "confirmado" com debounce).
+ *   - lastHealthCheckAt: quando essa última tentativa aconteceu (sucesso OU
+ *     falha) -- distinto de lastSuccessAt (só sucesso).
+ *   - freshDataAvailable: buffer_bytes_available > 0 na resposta mais
+ *     recente -- não confundir com "sourceConnected" (o processo responder
+ *     não significa que o pipeline upstream está de fato entregando).
+ *   - lastBlockReceivedAt / inputRateBytesPerSecond: derivados observando
+ *     total_pushed aumentar entre polls sucessivos -- um proxy real de
+ *     "chegou entropia nova", não apenas "o endpoint respondeu 200".
  */
 function useHysteresisHealth(apiPrefix) {
   const [health, setHealth]   = useState(null);
   const [latency, setLatency] = useState(null);
   const [status, setStatus]   = useState("checking"); // "checking" | "online" | "offline"
   const [lastSuccessAt, setLastSuccessAt] = useState(null); // epoch ms do último poll bem-sucedido
+  const [lastHealthCheckAt, setLastHealthCheckAt] = useState(null); // epoch ms da última tentativa (sucesso ou falha)
+  const [apiReachable, setApiReachable] = useState(false); // resposta HTTP na última tentativa, sem hysteresis
+  const [lastBlockReceivedAt, setLastBlockReceivedAt] = useState(null); // epoch ms -- total_pushed aumentou
+  const [inputRateBytesPerSecond, setInputRateBytesPerSecond] = useState(null);
   const failsRef     = useRef(0);
   const successRef   = useRef(0);
   const statusRef     = useRef("checking");
   const inFlightRef   = useRef(false);
+  const prevPushedRef = useRef(null);
+  const prevPushedAtRef = useRef(null);
 
   useEffect(() => {
     // apiPrefix é constante em toda a vida do app (API_ROUTES.remote /
@@ -72,15 +93,31 @@ function useHysteresisHealth(apiPrefix) {
       inFlightRef.current = false;
       if (!mounted) return; // não atualiza estado após unmount
 
+      const checkedAt = Date.now();
+      setLastHealthCheckAt(checkedAt);
+      setApiReachable(h !== null);
+
       if (h !== null) {
         failsRef.current   = 0;
         successRef.current += 1;
+
+        const pushed = typeof h.total_pushed === "number" ? h.total_pushed : null;
+        if (pushed !== null) {
+          if (prevPushedRef.current !== null && pushed > prevPushedRef.current) {
+            setLastBlockReceivedAt(checkedAt);
+            const dtSec = (checkedAt - prevPushedAtRef.current) / 1000;
+            if (dtSec > 0) setInputRateBytesPerSecond(Math.round((pushed - prevPushedRef.current) / dtSec));
+          }
+          prevPushedRef.current = pushed;
+          prevPushedAtRef.current = checkedAt;
+        }
+
         const wasConfirmedOffline = statusRef.current === "offline";
         if (!wasConfirmedOffline || successRef.current >= OK_THRESHOLD) {
           statusRef.current = "online";
           setStatus("online");
           setHealth(h);
-          setLastSuccessAt(Date.now());
+          setLastSuccessAt(checkedAt);
           if (h._latencyMs) setLatency(h._latencyMs);
         }
       } else {
@@ -90,6 +127,7 @@ function useHysteresisHealth(apiPrefix) {
           statusRef.current = "offline";
           setStatus("offline");
           setHealth(null);
+          setInputRateBytesPerSecond(null);
         }
         // menos que FAIL_THRESHOLD: mantém o status atual (checking ou
         // online) — uma falha curta/transitória não derruba nada.
@@ -101,7 +139,10 @@ function useHysteresisHealth(apiPrefix) {
     return () => { mounted = false; clearTimeout(timer); };
   }, [apiPrefix]);
 
-  return { health, latency, status, lastSuccessAt };
+  return {
+    health, latency, status, lastSuccessAt,
+    lastHealthCheckAt, apiReachable, lastBlockReceivedAt, inputRateBytesPerSecond,
+  };
 }
 
 function computeStatus(qrngSource, health, hookStatus) {
@@ -114,8 +155,18 @@ function computeStatus(qrngSource, health, hookStatus) {
 }
 
 export function AppProvider({ children }) {
-  const { health: remoteHealth, latency: remoteLatency, status: remoteHookStatus, lastSuccessAt: remoteLastSuccessAt } = useHysteresisHealth(API_ROUTES.remote);
-  const { health: fpgaHealth,   latency: fpgaLatency,   status: fpgaHookStatus,   lastSuccessAt: fpgaLastSuccessAt   } = useHysteresisHealth(API_ROUTES.fpga);
+  const remoteH = useHysteresisHealth(API_ROUTES.remote);
+  const fpgaH   = useHysteresisHealth(API_ROUTES.fpga);
+  const {
+    health: remoteHealth, latency: remoteLatency, status: remoteHookStatus, lastSuccessAt: remoteLastSuccessAt,
+    lastHealthCheckAt: remoteLastHealthCheckAt, apiReachable: remoteApiReachable,
+    lastBlockReceivedAt: remoteLastBlockReceivedAt, inputRateBytesPerSecond: remoteInputRate,
+  } = remoteH;
+  const {
+    health: fpgaHealth, latency: fpgaLatency, status: fpgaHookStatus, lastSuccessAt: fpgaLastSuccessAt,
+    lastHealthCheckAt: fpgaLastHealthCheckAt, apiReachable: fpgaApiReachable,
+    lastBlockReceivedAt: fpgaLastBlockReceivedAt, inputRateBytesPerSecond: fpgaInputRate,
+  } = fpgaH;
 
   const [qrngSource, setQrngSourceRaw] = useState(loadSource);
   const [streamError, setStreamError]  = useState(null);
@@ -143,6 +194,24 @@ export function AppProvider({ children }) {
   const latency        = qrngSource === "remote" ? remoteLatency       : qrngSource === "fpga" ? fpgaLatency       : null;
   const hookStatus      = qrngSource === "remote" ? remoteHookStatus    : qrngSource === "fpga" ? fpgaHookStatus    : null;
   const lastSuccessAt = qrngSource === "remote" ? remoteLastSuccessAt : qrngSource === "fpga" ? fpgaLastSuccessAt : null;
+
+  // Item 5: campos de saúde granulares para a fonte ativa. null para
+  // "pre-collected" -- não há health check de rede nessa fonte (buffer
+  // local estático), então não faz sentido reportar "alcançável"/"conectado".
+  const lastHealthCheckAt      = qrngSource === "remote" ? remoteLastHealthCheckAt      : qrngSource === "fpga" ? fpgaLastHealthCheckAt      : null;
+  const apiReachable           = qrngSource === "remote" ? remoteApiReachable           : qrngSource === "fpga" ? fpgaApiReachable           : false;
+  const lastBlockReceivedAt    = qrngSource === "remote" ? remoteLastBlockReceivedAt    : qrngSource === "fpga" ? fpgaLastBlockReceivedAt    : null;
+  const inputRateBytesPerSecond = qrngSource === "remote" ? remoteInputRate              : qrngSource === "fpga" ? fpgaInputRate              : null;
+  const lastBlockAgeSeconds = lastBlockReceivedAt !== null ? (Date.now() - lastBlockReceivedAt) / 1000 : null;
+  // freshDataAvailable: o payload de /health reportou buffer com bytes
+  // disponíveis agora -- distinto de apiReachable (o processo respondeu,
+  // mas pode ter respondido com o buffer vazio).
+  const freshDataAvailable = apiReachable && typeof health?.buffer_bytes_available === "number" && health.buffer_bytes_available > 0;
+  // sourceConnected: proxy para "o pipeline upstream (FPGA/broker) está de
+  // fato entregando dados", na ausência de um campo dedicado no payload de
+  // /health hoje -- documentado no relatório de auditoria como uma lacuna
+  // real (precisaria de um flag explícito do backend para não ser um proxy).
+  const sourceConnected = apiReachable && freshDataAvailable;
 
   const status = computeStatus(qrngSource, health, hookStatus);
   // "checking" conta como online: a 1ª verificação real ainda não terminou,
@@ -173,8 +242,17 @@ export function AppProvider({ children }) {
     isOnline,
     isLiveData,
     isFallbackSelected,
+    fallbackSelected: isFallbackSelected, // item 5: nome alinhado ao schema pedido na auditoria
     lastSuccessAt,
     status,      // "checking" | "online" | "degraded" | "offline" | "pre-collected"
+    // Item 5 da auditoria — semântica de saúde granular:
+    apiReachable,             // resposta HTTP na última tentativa (sem hysteresis/debounce)
+    sourceConnected,          // proxy: alcançável + buffer com dados agora (ver comentário acima)
+    freshDataAvailable,       // buffer_bytes_available > 0 na resposta mais recente
+    lastHealthCheckAt,        // epoch ms: última tentativa de poll (sucesso OU falha)
+    lastBlockReceivedAt,      // epoch ms: última vez que total_pushed aumentou
+    lastBlockAgeSeconds,      // segundos desde lastBlockReceivedAt (null se nunca observado)
+    inputRateBytesPerSecond,  // bytes/s entre os dois últimos polls com total_pushed maior
     streamError,
     setStreamError,
     activePage,
@@ -191,6 +269,8 @@ export function AppProvider({ children }) {
     },
   }), [health, latency, qrngSource, isOnline, isLiveData, isFallbackSelected, lastSuccessAt,
        status, streamError, activePage,
+       apiReachable, sourceConnected, freshDataAvailable, lastHealthCheckAt,
+       lastBlockReceivedAt, lastBlockAgeSeconds, inputRateBytesPerSecond,
        remoteHealth, remoteLatency, fpgaHealth, fpgaLatency, setQrngSource,
        precollectedRemainingCount, restartPrecollectedDemo]);
 

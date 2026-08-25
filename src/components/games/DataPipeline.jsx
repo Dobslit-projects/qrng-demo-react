@@ -57,7 +57,16 @@ function Arrow({ online }) {
 }
 
 export default function DataPipeline({ source, latency, bytesUsed }) {
+  // Item 5 da auditoria: isOnline (true também para pre-collected/checking)
+  // não pode decidir se a animação "fluindo pelo hardware" e o rótulo de
+  // fonte são mostrados -- QuantumVisualizer agora pode passar `source`
+  // como "Math.random() — ..." quando o buffer pré-coletado esgota ou a
+  // rede falha (ver refillBuffer em QuantumVisualizer.jsx). Nesses casos,
+  // isOnline continua true, mas os dados exibidos NÃO vêm do hardware nem
+  // do buffer QRNG real -- não é "ao vivo" e a animação não deve sugerir
+  // isso.
   const { isOnline } = useContext(AppContext);
+  const isRealSource = isOnline && !(typeof source === "string" && source.startsWith("Math.random()"));
 
   return (
     <div style={{
@@ -71,7 +80,7 @@ export default function DataPipeline({ source, latency, bytesUsed }) {
       {STEPS.map((step, i) => {
         const isApi = step.label === "API REST";
         const isLast = i === STEPS.length - 1;
-        const active = isOnline;
+        const active = isRealSource;
         const color = active ? theme.quantum : theme.textMuted;
 
         return (
@@ -97,7 +106,7 @@ export default function DataPipeline({ source, latency, bytesUsed }) {
                 whiteSpace: "nowrap",
               }}>
                 {isApi
-                  ? (isOnline ? `${latency || "?"}ms` : "offline")
+                  ? (isRealSource ? `${latency || "?"}ms` : "offline")
                   : (step.sub || "")}
               </div>
             </div>
@@ -109,11 +118,11 @@ export default function DataPipeline({ source, latency, bytesUsed }) {
       <div style={{ width: 1, height: 20, background: theme.border, margin: "0 10px" }} />
 
       <div style={{
-        fontSize: 8, color: isOnline ? theme.success : theme.warning,
+        fontSize: 8, color: isRealSource ? theme.success : theme.warning,
         fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600,
         whiteSpace: "nowrap",
       }}>
-        {isOnline ? `Fonte: ${source}` : "Fallback: Math.random()"}
+        Fonte: {source}
       </div>
     </div>
   );

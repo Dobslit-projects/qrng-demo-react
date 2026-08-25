@@ -369,7 +369,11 @@ export default function StreamPanel() {
               fontSize: 12, color: theme.textMuted, fontFamily: mono,
               letterSpacing: "0.04em",
             }}>
-              {isOnline
+              {/* Item 5: isOnline sozinho mostraria "Clique para iniciar" mesmo
+                  em pre-collected, onde o botão está desabilitado (canStream
+                  já exclui essa fonte, ver linha ~48) -- usar canStream aqui
+                  também, não só no texto de status acima. */}
+              {canStream
                 ? "Clique em \"Iniciar Stream\" para visualizar"
                 : qrngSource === "pre-collected"
                   ? "Sem stream no modo pre-coletado"

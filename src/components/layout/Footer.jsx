@@ -4,7 +4,11 @@ import { getApiPrefix } from "../../qrngApi";
 import { AppContext, SOURCE_LABELS } from "../../contexts/AppContext";
 
 export default function Footer() {
-  const { isOnline, qrngSource } = useContext(AppContext);
+  // Item 5 da auditoria: isOnline é um flag de "seguro habilitar UI", TAMBÉM
+  // true para a fonte pré-coletada -- não pode decidir a alegação "conectado
+  // ao hardware / dados em tempo real" abaixo. isLiveData só é true quando
+  // uma checagem de rede real confirmou sucesso.
+  const { isLiveData, qrngSource } = useContext(AppContext);
   const sourceLabel = SOURCE_LABELS[qrngSource] || qrngSource;
 
   return (
@@ -14,7 +18,7 @@ export default function Footer() {
           padding: "16px 20px",
           borderRadius: 12,
           background: theme.surface,
-          border: `1px solid ${isOnline ? theme.success : theme.border}`,
+          border: `1px solid ${isLiveData ? theme.success : theme.border}`,
           fontSize: 11,
           lineHeight: 1.8,
           color: theme.textMuted,
@@ -22,7 +26,7 @@ export default function Footer() {
           boxShadow: "0 1px 3px rgba(0,0,0,0.04)",
         }}
       >
-        {isOnline ? (
+        {isLiveData ? (
           <>
             <strong style={{ color: theme.success }}>Conectado ao hardware:</strong>{" "}
             Os dados QRNG nesta demo vem diretamente da fonte{" "}

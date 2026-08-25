@@ -28,7 +28,11 @@ function LogoImg({ height }) {
 }
 
 export default function Header() {
-  const { isOnline } = useContext(AppContext);
+  // Item 5 da auditoria: "conectado ao hardware ... em tempo real" é uma
+  // alegação de dado AO VIVO -- isOnline é true também para pre-collected
+  // e checking, então precisa de isLiveData (só true após uma checagem de
+  // rede real confirmar sucesso), não isOnline.
+  const { isLiveData } = useContext(AppContext);
 
   return (
     <div style={{ maxWidth: 800, margin: "0 auto 32px" }}>
@@ -77,7 +81,7 @@ export default function Header() {
       >
         Comparacao interativa entre geradores pseudoaleatorios (deterministicos)
         e geradores quanticos (fundamentalmente imprevisíveis).
-        {isOnline && (
+        {isLiveData && (
           <span style={{ color: theme.success, fontWeight: 500 }}>
             {" "}Conectado ao hardware Red Pitaya QRNG em tempo real.
           </span>

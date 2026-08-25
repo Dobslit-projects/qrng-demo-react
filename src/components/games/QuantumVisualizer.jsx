@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState, useCallback, useContext } from "react";
 import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
-import { fetchQrngBytesViaToken } from "../../lib/qrngHelper";
+import { fetchQrngBytesViaToken, fetchQrngBytes, PrecollectedExhaustedError } from "../../lib/qrngHelper";
 import { lcgNext } from "../../prng";
 import * as galaxy from "./visualizations/galaxySpiral";
 import * as mandala from "./visualizations/mandala";
@@ -94,6 +94,16 @@ export default function QuantumVisualizer() {
   useEffect(() => { speedRef.current = speed; }, [speed]);
 
   // Fetch QRNG bytes into buffer
+  //
+  // Item 5 da auditoria (corrigido aqui): antes, selecionar "pre-collected"
+  // em Configurações fazia este componente descartar o buffer QRNG_PRECOLLECTED
+  // real (o mesmo usado por DataSection/AnalysisSection) e usar Math.random()
+  // desde o primeiro frame, rotulado genericamente "Fallback" -- indistinguível
+  // do fallback por erro de rede real. Isso comparava PRNG × Math.random() sob
+  // o rótulo "QRNG", não PRNG × QRNG. Agora: tenta o buffer pré-coletado real
+  // primeiro; só cai para Math.random() quando ele de fato esgota (item 4 --
+  // sem wraparound) ou quando a rede falha, e rotula os dois casos de forma
+  // distinta e honesta em vez de "Fallback" genérico.
   const refillBuffer = useCallback(async () => {
     if (fetchingRef.current || qrngBufferRef.current.length > 6000) return;
     fetchingRef.current = true;
@@ -102,23 +112,26 @@ export default function QuantumVisualizer() {
     // client-api autenticado (/qrng/v1/), independente da fonte escolhida
     // em Configurações. O rótulo abaixo é apenas cosmético; ver relatório
     // de auditoria sobre unificar isso com o restante do app.
-    const labelMap = { remote: "Remota (SP)", fpga: "FPGA", "pre-collected": "Pre-coletado" };
+    const labelMap = { remote: "Remota (SP)", fpga: "FPGA" };
     try {
       if (globalSource === "pre-collected") {
-        // NOTA (auditoria item 4): "pre-collected" aqui cai no catch abaixo
-        // e usa Math.random(), NÃO o buffer QRNG_PRECOLLECTED real usado por
-        // DataSection/AnalysisSection -- rotulado genericamente "Fallback",
-        // sem distinguir das duas situações. Ver relatório de auditoria.
-        throw new Error("pre-collected");
+        const { bytes } = await fetchQrngBytes(8192, "pre-collected");
+        qrngBufferRef.current.push(...bytes);
+        setQrngSourceLabel("Pré-coletado");
+      } else {
+        const { bytes } = await fetchQrngBytesViaToken(8192);
+        qrngBufferRef.current.push(...bytes);
+        setQrngSourceLabel(labelMap[globalSource] || globalSource);
       }
-      const { bytes } = await fetchQrngBytesViaToken(8192);
-      qrngBufferRef.current.push(...bytes);
-      setQrngSourceLabel(labelMap[globalSource] || globalSource);
-    } catch {
+    } catch (err) {
       for (let i = 0; i < 4096; i++) {
         qrngBufferRef.current.push(Math.floor(Math.random() * 256));
       }
-      setQrngSourceLabel("Fallback");
+      setQrngSourceLabel(
+        err instanceof PrecollectedExhaustedError
+          ? "Math.random() — pré-coletado esgotado"
+          : "Math.random() — erro de rede"
+      );
     }
     fetchingRef.current = false;
   }, [globalSource]);

@@ -459,8 +459,24 @@ function sourceLabel(source) {
 
 /* ── Main Section ─────────────────────────────────────────────────────────── */
 
+// Item 5 da auditoria: badge de status precisa diferenciar "ao vivo" de
+// "seguro habilitar UI" (isOnline é true também para pre-collected/checking
+// -- ver AppContext.jsx). Cobre os 5 estados de `status` explicitamente em
+// vez de colapsar tudo em isOnline, para não mostrar "● ONLINE" (verde)
+// quando a fonte selecionada é o fallback pré-coletado.
+function statusBadgeInfo(qrngStatus, theme) {
+  switch (qrngStatus) {
+    case "online":        return { label: "● ONLINE",       color: theme.success };
+    case "checking":      return { label: "○ VERIFICANDO",  color: theme.textMuted };
+    case "pre-collected": return { label: "◐ FALLBACK",     color: theme.warning };
+    case "degraded":      return { label: "◐ DEGRADADO",    color: theme.warning };
+    default:              return { label: "○ OFFLINE",      color: theme.danger };
+  }
+}
+
 export default function KapuaSection() {
-  const { isOnline, setActivePage, qrngSource, status: qrngStatus } = useContext(AppContext);
+  const { setActivePage, qrngSource, status: qrngStatus } = useContext(AppContext);
+  const badge = statusBadgeInfo(qrngStatus, theme);
 
   /* Device explorer state */
   const [selected,      setSelected]      = useState(0);
@@ -588,11 +604,11 @@ export default function KapuaSection() {
                   letterSpacing: "0.18em", color: theme.quantum + "cc" }}>DOBSLIT · QRNG</span>
                 <span style={{
                   fontSize: 9, fontFamily: mono, fontWeight: 700,
-                  color: isOnline ? theme.success : qrngStatus === "degraded" ? theme.warning : theme.danger,
-                  background: (isOnline ? theme.success : qrngStatus === "degraded" ? theme.warning : theme.danger) + "18",
-                  border: `1px solid ${(isOnline ? theme.success : qrngStatus === "degraded" ? theme.warning : theme.danger)}40`,
+                  color: badge.color,
+                  background: badge.color + "18",
+                  border: `1px solid ${badge.color}40`,
                   borderRadius: 20, padding: "2px 9px",
-                }}>{isOnline ? "● ONLINE" : qrngStatus === "degraded" ? "◐ DEGRADADO" : "○ OFFLINE"}</span>
+                }}>{badge.label}</span>
               </div>
 
               {/* Title */}

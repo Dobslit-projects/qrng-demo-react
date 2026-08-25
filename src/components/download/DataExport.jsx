@@ -1,7 +1,7 @@
 import { useState, useContext } from "react";
 import { theme, formatBytes } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
-import { getApiPrefix } from "../../qrngApi";
+import { fetchQrngBytes, errorMessage, PRECOLLECTED_LIMIT } from "../../lib/qrngHelper";
 import Btn from "../ui/Btn";
 
 const presets = [
@@ -14,21 +14,25 @@ const presets = [
 ];
 
 export default function DataExport() {
-  const { isOnline, qrngSource } = useContext(AppContext);
-  const apiPrefix = getApiPrefix(qrngSource);
+  // Item 5 da auditoria (corrigido aqui): este componente ignorava
+  // completamente a fonte pré-coletada -- getApiPrefix("pre-collected")
+  // cai no default "/api" (rota que não existe; API_ROUTES só tem
+  // remote/fpga), então o download falhava silenciosamente nesse modo em
+  // vez de usar o buffer local, e o parsing (texto decimal separado por
+  // "\n") era o formato legado ambíguo, não o contrato canônico hex usado
+  // pelo resto do app (ver qrngHelper.js). Agora usa fetchQrngBytes, que já
+  // trata as três fontes corretamente.
+  const { isOnline, qrngSource, precollectedRemaining } = useContext(AppContext);
   const [downloadSize, setDownloadSize] = useState(1024 * 1024);
   const [customInput, setCustomInput] = useState("");
   const [downloading, setDownloading] = useState(false);
+  const [dlError, setDlError] = useState(null);
 
   const handleDownload = async () => {
     setDownloading(true);
+    setDlError(null);
     try {
-      const response = await fetch(`${apiPrefix}/random?bytes=${downloadSize}`, {
-        signal: AbortSignal.timeout(60000),
-      });
-      const text = await response.text();
-      const numbers = text.split("\n").filter((s) => s.trim()).map(Number).filter((n) => !isNaN(n) && n >= 0 && n <= 255);
-      const bytes = new Uint8Array(numbers);
+      const { bytes } = await fetchQrngBytes(downloadSize, qrngSource);
       const blob = new Blob([bytes], { type: "application/octet-stream" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -39,7 +43,7 @@ export default function DataExport() {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
     } catch (err) {
-      console.error("Download failed:", err);
+      setDlError(errorMessage(err));
     } finally {
       setDownloading(false);
     }
@@ -57,6 +61,16 @@ export default function DataExport() {
       {!isOnline && (
         <div style={{ padding: "10px 14px", borderRadius: 8, background: theme.warning + "10", border: `1px solid ${theme.warning}30`, fontSize: 12, color: theme.warning, flexShrink: 0 }}>
           Download indisponivel — backend offline.
+        </div>
+      )}
+      {isOnline && qrngSource === "pre-collected" && downloadSize > precollectedRemaining && (
+        <div style={{ padding: "10px 14px", borderRadius: 8, background: theme.warning + "10", border: `1px solid ${theme.warning}30`, fontSize: 12, color: theme.warning, flexShrink: 0 }}>
+          Fonte pré-coletada: restam apenas {formatBytes(precollectedRemaining)} de {formatBytes(PRECOLLECTED_LIMIT)} nesta sessão. Reduza o tamanho, use "Reiniciar demonstração" no banner acima, ou troque de fonte.
+        </div>
+      )}
+      {dlError && (
+        <div style={{ padding: "10px 14px", borderRadius: 8, background: theme.danger + "10", border: `1px solid ${theme.danger}30`, fontSize: 12, color: theme.danger, flexShrink: 0 }}>
+          {dlError}
         </div>
       )}
 
@@ -97,7 +111,11 @@ export default function DataExport() {
         />
         <Btn onClick={handleCustom} color={theme.accent} small>Aplicar</Btn>
         <div style={{ width: 1, height: 24, background: theme.border }} />
-        <Btn onClick={handleDownload} color={theme.quantum} disabled={downloading || !isOnline}>
+        <Btn
+          onClick={handleDownload}
+          color={theme.quantum}
+          disabled={downloading || !isOnline || (qrngSource === "pre-collected" && downloadSize > precollectedRemaining)}
+        >
           {downloading ? "Baixando..." : `Baixar ${formatBytes(downloadSize)} QRNG`}
         </Btn>
         <span style={{ fontSize: 11, color: theme.textMuted, fontFamily: "'IBM Plex Mono', monospace" }}>
