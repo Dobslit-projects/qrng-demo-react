@@ -15,6 +15,12 @@ process.env.ADMIN_EMAIL           = "admin@test.com";
 process.env.MAX_BYTES_PER_REQUEST = "1048576";
 process.env.DAILY_QUOTA_REQUESTS  = "10000";
 process.env.DAILY_QUOTA_BYTES     = "104857600";
+// Item 6 — endpoint público anônimo: limites pequenos de propósito para
+// poder exercitar rate-limit/cota dentro de um único teste determinístico.
+process.env.PUBLIC_MAX_BYTES_PER_REQUEST        = "4096";
+process.env.PUBLIC_RATE_LIMIT_PER_IP_PER_MINUTE = "20";
+process.env.PUBLIC_DAILY_QUOTA_REQUESTS_PER_IP  = "1000";
+process.env.PUBLIC_DAILY_QUOTA_BYTES_PER_IP     = "1048576";
 
 const request = require("supertest");
 const { app, db } = require("../server");
@@ -384,5 +390,71 @@ describe("Rotação e revogação de token", () => {
   test("token revogado é rejeitado", async () => {
     const res = await request(app).get("/v1/me/token").set("Authorization", `Bearer ${rotatedToken}`);
     assert.equal(res.status, 401);
+  });
+});
+
+// ─── Item 6 da auditoria — GET /v1/public/random (endpoint público, sem token) ─
+describe("GET /v1/public/random — acesso anônimo controlado (item 6)", () => {
+  test("funciona SEM nenhum header Authorization (é anônimo por design)", async () => {
+    const res = await request(app).get("/v1/public/random?bytes=32");
+    assert.ok([200, 502, 503].includes(res.status), `status inesperado: ${res.status}`);
+    assert.ok(res.body.request_id, "deve ter request_id no corpo");
+    assert.ok(res.body.request_id.startsWith("req_"));
+  });
+
+  test("nunca expõe rotas internas/admin no mesmo caminho -- só a rota específica existe", async () => {
+    // Não é um teste de nginx (isso é responsabilidade da config de proxy em
+    // staging), mas confirma que o Express em si não registrou nada do tipo
+    // /v1/public/admin/* ou similar -- só /v1/public/random.
+    const res = await request(app).get("/v1/public/admin/tokens");
+    assert.equal(res.status, 404);
+  });
+
+  test("resposta inclui Cache-Control: no-store", async () => {
+    const res = await request(app).get("/v1/public/random?bytes=32");
+    assert.equal(res.headers["cache-control"], "no-store");
+  });
+
+  test("resposta inclui X-Request-Id como header, não só no corpo", async () => {
+    const res = await request(app).get("/v1/public/random?bytes=32");
+    assert.ok(res.headers["x-request-id"]);
+    assert.equal(res.headers["x-request-id"], res.body.request_id);
+  });
+
+  test("bytes acima de PUBLIC_MAX_BYTES_PER_REQUEST (4096 no teste) retorna 413, distinto do limite de /v1/random", async () => {
+    const res = await request(app).get("/v1/public/random?bytes=5000");
+    assert.equal(res.status, 413);
+    assert.equal(res.body.error, "REQUEST_TOO_LARGE");
+    assert.equal(res.body.max_bytes_per_request, 4096);
+  });
+
+  test("bytes inválidos retorna 422 INVALID_BYTES", async () => {
+    const res = await request(app).get("/v1/public/random?bytes=abc");
+    assert.equal(res.status, 422);
+    assert.equal(res.body.error, "INVALID_BYTES");
+  });
+
+  test("format inválido retorna 422 INVALID_FORMAT", async () => {
+    const res = await request(app).get("/v1/public/random?bytes=32&format=base58");
+    assert.equal(res.status, 422);
+    assert.equal(res.body.error, "INVALID_FORMAT");
+  });
+
+  // PUBLIC_RATE_LIMIT_PER_IP_PER_MINUTE=20 no ambiente de teste -- supertest
+  // usa o mesmo IP de loopback em todas as chamadas desta suíte inteira, e
+  // os testes anteriores já consumiram algumas requisições da mesma janela
+  // de 60s. Em vez de contar exatamente quantas (frágil, acopla o teste à
+  // ordem exata dos testes anteriores), repete até observar especificamente
+  // RATE_LIMIT_EXCEEDED (não apenas qualquer 429 -- cota diária também
+  // retorna 429, com um error code diferente), com um teto de segurança.
+  test("excede o rate limit por IP (limite=20/min) e retorna 429 RATE_LIMIT_EXCEEDED", async () => {
+    let last;
+    let limited = false;
+    for (let i = 0; i < 40 && !limited; i++) {
+      last = await request(app).get("/v1/public/random?bytes=1&format=hex");
+      if (last.status === 429 && last.body.error === "RATE_LIMIT_EXCEEDED") limited = true;
+    }
+    assert.ok(limited, "deveria ter sido rate-limited (RATE_LIMIT_EXCEEDED) em até 40 tentativas");
+    assert.ok(last.body.message.includes("token pessoal"), "deve apontar para /v1/random como alternativa com cota maior");
   });
 });

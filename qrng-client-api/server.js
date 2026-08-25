@@ -202,6 +202,13 @@ const metricsCounters = {
   rate_limited_total:         0,
   quota_requests_exceeded:    0,
   quota_bytes_exceeded:       0,
+  // Item 6 da auditoria — endpoint público anônimo: contadores separados dos
+  // acima (que só cobrem /v1/random autenticado), para observabilidade
+  // independente do tráfego sem token.
+  public_requests_total:            0,
+  public_rate_limited_total:        0,
+  public_quota_requests_exceeded:   0,
+  public_quota_bytes_exceeded:      0,
 };
 
 // ── Rate limiting — por token (in-memory) ─────────────────────────────────────
@@ -1202,6 +1209,247 @@ app.get("/v1/random", attachRequestId, requireToken, checkTokenRate, parseBytes,
   }
 });
 
+// ── GET /v1/public/random — endpoint público anônimo (item 6 da auditoria) ────
+//
+// STAGING ONLY até autorização explícita de produção (ver relatório da
+// auditoria). Este endpoint existe para substituir o bypass direto do Nginx
+// para o broker QRNG (proxy_pass para 127.0.0.1:18001 em nginx.conf, sem
+// nenhuma autenticação/rate-limit/cota) por um caminho controlado dentro
+// desta API: rate limit por IP dedicado (mais restrito que o limite global
+// de RATE_LIMIT_PER_IP_MIN acima), cota diária por IP (mais restrita que a
+// cota por token), tamanho máximo por requisição menor, Cache-Control:
+// no-store, request_id em corpo E header, e log/métricas próprios. Usuários
+// autenticados continuam usando /v1/random (token pessoal) para cotas
+// maiores -- este endpoint nunca eleva privilégio, só abre um caminho mais
+// estreito para acesso sem conta.
+//
+// Nginx deve apontar o caminho público EXCLUSIVAMENTE para esta rota, nunca
+// para o app inteiro -- isso é o que efetivamente "bloqueia rotas internas"
+// (admin/auth/tokens/me/upstream-status continuam inacessíveis a quem entra
+// por esse caminho, porque o proxy nunca encaminha para elas).
+
+const PUBLIC_MAX_BYTES_PER_REQUEST   = parseInt(process.env.PUBLIC_MAX_BYTES_PER_REQUEST        || "65536", 10);            // 64 KiB
+const PUBLIC_RATE_LIMIT_PER_IP_MIN   = parseInt(process.env.PUBLIC_RATE_LIMIT_PER_IP_PER_MINUTE  || "20", 10);
+const PUBLIC_DAILY_QUOTA_REQUESTS_IP = parseInt(process.env.PUBLIC_DAILY_QUOTA_REQUESTS_PER_IP   || "500", 10);
+const PUBLIC_DAILY_QUOTA_BYTES_IP    = parseInt(process.env.PUBLIC_DAILY_QUOTA_BYTES_PER_IP      || String(10 * 1024 * 1024), 10); // 10 MiB
+
+const publicIpRateLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: PUBLIC_RATE_LIMIT_PER_IP_MIN,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    metricsCounters.public_rate_limited_total++;
+    res.status(429).json({
+      request_id: req.requestId,
+      error: "RATE_LIMIT_EXCEEDED",
+      message: `Limite de ${PUBLIC_RATE_LIMIT_PER_IP_MIN} req/min por IP neste endpoint público. Para limites maiores, crie uma conta e use um token pessoal em /v1/random.`,
+    });
+  },
+});
+
+// Cota diária por IP, em memória (reseta em restart -- aceitável para uma
+// cota de acesso anônimo, ao contrário da cota por token que é persistida
+// em SQLite). Limpa entradas de dias anteriores periodicamente para não
+// crescer sem limite com IPs distintos ao longo do tempo.
+const publicIpDailyUsage = new Map(); // ip → { date, requests, bytes }
+
+setInterval(() => {
+  const today = new Date().toISOString().slice(0, 10);
+  for (const [ip, entry] of publicIpDailyUsage) {
+    if (entry.date !== today) publicIpDailyUsage.delete(ip);
+  }
+}, 60 * 60 * 1000).unref();
+
+function checkPublicQuota(req, res, next) {
+  const ip    = req.ip || req.socket.remoteAddress;
+  const today = new Date().toISOString().slice(0, 10);
+  let entry = publicIpDailyUsage.get(ip);
+  if (!entry || entry.date !== today) {
+    entry = { date: today, requests: 0, bytes: 0 };
+    publicIpDailyUsage.set(ip, entry);
+  }
+
+  if (entry.requests >= PUBLIC_DAILY_QUOTA_REQUESTS_IP) {
+    metricsCounters.public_quota_requests_exceeded++;
+    return res.status(429).json({
+      request_id: req.requestId,
+      error: "QUOTA_EXCEEDED",
+      message: `Cota diária pública de ${PUBLIC_DAILY_QUOTA_REQUESTS_IP} requests por IP atingida. Resetará à meia-noite UTC. Para cotas maiores, crie uma conta e use um token pessoal em /v1/random.`,
+      quota_daily_requests: PUBLIC_DAILY_QUOTA_REQUESTS_IP,
+      requests_today: entry.requests,
+    });
+  }
+
+  const requestedBytes = req.requestedBytes || 0;
+  if (requestedBytes > 0 && entry.bytes + requestedBytes > PUBLIC_DAILY_QUOTA_BYTES_IP) {
+    metricsCounters.public_quota_bytes_exceeded++;
+    return res.status(429).json({
+      request_id: req.requestId,
+      error: "QUOTA_BYTES_EXCEEDED",
+      message: `Cota diária pública de ${PUBLIC_DAILY_QUOTA_BYTES_IP} bytes por IP atingida. Resetará à meia-noite UTC. Para cotas maiores, crie uma conta e use um token pessoal em /v1/random.`,
+      quota_daily_bytes: PUBLIC_DAILY_QUOTA_BYTES_IP,
+      bytes_today: entry.bytes,
+      bytes_requested: requestedBytes,
+    });
+  }
+
+  next();
+}
+
+function recordPublicUsage(ip, bytesRequested) {
+  const entry = publicIpDailyUsage.get(ip);
+  if (!entry) return; // checkPublicQuota sempre roda antes e cria a entrada
+  entry.requests++;
+  entry.bytes += bytesRequested;
+}
+
+function parsePublicBytes(req, res, next) {
+  const raw = req.query.bytes;
+  if (raw === undefined) { req.requestedBytes = 32; return next(); }
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1) {
+    return res.status(422).json({
+      request_id: req.requestId,
+      error: "INVALID_BYTES",
+      message: "bytes must be a positive integer",
+    });
+  }
+  if (n > PUBLIC_MAX_BYTES_PER_REQUEST) {
+    return res.status(413).json({
+      request_id: req.requestId,
+      error: "REQUEST_TOO_LARGE",
+      message: `Endpoint público: máximo de ${PUBLIC_MAX_BYTES_PER_REQUEST} bytes por requisição. Para lotes maiores, use um token pessoal em /v1/random (limite ${MAX_BYTES_PER_REQUEST} bytes).`,
+      max_bytes_per_request: PUBLIC_MAX_BYTES_PER_REQUEST,
+    });
+  }
+  req.requestedBytes = n;
+  next();
+}
+
+/**
+ * @openapi
+ * /public/random:
+ *   get:
+ *     tags: [Random]
+ *     summary: Gera bytes aleatórios da fonte QRNG sem autenticação (acesso público, cota reduzida).
+ *     description: >
+ *       Mesma fonte física de /random (FPGA Red Pitaya via broker QRNG, uint32-LE,
+ *       sem conditioning) -- ver descrição completa em /random. Este caminho NÃO
+ *       exige token, mas aplica limites bem mais restritos por IP (rate limit,
+ *       cota diária de requisições e bytes, tamanho máximo por requisição). Para
+ *       cotas maiores, crie uma conta e use um token pessoal em /random.
+ *       Resposta sempre com Cache-Control: no-store (nunca cacheie entropia).
+ *     parameters:
+ *       - name: bytes
+ *         in: query
+ *         schema: { type: integer, minimum: 1, default: 32 }
+ *         description: Quantidade de bytes a gerar. Limite por requisição = PUBLIC_MAX_BYTES_PER_REQUEST (padrão 64 KiB).
+ *       - name: format
+ *         in: query
+ *         schema: { type: string, enum: [hex, base64, uint8] }
+ *         description: hex (padrão), base64, ou uint8 (array JSON de inteiros 0-255).
+ *     responses:
+ *       200:
+ *         description: Bytes gerados.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/RandomResponse' } } }
+ *       413:
+ *         description: bytes acima de PUBLIC_MAX_BYTES_PER_REQUEST.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       422:
+ *         description: bytes ou format inválidos.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       429:
+ *         description: Rate limit por IP OU cota diária pública (requests/bytes) excedida.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       502:
+ *         description: Upstream retornou erro ou formato inesperado -- ver interpretUpstreamResponse().
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       503:
+ *         description: Upstream indisponível, timeout, ou entropia insuficiente no buffer.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ */
+app.get("/v1/public/random", attachRequestId, publicIpRateLimiter, parsePublicBytes, checkPublicQuota, async (req, res) => {
+  const bytes     = req.requestedBytes;
+  const format    = req.query.format || "hex";
+  const ip        = req.ip || req.socket.remoteAddress;
+  const ua        = req.headers["user-agent"];
+  const requestId = req.requestId;
+  const t0        = Date.now();
+
+  // Nunca cacheável -- e o request_id vai como header também, não só no
+  // corpo, para permitir correlação em qualquer camada intermediária
+  // (proxy/CDN) sem precisar decodificar o corpo da resposta.
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Request-Id", requestId);
+
+  if (!["hex", "base64", "uint8"].includes(format)) {
+    recordPublicUsage(ip, 0);
+    return res.status(422).json({ request_id: requestId, error: "INVALID_FORMAT", message: "Use format=hex, base64 ou uint8" });
+  }
+
+  try {
+    const upBytes = Math.min(bytes * 20, PUBLIC_MAX_BYTES_PER_REQUEST * 20);
+    const r = await fetchWithTimeout(`${QRNG_UPSTREAM}/random?bytes=${upBytes}`, QRNG_TIMEOUT_MS);
+
+    if (!r.ok) {
+      // token_id NULL agrega todo o tráfego público anônimo numa única linha
+      // de daily_usage (esperado -- a cota real deste caminho é aplicada por
+      // IP via publicIpDailyUsage acima, não por essa tabela).
+      logRequest(requestId, null, "/v1/public/random", bytes, format, 502, ip, ua, Date.now() - t0);
+      recordPublicUsage(ip, bytes);
+      return res.status(502).json({ request_id: requestId, error: "UPSTREAM_ERROR", status: r.status });
+    }
+
+    const contentType         = r.headers.get("content-type");
+    const contentLengthHeader = r.headers.get("content-length");
+    const rawBuffer           = await r.buffer();
+
+    if (contentLengthHeader !== null && Number(contentLengthHeader) !== rawBuffer.length) {
+      logRequest(requestId, null, "/v1/public/random", bytes, format, 502, ip, ua, Date.now() - t0);
+      recordPublicUsage(ip, bytes);
+      return res.status(502).json({
+        request_id: requestId,
+        error: "UPSTREAM_LENGTH_MISMATCH",
+        message: `Content-Length declarado (${contentLengthHeader}) não bate com bytes efetivamente recebidos (${rawBuffer.length}).`,
+      });
+    }
+
+    let buf;
+    try {
+      buf = interpretUpstreamResponse(contentType, rawBuffer, bytes);
+    } catch (err) {
+      if (err instanceof UpstreamFormatError) {
+        logRequest(requestId, null, "/v1/public/random", bytes, format, 502, ip, ua, Date.now() - t0);
+        recordPublicUsage(ip, bytes);
+        return res.status(502).json({ request_id: requestId, error: err.code, message: err.message });
+      }
+      throw err;
+    }
+
+    if (buf.length < bytes) {
+      logRequest(requestId, null, "/v1/public/random", bytes, format, 503, ip, ua, Date.now() - t0);
+      recordPublicUsage(ip, bytes);
+      return res.status(503).json({ request_id: requestId, error: "INSUFFICIENT_ENTROPY", available: buf.length, requested: bytes });
+    }
+    buf = buf.slice(0, bytes);
+
+    const random = format === "hex"    ? buf.toString("hex")
+                 : format === "base64" ? buf.toString("base64")
+                 : Array.from(buf);
+
+    logRequest(requestId, null, "/v1/public/random", bytes, format, 200, ip, ua, Date.now() - t0);
+    recordPublicUsage(ip, bytes);
+    metricsCounters.public_requests_total++;
+    res.json({ request_id: requestId, source: "dobslit-qrng-ufpe-fpga", bytes, format, random, timestamp: new Date().toISOString() });
+
+  } catch (err) {
+    logRequest(requestId, null, "/v1/public/random", bytes, format, 503, ip, ua, Date.now() - t0);
+    recordPublicUsage(ip, bytes);
+    res.status(503).json({ request_id: requestId, error: "QRNG_UNAVAILABLE", detail: err.message });
+  }
+});
+
 // ── Bulk jobs — stub (não implementado) ───────────────────────────────────────
 
 const BULK_NOT_IMPLEMENTED = {
@@ -1318,6 +1566,16 @@ app.get("/metrics", (req, res) => {
   const totalBytes  = byStatus.find(r => r.status_code === 200)?.b || 0;
   const totalErrors = byStatus.filter(r => r.status_code >= 400).reduce((a, r) => a + r.n, 0);
 
+  // Item 6: mesmas métricas, separadas para o endpoint público -- não somar
+  // com as de /v1/random acima, são superfícies de risco/observabilidade
+  // distintas (anônimo vs autenticado).
+  const publicByStatus = db.prepare(`
+    SELECT status_code, COUNT(*) as n, COALESCE(SUM(bytes_requested),0) as b
+    FROM api_usage_logs WHERE endpoint = '/v1/public/random' GROUP BY status_code
+  `).all();
+  const publicTotalBytes  = publicByStatus.find(r => r.status_code === 200)?.b || 0;
+  const publicTotalErrors = publicByStatus.filter(r => r.status_code >= 400).reduce((a, r) => a + r.n, 0);
+
   const p50 = db.prepare(`
     SELECT AVG(duration_ms) as v FROM (
       SELECT duration_ms FROM api_usage_logs WHERE status_code=200 AND duration_ms IS NOT NULL
@@ -1352,6 +1610,27 @@ app.get("/metrics", (req, res) => {
     "# TYPE qrng_quota_exceeded_total counter",
     `qrng_quota_exceeded_total{type="requests"} ${metricsCounters.quota_requests_exceeded}`,
     `qrng_quota_exceeded_total{type="bytes"}    ${metricsCounters.quota_bytes_exceeded}`,
+    "",
+    "# HELP qrng_public_requests_total Total requests a /v1/public/random (desde a criação do banco)",
+    "# TYPE qrng_public_requests_total counter",
+    ...publicByStatus.map(r => `qrng_public_requests_total{status="${r.status_code}"} ${r.n}`),
+    "",
+    "# HELP qrng_public_random_bytes_total Total bytes de entropia entregues via /v1/public/random (status=200)",
+    "# TYPE qrng_public_random_bytes_total counter",
+    `qrng_public_random_bytes_total ${publicTotalBytes}`,
+    "",
+    "# HELP qrng_public_errors_total Total erros registrados em /v1/public/random",
+    "# TYPE qrng_public_errors_total counter",
+    `qrng_public_errors_total ${publicTotalErrors}`,
+    "",
+    "# HELP qrng_public_rate_limited_total Eventos de rate limit no endpoint público desde o último restart",
+    "# TYPE qrng_public_rate_limited_total counter",
+    `qrng_public_rate_limited_total ${metricsCounters.public_rate_limited_total}`,
+    "",
+    "# HELP qrng_public_quota_exceeded_total Eventos de cota pública por IP esgotada desde o último restart",
+    "# TYPE qrng_public_quota_exceeded_total counter",
+    `qrng_public_quota_exceeded_total{type="requests"} ${metricsCounters.public_quota_requests_exceeded}`,
+    `qrng_public_quota_exceeded_total{type="bytes"}    ${metricsCounters.public_quota_bytes_exceeded}`,
     "",
     "# HELP qrng_upstream_status 1=up, 0=down, -1=unknown",
     "# TYPE qrng_upstream_status gauge",
