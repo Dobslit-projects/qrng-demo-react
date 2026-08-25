@@ -127,6 +127,16 @@ export function bytesToUint32Array(bytes) {
 export function uint32ToFloat(n) { return n / 4294967296; }
 
 /**
+ * Transforma um float uniforme U em [0,1) (ver uint32ToFloat) em uma amostra
+ * de distribuição exponencial de média `mean`, via método da transformada
+ * inversa: X = -mean * ln(1 - U). U nunca é exatamente 1 (uint32ToFloat de
+ * 0xFFFFFFFF = 0.9999999997671694 < 1), então ln(1 - U) é sempre finito.
+ */
+export function exponentialFromUniform(u, mean) {
+  return -mean * Math.log(1 - u);
+}
+
+/**
  * Normaliza bytes para [0,1) dividindo por 255 -- uma quantização DISCRETA
  * de apenas 256 níveis, não um float contínuo. Não é o mesmo método usado
  * pelo Monte Carlo real (uint32 ÷ 2^32, resolução ~2,3×10⁻¹⁰ -- ver

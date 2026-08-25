@@ -5,6 +5,9 @@ import {
   uniformIntsFromBytes,
   bytesToDiscreteFloats,
   generateQrngSequence,
+  bytesToUint32Array,
+  uint32ToFloat,
+  exponentialFromUniform,
 } from "./qrngHelper";
 
 /**
@@ -124,5 +127,104 @@ describe("generateQrngSequence — sem fallback silencioso em caso de erro", () 
     expect(result.source).toBe("pre-collected");
     expect(result.values.length).toBe(5);
     expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Item 5 da auditoria: contrato Monte Carlo U = uint32 / 2^32, 0 <= U < 1.
+ * DataSection.jsx (genMonteCarlo) e ApplicationsSection.jsx (Monte Carlo π)
+ * já usam bytesToUint32Array + uint32ToFloat -- exatamente o que é testado
+ * aqui. Fixtures obrigatórias da auditoria + guarda de regressão do bug
+ * histórico em que os floats ficavam concentrados entre ~0,188 e ~0,224
+ * (causado por um método de conversão diferente e enviesado, não pelo
+ * uint32/2^32 usado hoje).
+ */
+describe("Monte Carlo — uint32ToFloat (U = uint32 / 2^32)", () => {
+  it("fixture: 00 00 00 00 -> 0", () => {
+    const [u32] = bytesToUint32Array(new Uint8Array([0x00, 0x00, 0x00, 0x00]));
+    expect(uint32ToFloat(u32)).toBe(0);
+  });
+
+  it("fixture: 80 00 00 00 -> 0.5", () => {
+    const [u32] = bytesToUint32Array(new Uint8Array([0x80, 0x00, 0x00, 0x00]));
+    expect(uint32ToFloat(u32)).toBe(0.5);
+  });
+
+  it("fixture: FF FF FF FF -> 0.9999999997671694 (nunca exatamente 1)", () => {
+    const [u32] = bytesToUint32Array(new Uint8Array([0xff, 0xff, 0xff, 0xff]));
+    const f = uint32ToFloat(u32);
+    expect(f).toBe(0.9999999997671694);
+    expect(f).toBeLessThan(1);
+  });
+
+  it("nenhum valor de uint32 produz exatamente 1", () => {
+    const candidates = [0, 1, 2 ** 31, 2 ** 32 - 2, 2 ** 32 - 1];
+    for (const n of candidates) {
+      expect(uint32ToFloat(n >>> 0)).toBeLessThan(1);
+    }
+  });
+
+  it("0 é um valor permitido (não é excluído/rejeitado)", () => {
+    expect(uint32ToFloat(0)).toBe(0);
+  });
+
+  it("regressão: bytes variados cobrem [0,1) por inteiro, sem concentração em ~0,188-0,224", () => {
+    // 64 uint32 espaçados uniformemente por todo o espaço de 32 bits --
+    // simula uma amostra QRNG bem distribuída. O bug histórico (byte/255
+    // ou outro método enviesado) concentrava os floats numa faixa estreita;
+    // uint32/2^32 aplicado a uma entrada bem distribuída deve produzir uma
+    // saída que cobre quase todo [0,1).
+    const bytes = new Uint8Array(64 * 4);
+    for (let i = 0; i < 64; i++) {
+      const n = Math.floor((i / 64) * 4294967296);
+      bytes[i * 4]     = (n >>> 24) & 0xff;
+      bytes[i * 4 + 1] = (n >>> 16) & 0xff;
+      bytes[i * 4 + 2] = (n >>> 8) & 0xff;
+      bytes[i * 4 + 3] = n & 0xff;
+    }
+    const floats = bytesToUint32Array(bytes).map(uint32ToFloat);
+    const min = Math.min(...floats);
+    const max = Math.max(...floats);
+    expect(min).toBeLessThan(0.05);
+    expect(max).toBeGreaterThan(0.95);
+    // Nenhum valor cai preso na faixa estreita do bug antigo enquanto o
+    // restante da amostra está fora dela.
+    const stuckInOldBugRange = floats.filter((f) => f >= 0.188 && f <= 0.224).length;
+    expect(stuckInOldBugRange).toBeLessThan(floats.length * 0.2);
+  });
+});
+
+describe("exponentialFromUniform — transformada inversa (X = -mean * ln(1 - U))", () => {
+  it("todos os resultados são finitos, mesmo para U próximo de 1", () => {
+    const uMax = uint32ToFloat(0xffffffff); // 0.9999999997671694, nunca 1
+    const x = exponentialFromUniform(uMax, 5);
+    expect(Number.isFinite(x)).toBe(true);
+  });
+
+  it("U=0 produz X=0 (numericamente; JS retorna -0, equivalente a 0)", () => {
+    expect(exponentialFromUniform(0, 5)).toBe(-0); // -mean * ln(1) = -mean * 0 = -0
+    expect(exponentialFromUniform(0, 5) == 0).toBe(true); // -0 == 0
+  });
+
+  it("é monotonicamente crescente em U (mapeamento correto da transformada inversa)", () => {
+    const a = exponentialFromUniform(0.1, 5);
+    const b = exponentialFromUniform(0.5, 5);
+    const c = exponentialFromUniform(0.9, 5);
+    expect(a).toBeLessThan(b);
+    expect(b).toBeLessThan(c);
+  });
+
+  it("média amostral de uma amostra uniforme sintética grande fica próxima de `mean`", () => {
+    // U uniforme sintético em (0,1) via 2000 pontos espaçados -- não é RNG
+    // real, mas basta para verificar a matemática da transformada.
+    const n = 2000;
+    let sum = 0;
+    for (let i = 1; i < n; i++) {
+      const u = i / n; // (0,1), evita u=0 e u=1 exatos
+      sum += exponentialFromUniform(u, 5);
+    }
+    const sampleMean = sum / (n - 1);
+    expect(sampleMean).toBeGreaterThan(4.5);
+    expect(sampleMean).toBeLessThan(5.5);
   });
 });
