@@ -4,10 +4,10 @@
 # o comando novamente. O CI falha se este arquivo divergir do gerado.
 openapi: 3.0.3
 info:
-  title: Kuapoã QRNG — API Pública
+  title: Kapuã QRNG — API Pública
   version: 1.0.0
   description: >-
-    API pública do gerador quântico de números aleatórios (QRNG) do Kuapoã/Dobslit. Fonte física:
+    API pública do gerador quântico de números aleatórios (QRNG) do Kapuã/Dobslit. Fonte física:
     FPGA Red Pitaya, stream uint32 little-endian, sem conditioning (confirmado no código-fonte do
     pipeline físico). Bytes brutos são servidos sem processamento adicional; a avaliação de
     min-entropia é feita separadamente pela suíte NIST SP 800-90B (ver aba Teste NIST / /qrng/nist/

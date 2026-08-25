@@ -5,7 +5,7 @@
 # ATENÇÃO: documenta rotas administrativas (role=admin). Não publique este arquivo num caminho anônimo.
 openapi: 3.0.3
 info:
-  title: Kuapoã QRNG — API Administrativa Interna
+  title: Kapuã QRNG — API Administrativa Interna
   version: 1.0.0
   description: >-
     Documentação da API administrativa (role=admin). NÃO É pública -- requer sessão JWT com

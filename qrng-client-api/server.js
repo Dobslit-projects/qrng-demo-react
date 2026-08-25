@@ -12,6 +12,22 @@ const Database   = require("better-sqlite3");
 const path       = require("path");
 
 const app = express();
+
+// Item 10 da rodada de estabilizacao (2026-08-26): sem isto, req.ip do
+// Express sempre resolvia para 127.0.0.1 -- nginx roda no mesmo host e
+// conecta via loopback (network_mode host), e sem "trust proxy" o Express
+// ignora X-Forwarded-For/X-Real-IP e usa o socket de conexao direta, que
+// é sempre o nginx local. Na prática, TODO rate limit e cota por IP
+// (RATE_LIMIT_PER_IP_MIN, publicIpRateLimiter, publicIpDailyUsage) estava
+// compartilhando um unico balde "127.0.0.1" entre todos os clientes reais
+// -- nao isolamento por cliente, e um cliente abusivo esgotava a cota de
+// todo mundo. "loopback" confia em X-Forwarded-For/X-Real-IP apenas
+// quando a conexao direta vem de 127.0.0.1/::1 (exatamente o nginx local
+// deste deploy) -- um cliente externo nao consegue falsificar o cabecalho
+// para pular essa checagem, porque a conexao dele nunca chega direto do
+// loopback.
+app.set("trust proxy", "loopback");
+
 app.use(express.json());
 
 // ── Configuração ──────────────────────────────────────────────────────────────
@@ -172,14 +188,14 @@ const internalAdminOpenapiSpec = buildInternalAdminSpec();
 app.get("/v1/openapi.json", (_req, res) => res.json(publicOpenapiSpec));
 
 app.use("/v1/docs", swaggerUi.serve, swaggerUi.setup(publicOpenapiSpec, {
-  customSiteTitle: "Kuapoã QRNG API — Docs",
+  customSiteTitle: "Kapuã QRNG API — Docs",
 }));
 
 app.get("/v1/redoc", (_req, res) => {
   res.type("html").send(`<!doctype html>
 <html>
   <head>
-    <title>Kuapoã QRNG API — ReDoc</title>
+    <title>Kapuã QRNG API — ReDoc</title>
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1">
   </head>
@@ -210,7 +226,7 @@ app.get("/v1/internal/admin-openapi.json", requireAuth, requireAdmin, (_req, res
 });
 
 app.use("/v1/internal/docs", requireAuth, requireAdmin, swaggerUi.serve, swaggerUi.setup(internalAdminOpenapiSpec, {
-  customSiteTitle: "Kuapoã QRNG API — Docs Internas (Admin)",
+  customSiteTitle: "Kapuã QRNG API — Docs Internas (Admin)",
 }));
 
 // ── Rate limiting — global por IP ─────────────────────────────────────────────

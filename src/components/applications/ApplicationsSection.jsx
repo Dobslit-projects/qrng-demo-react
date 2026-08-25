@@ -39,7 +39,7 @@ function SourceBadge({ source, latencyMs }) {
   if (!source && !latencyMs) return null;
   return (
     <span style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>
-      {source ? `⚛ ${source}` : "⚛ Kuapoã QRNG"}
+      {source ? `⚛ ${source}` : "⚛ Kapuã QRNG"}
       {latencyMs != null ? ` · ${latencyMs}ms` : ""}
     </span>
   );
@@ -110,15 +110,28 @@ function KeyCard({ onGoLogin, source }) {
 
   const stopAnim = () => { clearInterval(animRef.current); animRef.current = null; };
 
-  // Auditoria item 4/7: geração de chaves nunca pode usar o buffer
-  // pré-coletado (finito, 10.000 bytes, sem wraparound, sem proveniência
-  // criptográfica registrada -- ver qrngFallbackData.js) como se fosse
-  // entropia ao vivo do hardware.
-  const blockedByFallback = source === "pre-collected";
+  // Rodada de estabilização (2026-08-26), item 8: geração operacional de
+  // chaves desabilitada em QUALQUER fonte (não só o fallback pré-coletado
+  // do item 4/7) até que a fonte física tenha: unidade de amostra
+  // formalmente definida (feito -- uint32-LE, 4 bytes, ver docs), restart
+  // campaign concluída (BLOQUEADO -- exigiria 1.000 reinicializações
+  // controladas da FPGA, não realizado nesta rodada), e health tests
+  // (RCT/APT) operacionais (NÃO IMPLEMENTADO -- thresholds calculados,
+  // ver relatório). Duas capturas independentes de 1.000.000 de amostras
+  // (2026-08-25) mostraram min-entropia estimada (SP 800-90B, faixa
+  // não-IID, a mais conservadora) entre 6,98 e 7,33 bits/byte -- real e
+  // mensurável, abaixo de 8 -- em todas as 4 byte lanes. Isso não significa
+  // que a fonte não tem entropia suficiente para uso criptográfico; significa
+  // que essa afirmação ainda não foi validada o bastante para apresentar
+  // como material operacional. Ver seção 8 do pedido: "o fallback nunca
+  // pode alimentar geração criptográfica operacional" também se aplica
+  // à fonte ao vivo enquanto a validação estiver incompleta.
+  const blockedOperational = true;
+  const blockedByFallback = blockedOperational || source === "pre-collected";
 
   const generate = async () => {
     if (blockedByFallback) {
-      setErr("Geração de chaves bloqueada na fonte Fallback Local — troque para uma fonte QRNG ao vivo em Configurações.");
+      setErr("Geração operacional de chaves temporariamente desabilitada — a fonte QRNG ainda está em validação estatística (restart campaign e health tests SP 800-90B pendentes). Ver documentação técnica.");
       return;
     }
     setBusy(true); setErr(""); setMeta(null); setHex("");
@@ -156,13 +169,13 @@ function KeyCard({ onGoLogin, source }) {
         </div>
       </div>
       <p style={{ margin: 0, fontSize: 12, color: theme.textDim, fontFamily: sans }}>
-        Gere chaves e sementes criptográficas a partir de entropia física fornecida pelo Kuapoã.
+        Gere chaves e sementes criptográficas a partir de entropia física fornecida pelo Kapuã.
       </p>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         {keyPresets.map(p => <SizeBtn key={p.bytes} label={p.label} active={size === p.bytes} onClick={() => { setSize(p.bytes); setHex(""); setMeta(null); }} />)}
       </div>
       <Btn onClick={generate} color={theme.quantum} disabled={busy || blockedByFallback}>{busy ? "Gerando..." : "Gerar chave quântica"}</Btn>
-      {blockedByFallback && <ErrMsg msg="MODO DEMONSTRAÇÃO — geração de chaves indisponível com dados pré-coletados." />}
+      {blockedByFallback && <ErrMsg msg="GERAÇÃO OPERACIONAL DESABILITADA — validação estatística da fonte (restart campaign, health tests SP 800-90B) ainda pendente." />}
       <HexBox hex={hex} placeholder="Selecione o tamanho e clique em Gerar..." />
       <ErrMsg msg={err} />
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -182,15 +195,15 @@ function AISeedCard({ onGoLogin, source }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
-  // Auditoria item 4/7: card afirma "seeds baseadas em entropia física" --
-  // isso é falso durante fallback (buffer pré-coletado finito, 10.000
-  // bytes, sem proveniência registrada), então bloqueamos em vez de servir
-  // a alegação incorreta.
-  const blockedByFallback = source === "pre-collected";
+  // Rodada de estabilização (2026-08-26), item 8: mesmo motivo do
+  // KeyCard acima -- geração operacional desabilitada em qualquer fonte
+  // até restart campaign + health tests SP 800-90B da fonte física.
+  const blockedOperational = true;
+  const blockedByFallback = blockedOperational || source === "pre-collected";
 
   const generate = async () => {
     if (blockedByFallback) {
-      setErr("Geração de seed bloqueada na fonte Fallback Local — troque para uma fonte QRNG ao vivo em Configurações.");
+      setErr("Geração operacional de seed temporariamente desabilitada — a fonte QRNG ainda está em validação estatística (restart campaign e health tests SP 800-90B pendentes). Ver documentação técnica.");
       return;
     }
     setBusy(true); setErr(""); setResult(null);
@@ -217,10 +230,10 @@ function AISeedCard({ onGoLogin, source }) {
       </div>
       <p style={{ margin: 0, fontSize: 12, color: theme.textDim, fontFamily: sans }}>
         Modelos de IA usam aleatoriedade em inicialização de pesos, divisão de datasets e experimentos.
-        O Kuapoã fornece seeds baseadas em entropia física para experimentos mais robustos e reprodutíveis.
+        O Kapuã fornece seeds baseadas em entropia física para experimentos mais robustos e reprodutíveis.
       </p>
       <Btn onClick={generate} color={theme.quantum} disabled={busy || blockedByFallback}>{busy ? "Gerando..." : "Gerar seed para IA"}</Btn>
-      {blockedByFallback && <ErrMsg msg="MODO DEMONSTRAÇÃO — geração de seed indisponível com dados pré-coletados." />}
+      {blockedByFallback && <ErrMsg msg="GERAÇÃO OPERACIONAL DESABILITADA — validação estatística da fonte (restart campaign, health tests SP 800-90B) ainda pendente." />}
       {result && (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -332,7 +345,7 @@ function MonteCarloCard({ onGoLogin, source }) {
       </div>
       <p style={{ margin: 0, fontSize: 12, color: theme.textDim, fontFamily: sans }}>
         Estime π usando pontos gerados por entropia quântica e visualize o comportamento estatístico da amostragem.
-        Cada ponto usa 8 bytes do Kuapoã.
+        Cada ponto usa 8 bytes do Kapuã.
       </p>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         {[1000, 10000, 100000].map(n => (
@@ -383,7 +396,7 @@ function RaffleCard({ onGoLogin, source }) {
   };
 
   const voucher = result
-    ? `Sorteio Kuapoã/Dobslit | Vencedor: ${result.winner} | Participantes: ${result.total} | Timestamp: ${result.ts} | Source: ${result.meta?.source ?? "Kuapoã QRNG"} | Bytes: ${result.meta?.hex?.slice(0, 16)}... | Req: ${result.meta?.requestId ?? "n/a"}`
+    ? `Sorteio Kapuã/Dobslit | Vencedor: ${result.winner} | Participantes: ${result.total} | Timestamp: ${result.ts} | Source: ${result.meta?.source ?? "Kapuã QRNG"} | Bytes: ${result.meta?.hex?.slice(0, 16)}... | Req: ${result.meta?.requestId ?? "n/a"}`
     : "";
 
   const copyVoucher = async () => {
@@ -432,7 +445,7 @@ function RaffleCard({ onGoLogin, source }) {
             <div style={{ fontSize: 9, color: theme.textMuted, fontFamily: mono, marginBottom: 6 }}>COMPROVANTE</div>
             <div style={{ fontSize: 10, color: "#5b96cc", fontFamily: mono, lineHeight: 1.6, wordBreak: "break-all" }}>
               {`Timestamp: ${result.ts}`}<br />
-              {`Source: ${result.meta?.source ?? "Kuapoã QRNG"}`}<br />
+              {`Source: ${result.meta?.source ?? "Kapuã QRNG"}`}<br />
               {`Bytes: ${result.meta?.hex?.slice(0, 32)}...`}<br />
               {result.meta?.requestId && `Req-ID: ${result.meta.requestId}`}
             </div>
@@ -487,7 +500,7 @@ function GamesCard({ onGoLogin, source }) {
         <Badge color={theme.quantum}>QRNG</Badge>
       </div>
       <p style={{ margin: 0, fontSize: 12, color: theme.textDim, fontFamily: sans }}>
-        Experimente moeda e dado alimentados por entropia quântica. Cada resultado usa bytes do Kuapoã/backend.
+        Experimente moeda e dado alimentados por entropia quântica. Cada resultado usa bytes do Kapuã/backend.
       </p>
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
         {/* Coin */}
@@ -613,7 +626,7 @@ function RandomWalkCard({ onGoLogin, source }) {
         <Badge color={theme.quantum}>QRNG</Badge>
       </div>
       <p style={{ margin: 0, fontSize: 12, color: theme.textDim, fontFamily: sans }}>
-        Cada passo usa 2 bits do Kuapoã: 00=cima, 01=baixo, 10=esquerda, 11=direita.
+        Cada passo usa 2 bits do Kapuã: 00=cima, 01=baixo, 10=esquerda, 11=direita.
         Verde = início · Vermelho = posição final.
       </p>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -726,9 +739,9 @@ export default function ApplicationsSection() {
 
         {/* Intro */}
         <div style={{ ...card, background: "linear-gradient(135deg, #0a1628, #0d1f3c)", border: `1px solid ${theme.quantum}25` }}>
-          <div style={{ fontSize: 18, fontWeight: 800, fontFamily: grotesk, color: "#fff" }}>Aplicações Kuapoã</div>
+          <div style={{ fontSize: 18, fontWeight: 800, fontFamily: grotesk, color: "#fff" }}>Aplicações Kapuã</div>
           <p style={{ margin: 0, fontSize: 13, color: "#aac4e8", lineHeight: 1.75, fontFamily: sans }}>
-            Explore demonstrações práticas da aleatoriedade quântica do Kuapoã. Todas as aplicações
+            Explore demonstrações práticas da aleatoriedade quântica do Kapuã. Todas as aplicações
             usam bytes fornecidos pelo QRNG/backend da Dobslit — incluindo o fallback interno quando a
             FPGA não estiver disponível. Nenhuma aplicação usa serviços externos de aleatoriedade.
           </p>

@@ -450,7 +450,7 @@ const FEATURE_CARDS = [
 /* ── Helper: source display text ──────────────────────────────────────────── */
 
 function sourceLabel(source) {
-  if (!source) return "Kuapoã QRNG";
+  if (!source) return "Kapuã QRNG";
   const s = source.toLowerCase();
   if (s.includes("fpga") || s.includes("hardware")) return "FPGA/Hardware";
   if (s.includes("fallback")) return "Fallback interno";
@@ -614,14 +614,14 @@ export default function KapuaSection() {
               {/* Title */}
               <div>
                 <h1 style={{ margin: 0, fontSize: 44, fontWeight: 800, fontFamily: sans,
-                  color: "#fff", letterSpacing: "-0.02em", lineHeight: 1.1 }}>Kuapoã</h1>
+                  color: "#fff", letterSpacing: "-0.02em", lineHeight: 1.1 }}>Kapuã</h1>
                 <div style={{ fontSize: 12, color: theme.quantum, fontFamily: mono,
                   fontWeight: 600, marginTop: 4 }}>Gerador Quântico de Números Aleatórios</div>
               </div>
 
               {/* Description */}
               <p style={{ margin: 0, fontSize: 13, color: "#8aaecc", lineHeight: 1.75, fontFamily: sans }}>
-                O Kuapoã é o sistema de geração de números aleatórios quânticos da Dobslit.
+                O Kapuã é o sistema de geração de números aleatórios quânticos da Dobslit.
                 Ele utiliza uma fonte física quântica, aquisição em hardware e processamento
                 dedicado para gerar entropia real para criptografia, simulações, autenticação,
                 pesquisa e testes estatísticos.
