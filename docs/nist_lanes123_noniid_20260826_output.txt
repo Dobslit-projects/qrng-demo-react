@@ -1,0 +1,18 @@
+=== lane1 ===
+Running Predictor Estimates...
+
+H_original: 7.353758
+H_bitstring: 0.914040
+min(H_original, 8 X H_bitstring): 7.312323
+=== lane2 ===
+Running Predictor Estimates...
+
+H_original: 7.353758
+H_bitstring: 0.916441
+min(H_original, 8 X H_bitstring): 7.331528
+=== lane3 ===
+Running Predictor Estimates...
+
+H_original: 7.871651
+H_bitstring: 0.897865
+min(H_original, 8 X H_bitstring): 7.182924

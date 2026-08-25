@@ -1,0 +1,223 @@
+
+======================================================================
+CAPTURA: Captura A (2026-08-25T14:04:59Z) (fresh_sample.bin)
+======================================================================
+bytes=4000000 palavras_uint32=1000000 sha256=9c7ec2803b1b9507407cb105de85f2174d739f2da48f6f292ae8883d20b92495
+
+-- Byte lanes (posicoes 0=LSB..3=MSB dentro da palavra) --
+lane0: mean=126.716(esp 127.5) var=5457.96(esp 5461.25) H_shannon=7.9996/8 H_min_empirico=7.9263/8 chi2=532.2 df=255 p=0.0000 <-- INVESTIGAR
+        runs(LSB): Z=-1.359 p=0.1742
+        autocorr lags1-5: [0.0002, 0.0017, 0.0005, -0.0004, 0.0003] (limiar~0.0030)
+lane1: mean=126.706(esp 127.5) var=5460.07(esp 5461.25) H_shannon=7.9996/8 H_min_empirico=7.8933/8 chi2=576.3 df=255 p=0.0000 <-- INVESTIGAR
+        runs(LSB): Z=-2.717 p=0.0066
+        autocorr lags1-5: [0.0, -0.0006, -0.0009, -0.0015, 0.0011] (limiar~0.0030)
+lane2: mean=126.731(esp 127.5) var=5461.70(esp 5461.25) H_shannon=7.9996/8 H_min_empirico=7.9165/8 chi2=577.6 df=255 p=0.0000 <-- INVESTIGAR
+        runs(LSB): Z=0.831 p=0.4062
+        autocorr lags1-5: [0.0001, 0.0, 0.0006, 0.0011, 0.0013] (limiar~0.0030)
+lane3: mean=126.643(esp 127.5) var=5451.64(esp 5461.25) H_shannon=7.9996/8 H_min_empirico=7.9130/8 chi2=573.2 df=255 p=0.0000 <-- INVESTIGAR
+        runs(LSB): Z=1.026 p=0.3047
+        autocorr lags1-5: [-0.0008, -0.0, -0.0002, 0.0003, -0.0014] (limiar~0.0030)
+
+-- Correlacao entre byte lanes (Pearson) --
+lane0 x lane1: r=0.00021
+lane0 x lane2: r=0.00115
+lane0 x lane3: r=0.00006
+lane1 x lane2: r=0.00097
+lane1 x lane3: r=-0.00051
+lane2 x lane3: r=-0.00027
+
+-- 32 posicoes de bit: proporcao de 1s, teste binomial --
+bit 0: p(1)=0.49770 Z=-4.602 p_valor=0.0000 <-- INVESTIGAR
+bit 1: p(1)=0.49866 Z=-2.688 p_valor=0.0072 <-- INVESTIGAR
+bit 2: p(1)=0.49631 Z=-7.384 p_valor=0.0000 <-- INVESTIGAR
+bit 3: p(1)=0.49672 Z=-6.560 p_valor=0.0000 <-- INVESTIGAR
+bit 4: p(1)=0.49727 Z=-5.464 p_valor=0.0000 <-- INVESTIGAR
+bit 5: p(1)=0.49703 Z=-5.936 p_valor=0.0000 <-- INVESTIGAR
+bit 6: p(1)=0.49611 Z=-7.784 p_valor=0.0000 <-- INVESTIGAR
+bit 7: p(1)=0.49726 Z=-5.478 p_valor=0.0000 <-- INVESTIGAR
+bit 8: p(1)=0.49663 Z=-6.730 p_valor=0.0000 <-- INVESTIGAR
+bit 9: p(1)=0.49686 Z=-6.286 p_valor=0.0000 <-- INVESTIGAR
+bit10: p(1)=0.49702 Z=-5.968 p_valor=0.0000 <-- INVESTIGAR
+bit11: p(1)=0.49695 Z=-6.106 p_valor=0.0000 <-- INVESTIGAR
+bit12: p(1)=0.49709 Z=-5.812 p_valor=0.0000 <-- INVESTIGAR
+bit13: p(1)=0.49707 Z=-5.860 p_valor=0.0000 <-- INVESTIGAR
+bit14: p(1)=0.49672 Z=-6.566 p_valor=0.0000 <-- INVESTIGAR
+bit15: p(1)=0.49689 Z=-6.212 p_valor=0.0000 <-- INVESTIGAR
+bit16: p(1)=0.49674 Z=-6.524 p_valor=0.0000 <-- INVESTIGAR
+bit17: p(1)=0.49678 Z=-6.440 p_valor=0.0000 <-- INVESTIGAR
+bit18: p(1)=0.49671 Z=-6.574 p_valor=0.0000 <-- INVESTIGAR
+bit19: p(1)=0.49748 Z=-5.042 p_valor=0.0000 <-- INVESTIGAR
+bit20: p(1)=0.49671 Z=-6.588 p_valor=0.0000 <-- INVESTIGAR
+bit21: p(1)=0.49656 Z=-6.872 p_valor=0.0000 <-- INVESTIGAR
+bit22: p(1)=0.49634 Z=-7.326 p_valor=0.0000 <-- INVESTIGAR
+bit23: p(1)=0.49743 Z=-5.142 p_valor=0.0000 <-- INVESTIGAR
+bit24: p(1)=0.49645 Z=-7.094 p_valor=0.0000 <-- INVESTIGAR
+bit25: p(1)=0.49702 Z=-5.958 p_valor=0.0000 <-- INVESTIGAR
+bit26: p(1)=0.49732 Z=-5.364 p_valor=0.0000 <-- INVESTIGAR
+bit27: p(1)=0.49744 Z=-5.114 p_valor=0.0000 <-- INVESTIGAR
+bit28: p(1)=0.49656 Z=-6.878 p_valor=0.0000 <-- INVESTIGAR
+bit29: p(1)=0.49640 Z=-7.194 p_valor=0.0000 <-- INVESTIGAR
+bit30: p(1)=0.49587 Z=-8.266 p_valor=0.0000 <-- INVESTIGAR
+bit31: p(1)=0.49702 Z=-5.968 p_valor=0.0000 <-- INVESTIGAR
+
+-- Distribuicao uint32 --
+min=26152 max=4294966864 media=2133050245.1 (esperado 2147483648.0)
+valores duplicados: 125 (de 1000000 amostras; esperado poucos dado o espaco 2^32)
+
+-- Monte Carlo U = uint32/2^32 --
+min=0.0000060890 max=0.9999998994 media=0.496639 esperado=0.5
+erro-padrao teorico=0.0002887  desvio observado em unidades de erro-padrao: -11.64
+exponencial(mean=10): media=9.8737 min=0.0001 max=161.1228
+
+-- Janelas temporais (10 janelas): media de U por janela --
+medias por janela: [0.4967, 0.4967, 0.49671, 0.49778, 0.49514, 0.49768, 0.49712, 0.4963, 0.49555, 0.49671]
+variancia entre janelas / variancia esperada sob H0: 0.744 (proximo de 1 = consistente com estacionario)
+
+-- Resumo Bonferroni: alpha_corrigido=0.000227 (n_testes=44) --
+testes com p < alpha (bruto, 0.01): 37
+testes com p < alpha_corrigido (Bonferroni): 35
+   ('lane0 chi2', 1.7642818515499304e-21)
+   ('lane1 chi2', 1.3558262847268278e-26)
+   ('lane2 chi2', 9.489054730457649e-27)
+   ('lane3 chi2', 3.199026603327398e-26)
+   ('bit0 proporcao', 4.1845320443774075e-06)
+   ('bit2 proporcao', 1.5360344600712332e-13)
+   ('bit3 proporcao', 5.380777829363699e-11)
+   ('bit4 proporcao', 4.6552353356518314e-08)
+   ('bit5 proporcao', 2.9205979909882963e-09)
+   ('bit6 proporcao', 7.026675765772059e-15)
+   ('bit7 proporcao', 4.301601334196726e-08)
+   ('bit8 proporcao', 1.6966308725002528e-11)
+   ('bit9 proporcao', 3.257499429417129e-10)
+   ('bit10 proporcao', 2.4017936938554577e-09)
+   ('bit11 proporcao', 1.0215900732040668e-09)
+   ('bit12 proporcao', 6.173084064141525e-09)
+   ('bit13 proporcao', 4.628671705157807e-09)
+   ('bit14 proporcao', 5.168481570196326e-11)
+   ('bit15 proporcao', 5.231442720354904e-10)
+   ('bit16 proporcao', 6.845670889343419e-11)
+   ('bit17 proporcao', 1.194735020794608e-10)
+   ('bit18 proporcao', 4.898123126227328e-11)
+   ('bit19 proporcao', 4.606912883336871e-07)
+   ('bit20 proporcao', 4.4579064724424785e-11)
+   ('bit21 proporcao', 6.3307954786966284e-12)
+   ('bit22 proporcao', 2.37123791630956e-13)
+   ('bit23 proporcao', 2.718291174482456e-07)
+   ('bit24 proporcao', 1.3029013009833418e-12)
+   ('bit25 proporcao', 2.5534351755074033e-09)
+   ('bit26 proporcao', 8.139890345939918e-08)
+   ('bit27 proporcao', 3.1540735532567546e-07)
+   ('bit28 proporcao', 6.069867055295418e-12)
+   ('bit29 proporcao', 6.292019536229228e-13)
+   ('bit30 proporcao', 1.3852855277870416e-16)
+   ('bit31 proporcao', 2.4017936938554577e-09)
+
+======================================================================
+CAPTURA: Captura B (2026-08-25T21:08:28Z) (ref_capture.bin)
+======================================================================
+bytes=4000000 palavras_uint32=1000000 sha256=c8448202c459808f9716e735430bce85461b197cadfc6195d1630936951b52eb
+
+-- Byte lanes (posicoes 0=LSB..3=MSB dentro da palavra) --
+lane0: mean=126.824(esp 127.5) var=5459.07(esp 5461.25) H_shannon=7.9997/8 H_min_empirico=7.9330/8 chi2=426.7 df=255 p=0.0000 <-- INVESTIGAR
+        runs(LSB): Z=-0.876 p=0.3812
+        autocorr lags1-5: [0.0, 0.0006, -0.0024, -0.0003, -0.0003] (limiar~0.0030)
+lane1: mean=126.917(esp 127.5) var=5457.29(esp 5461.25) H_shannon=7.9997/8 H_min_empirico=7.9404/8 chi2=352.8 df=255 p=0.0000 <-- INVESTIGAR
+        runs(LSB): Z=0.714 p=0.4749
+        autocorr lags1-5: [0.0006, 0.0005, -0.002, -0.0012, 0.0013] (limiar~0.0030)
+lane2: mean=126.959(esp 127.5) var=5458.78(esp 5461.25) H_shannon=7.9998/8 H_min_empirico=7.9400/8 chi2=345.4 df=255 p=0.0001 <-- INVESTIGAR
+        runs(LSB): Z=0.759 p=0.4478
+        autocorr lags1-5: [-0.0001, -0.0006, -0.0004, 0.0001, -0.0001] (limiar~0.0030)
+lane3: mean=127.056(esp 127.5) var=5464.57(esp 5461.25) H_shannon=7.9997/8 H_min_empirico=7.9284/8 chi2=375.8 df=255 p=0.0000 <-- INVESTIGAR
+        runs(LSB): Z=-0.478 p=0.6329
+        autocorr lags1-5: [-0.0009, -0.0003, -0.0007, 0.0004, -0.0005] (limiar~0.0030)
+
+-- Correlacao entre byte lanes (Pearson) --
+lane0 x lane1: r=0.00096
+lane0 x lane2: r=-0.00076
+lane0 x lane3: r=-0.00070
+lane1 x lane2: r=0.00012
+lane1 x lane3: r=-0.00088
+lane2 x lane3: r=0.00171
+
+-- 32 posicoes de bit: proporcao de 1s, teste binomial --
+bit 0: p(1)=0.49798 Z=-4.048 p_valor=0.0001 <-- INVESTIGAR
+bit 1: p(1)=0.49899 Z=-2.012 p_valor=0.0442
+bit 2: p(1)=0.49755 Z=-4.894 p_valor=0.0000 <-- INVESTIGAR
+bit 3: p(1)=0.49802 Z=-3.968 p_valor=0.0001 <-- INVESTIGAR
+bit 4: p(1)=0.49775 Z=-4.504 p_valor=0.0000 <-- INVESTIGAR
+bit 5: p(1)=0.49691 Z=-6.172 p_valor=0.0000 <-- INVESTIGAR
+bit 6: p(1)=0.49725 Z=-5.498 p_valor=0.0000 <-- INVESTIGAR
+bit 7: p(1)=0.49738 Z=-5.246 p_valor=0.0000 <-- INVESTIGAR
+bit 8: p(1)=0.49810 Z=-3.806 p_valor=0.0001 <-- INVESTIGAR
+bit 9: p(1)=0.49789 Z=-4.214 p_valor=0.0000 <-- INVESTIGAR
+bit10: p(1)=0.49867 Z=-2.668 p_valor=0.0076 <-- INVESTIGAR
+bit11: p(1)=0.49749 Z=-5.012 p_valor=0.0000 <-- INVESTIGAR
+bit12: p(1)=0.49774 Z=-4.512 p_valor=0.0000 <-- INVESTIGAR
+bit13: p(1)=0.49860 Z=-2.798 p_valor=0.0051 <-- INVESTIGAR
+bit14: p(1)=0.49752 Z=-4.958 p_valor=0.0000 <-- INVESTIGAR
+bit15: p(1)=0.49757 Z=-4.868 p_valor=0.0000 <-- INVESTIGAR
+bit16: p(1)=0.49760 Z=-4.800 p_valor=0.0000 <-- INVESTIGAR
+bit17: p(1)=0.49820 Z=-3.598 p_valor=0.0003 <-- INVESTIGAR
+bit18: p(1)=0.49876 Z=-2.488 p_valor=0.0128
+bit19: p(1)=0.49750 Z=-4.994 p_valor=0.0000 <-- INVESTIGAR
+bit20: p(1)=0.49808 Z=-3.844 p_valor=0.0001 <-- INVESTIGAR
+bit21: p(1)=0.49722 Z=-5.550 p_valor=0.0000 <-- INVESTIGAR
+bit22: p(1)=0.49791 Z=-4.182 p_valor=0.0000 <-- INVESTIGAR
+bit23: p(1)=0.49799 Z=-4.014 p_valor=0.0001 <-- INVESTIGAR
+bit24: p(1)=0.49824 Z=-3.512 p_valor=0.0004 <-- INVESTIGAR
+bit25: p(1)=0.49809 Z=-3.818 p_valor=0.0001 <-- INVESTIGAR
+bit26: p(1)=0.49776 Z=-4.472 p_valor=0.0000 <-- INVESTIGAR
+bit27: p(1)=0.49743 Z=-5.148 p_valor=0.0000 <-- INVESTIGAR
+bit28: p(1)=0.49840 Z=-3.208 p_valor=0.0013 <-- INVESTIGAR
+bit29: p(1)=0.49870 Z=-2.598 p_valor=0.0094 <-- INVESTIGAR
+bit30: p(1)=0.49817 Z=-3.652 p_valor=0.0003 <-- INVESTIGAR
+bit31: p(1)=0.49825 Z=-3.506 p_valor=0.0005 <-- INVESTIGAR
+
+-- Distribuicao uint32 --
+min=6668 max=4294967279 media=2140005822.9 (esperado 2147483648.0)
+valores duplicados: 139 (de 1000000 amostras; esperado poucos dado o espaco 2^32)
+
+-- Monte Carlo U = uint32/2^32 --
+min=0.0000015525 max=0.9999999960 media=0.498259 esperado=0.5
+erro-padrao teorico=0.0002887  desvio observado em unidades de erro-padrao: -6.03
+exponencial(mean=10): media=9.9432 min=0.0000 max=193.4750
+
+-- Janelas temporais (10 janelas): media de U por janela --
+medias por janela: [0.49839, 0.49905, 0.49781, 0.49574, 0.49718, 0.49895, 0.49813, 0.49945, 0.49863, 0.49925]
+variancia entre janelas / variancia esperada sob H0: 1.364 (proximo de 1 = consistente com estacionario)
+
+-- Resumo Bonferroni: alpha_corrigido=0.000227 (n_testes=44) --
+testes com p < alpha (bruto, 0.01): 34
+testes com p < alpha_corrigido (Bonferroni): 26
+   ('lane0 chi2', 9.416950873782919e-11)
+   ('lane1 chi2', 4.8002182560739325e-05)
+   ('lane2 chi2', 0.00013826801540222812)
+   ('lane3 chi2', 1.2675977694758913e-06)
+   ('bit0 proporcao', 5.165714645608587e-05)
+   ('bit2 proporcao', 9.880683827379584e-07)
+   ('bit3 proporcao', 7.247833394427579e-05)
+   ('bit4 proporcao', 6.668620612366111e-06)
+   ('bit5 proporcao', 6.743150064559589e-10)
+   ('bit6 proporcao', 3.8412293102662806e-08)
+   ('bit7 proporcao', 1.554369013636586e-07)
+   ('bit8 proporcao', 0.0001412323819349738)
+   ('bit9 proporcao', 2.508872844463156e-05)
+   ('bit11 proporcao', 5.386720407170772e-07)
+   ('bit12 proporcao', 6.4219188242116345e-06)
+   ('bit14 proporcao', 7.12225633883923e-07)
+   ('bit15 proporcao', 1.1273333028145167e-06)
+   ('bit16 proporcao', 1.5866563039509806e-06)
+   ('bit19 proporcao', 5.914139742537147e-07)
+   ('bit20 proporcao', 0.00012104500510811184)
+   ('bit21 proporcao', 2.8566959787836624e-08)
+   ('bit22 proporcao', 2.889559699298078e-05)
+   ('bit23 proporcao', 5.969834617546298e-05)
+   ('bit25 proporcao', 0.00013453792565988523)
+   ('bit26 proporcao', 7.74914274921923e-06)
+   ('bit27 proporcao', 2.63278492439344e-07)
+
+======================================================================
+COMPARACAO ENTRE CAPTURAS
+======================================================================
+Captura A (2026-08-25T14:04:59Z): media U=0.496639 desvio_em_erros_padrao=-11.64 testes_abaixo_bonferroni=35
+Captura B (2026-08-25T21:08:28Z): media U=0.498259 desvio_em_erros_padrao=-6.03 testes_abaixo_bonferroni=26

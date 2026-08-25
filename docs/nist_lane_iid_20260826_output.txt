@@ -1,0 +1,48 @@
+=== /tmp/lane_assessment/lane0_iid_full.txt ===
+Calculating baseline statistics...
+H_original: 7.876139
+H_bitstring: 0.992154
+min(H_original, 8 X H_bitstring): 7.876139
+** Passed chi square tests
+
+** Passed length of longest repeated substring test
+
+** Passed IID permutation tests
+
+
+=== /tmp/lane_assessment/lane1_iid_full.txt ===
+Calculating baseline statistics...
+H_original: 7.883417
+H_bitstring: 0.992783
+min(H_original, 8 X H_bitstring): 7.883417
+** Passed chi square tests
+
+** Passed length of longest repeated substring test
+
+** Passed IID permutation tests
+
+
+=== /tmp/lane_assessment/lane2_iid_full.txt ===
+Calculating baseline statistics...
+H_original: 7.883070
+H_bitstring: 0.992669
+min(H_original, 8 X H_bitstring): 7.883070
+** Passed chi square tests
+
+** Passed length of longest repeated substring test
+
+** Passed IID permutation tests
+
+
+=== /tmp/lane_assessment/lane3_iid_full.txt ===
+Calculating baseline statistics...
+H_original: 7.871651
+H_bitstring: 0.993307
+min(H_original, 8 X H_bitstring): 7.871651
+** Passed chi square tests
+
+** Passed length of longest repeated substring test
+
+** Passed IID permutation tests
+
+
