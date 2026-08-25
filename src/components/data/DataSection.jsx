@@ -538,7 +538,7 @@ export default function DataSection() {
             ))}
           </div>
           <p style={{ margin: 0, fontSize: 12, color: theme.textDim, fontFamily: SANS, lineHeight: 1.65 }}>
-            {mode === "raw"        && "Exporta bytes QRNG brutos (.bin). Cada byte possui 8 bits de entropia quântica."}
+            {mode === "raw"        && "Exporta bytes QRNG brutos (.bin). Cada byte tem 8 bits de largura; a min-entropia real por byte é estimada pela suíte NIST SP 800-90B (aba Teste NIST), não é assumida automaticamente."}
             {mode === "hex"        && "Converte os bytes QRNG para representação hexadecimal. Útil para criptografia e depuração."}
             {mode === "uint8"      && "Exporta cada byte como inteiro 0–255 (uint8). Prático para ML, datasets e análise estatística."}
             {mode === "range"      && "Gera inteiros em intervalo [min, max] arbitrário. Usa rejection sampling (uint32) para eliminar viés."}
