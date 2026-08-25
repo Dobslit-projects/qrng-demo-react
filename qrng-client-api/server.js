@@ -170,10 +170,16 @@ const metricsCounters = {
 
 const tokenRateMap = new Map(); // tokenId → { count, resetAt }
 
+// .unref(): não impede o processo de encerrar naturalmente quando nada mais
+// mantém o event loop vivo. Sem isso, `node --test` (que não força saída por
+// padrão) trava indefinidamente após os testes terminarem, porque este
+// timer nunca para de se reagendar — mesmo com todas as asserções passando.
+// Em produção não muda nada: app.listen() já mantém o processo vivo por
+// outro motivo.
 setInterval(() => {
   const now = Date.now();
   for (const [id, e] of tokenRateMap) { if (now >= e.resetAt) tokenRateMap.delete(id); }
-}, 5 * 60 * 1000);
+}, 5 * 60 * 1000).unref();
 
 function checkTokenRate(req, res, next) {
   const tokenId = req.tokenRow.id;
@@ -559,30 +565,124 @@ app.get("/v1/health", attachRequestId, requireToken, checkTokenRate, async (req,
   }
 });
 
-// ── parseUpstreamRandom ───────────────────────────────────────────────────────
+// ── Contrato do upstream FPGA ────────────────────────────────────────────────
+//
+// O upstream (QRNG_UPSTREAM) é interpretado por CONTRATO EXPLÍCITO baseado no
+// header Content-Type que ele declara — nunca por inspeção heurística do
+// conteúdo do corpo. Um payload binário que, por coincidência, contenha
+// bytes que parecem JSON, decimal ou dígitos ASCII NUNCA é reinterpretado:
+// só o Content-Type decide qual parser roda.
+//
+// Suportado no caminho normal (sem flag):
+//   application/octet-stream → bytes brutos, pass-through estrito, sem parsing.
+//   application/json         → { bytes: [...] } | { hex: "..." } | { random: "..." }
+//
+// Desativado por padrão (formatos históricos "UFPE/FPGA" — texto decimal
+// separado por vírgula/espaço, ou dígitos decimais empacotados de 3 em 3):
+//   text/plain → só é aceito com ALLOW_LEGACY_TEXT_UPSTREAM=true na env.
+//
+// Qualquer Content-Type ausente, desconhecido, ou corpo que não bate com o
+// Content-Type declarado → falha explícita (UpstreamFormatError), nunca
+// fallback silencioso para pass-through binário.
 
-function parseUpstreamRandom(buffer, requestedBytes) {
-  const text = buffer.toString("utf8").trim();
-  try {
-    const json = JSON.parse(text);
-    if (Array.isArray(json.bytes))       return Buffer.from(json.bytes.slice(0, requestedBytes));
-    if (typeof json.hex === "string")    return Buffer.from(json.hex, "hex").slice(0, requestedBytes);
-    if (typeof json.random === "string") return Buffer.from(json.random, "hex").slice(0, requestedBytes);
-  } catch (_) {}
-  if (/^[0-9,\s]+$/.test(text) && /[\s,]/.test(text)) {
-    const values = text.split(/[\s,]+/).map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n <= 255).slice(0, requestedBytes);
-    if (values.length >= requestedBytes) return Buffer.from(values);
+const ALLOW_LEGACY_TEXT_UPSTREAM = process.env.ALLOW_LEGACY_TEXT_UPSTREAM === "true";
+
+class UpstreamFormatError extends Error {
+  constructor(message, code) {
+    super(message);
+    this.name = "UpstreamFormatError";
+    this.code = code || "UPSTREAM_FORMAT_ERROR";
   }
-  // Packed decimal digit stream — formato UFPE/FPGA (rejection sampling)
+}
+
+// Só é chamado quando Content-Type: text/plain E ALLOW_LEGACY_TEXT_UPSTREAM=true.
+// Nunca faz parte do caminho normal nem é usado por sniffing de conteúdo.
+function parseLegacyTextUpstream(text, requestedBytes) {
+  if (/^[0-9,\s]+$/.test(text) && /[\s,]/.test(text)) {
+    const values = text.split(/[\s,]+/).map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n <= 255);
+    if (values.length > 0) return Buffer.from(values);
+  }
   if (/^[0-9]+$/.test(text)) {
     const result = [];
-    for (let i = 0; i + 3 <= text.length && result.length < requestedBytes; i += 3) {
+    for (let i = 0; i + 3 <= text.length; i += 3) {
       const val = parseInt(text.slice(i, i + 3), 10);
       if (val <= 255) result.push(val);
     }
-    if (result.length >= requestedBytes) return Buffer.from(result.slice(0, requestedBytes));
+    if (result.length > 0) return Buffer.from(result);
   }
-  return buffer.slice(0, requestedBytes);
+  throw new UpstreamFormatError(
+    "Upstream declarou text/plain (formato legado habilitado via ALLOW_LEGACY_TEXT_UPSTREAM), mas o corpo não é decimal reconhecível (nem 'n,n,n...' nem dígitos empacotados de 3 em 3).",
+    "UPSTREAM_LEGACY_TEXT_UNPARSEABLE"
+  );
+}
+
+/**
+ * Interpreta o corpo do upstream por contrato de Content-Type. Lança
+ * UpstreamFormatError para qualquer situação ambígua, incompleta ou não
+ * suportada — nunca adivinha a partir do conteúdo.
+ *
+ * NÃO trunca nem preenche o resultado para `requestedBytes`: apenas decodifica
+ * o que o Content-Type promete. A checagem de "bytes suficientes para atender
+ * o pedido do cliente" acontece no chamador (rota /v1/random), que já sabe
+ * quanto pediu ao upstream (upBytes, sobre-provisionado) versus quanto o
+ * cliente final pediu (requestedBytes).
+ */
+function interpretUpstreamResponse(contentType, rawBuffer, requestedBytes) {
+  const ct = (contentType || "").split(";")[0].trim().toLowerCase();
+
+  if (ct === "") {
+    throw new UpstreamFormatError(
+      "Upstream não declarou Content-Type. O contrato exige application/octet-stream ou application/json explícitos — nenhuma heurística de conteúdo é aplicada.",
+      "UPSTREAM_MISSING_CONTENT_TYPE"
+    );
+  }
+
+  if (ct === "application/octet-stream") {
+    // Pass-through estrito: os bytes recebidos SÃO o resultado, sem nenhuma
+    // tentativa de reinterpretação — mesmo que, por coincidência, pareçam
+    // texto ASCII decimal, JSON, etc.
+    return rawBuffer;
+  }
+
+  if (ct === "application/json") {
+    let json;
+    try {
+      json = JSON.parse(rawBuffer.toString("utf8"));
+    } catch (e) {
+      throw new UpstreamFormatError(
+        `Upstream declarou application/json mas o corpo não é JSON válido: ${e.message}`,
+        "UPSTREAM_INVALID_JSON"
+      );
+    }
+    if (Array.isArray(json.bytes)) {
+      if (!json.bytes.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
+        throw new UpstreamFormatError("Upstream JSON: campo 'bytes' contém valores fora de [0,255] ou não inteiros.", "UPSTREAM_JSON_SCHEMA_MISMATCH");
+      }
+      return Buffer.from(json.bytes);
+    }
+    if (typeof json.hex === "string")    return Buffer.from(json.hex, "hex");
+    if (typeof json.random === "string") return Buffer.from(json.random, "hex");
+    throw new UpstreamFormatError(
+      "Upstream declarou application/json mas nenhum campo reconhecido (bytes[] | hex | random) foi encontrado.",
+      "UPSTREAM_JSON_SCHEMA_MISMATCH"
+    );
+  }
+
+  if (ct === "text/plain") {
+    if (!ALLOW_LEGACY_TEXT_UPSTREAM) {
+      throw new UpstreamFormatError(
+        "Upstream declarou text/plain (formato legado de dígitos decimais), mas ALLOW_LEGACY_TEXT_UPSTREAM não está habilitado nesta instância. " +
+        "Formatos de texto decimal ficam desativados por padrão — habilite a env var explicitamente somente se o upstream atual realmente usa esse formato.",
+        "UPSTREAM_LEGACY_FORMAT_DISABLED"
+      );
+    }
+    return parseLegacyTextUpstream(rawBuffer.toString("utf8").trim(), requestedBytes);
+  }
+
+  throw new UpstreamFormatError(
+    `Upstream declarou Content-Type não suportado pelo contrato: '${contentType}'.`,
+    "UPSTREAM_UNSUPPORTED_CONTENT_TYPE"
+  );
 }
 
 // ── GET /v1/random ────────────────────────────────────────────────────────────
@@ -612,11 +712,37 @@ app.get("/v1/random", attachRequestId, requireToken, checkTokenRate, parseBytes,
       return res.status(502).json({ request_id: requestId, error: "UPSTREAM_ERROR", status: r.status });
     }
 
-    const buf = parseUpstreamRandom(await r.buffer(), bytes);
+    const contentType        = r.headers.get("content-type");
+    const contentLengthHeader = r.headers.get("content-length");
+    const rawBuffer          = await r.buffer();
+
+    // Content-Length é validado ANTES de qualquer interpretação: se o
+    // transporte já mente sobre o tamanho, não há por que confiar no corpo.
+    if (contentLengthHeader !== null && Number(contentLengthHeader) !== rawBuffer.length) {
+      logRequest(requestId, req.tokenRow.id, "/v1/random", bytes, format, 502, ip, ua, Date.now() - t0);
+      return res.status(502).json({
+        request_id: requestId,
+        error: "UPSTREAM_LENGTH_MISMATCH",
+        message: `Content-Length declarado (${contentLengthHeader}) não bate com bytes efetivamente recebidos (${rawBuffer.length}).`,
+      });
+    }
+
+    let buf;
+    try {
+      buf = interpretUpstreamResponse(contentType, rawBuffer, bytes);
+    } catch (err) {
+      if (err instanceof UpstreamFormatError) {
+        logRequest(requestId, req.tokenRow.id, "/v1/random", bytes, format, 502, ip, ua, Date.now() - t0);
+        return res.status(502).json({ request_id: requestId, error: err.code, message: err.message });
+      }
+      throw err;
+    }
+
     if (buf.length < bytes) {
       logRequest(requestId, req.tokenRow.id, "/v1/random", bytes, format, 503, ip, ua, Date.now() - t0);
       return res.status(503).json({ request_id: requestId, error: "INSUFFICIENT_ENTROPY", available: buf.length, requested: bytes });
     }
+    buf = buf.slice(0, bytes); // upBytes é sobre-provisionado; entrega exatamente o pedido
 
     const random = format === "hex"    ? buf.toString("hex")
                  : format === "base64" ? buf.toString("base64")
@@ -809,4 +935,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, db };
+module.exports = { app, db, interpretUpstreamResponse, UpstreamFormatError };
