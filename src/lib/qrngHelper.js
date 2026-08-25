@@ -1,5 +1,5 @@
 import { API_ROUTES, CLIENT_API, getAuthHeaders } from "../qrngApi";
-import { QRNG_PRECOLLECTED } from "../qrngFallbackData";
+import { QRNG_PRECOLLECTED, QRNG_PRECOLLECTED_PROVENANCE } from "../qrngFallbackData";
 
 /**
  * Adaptador canônico de bytes QRNG (item 3 da auditoria do pipeline).
@@ -32,20 +32,75 @@ import { QRNG_PRECOLLECTED } from "../qrngFallbackData";
  * que requer autorização explícita separada -- ver relatório de auditoria.
  */
 
-// ─── Fallback pré-coletado (finito, reciclado em loop) ──────────────────────
+// ─── Fallback pré-coletado (finito, SEM wraparound — item 4 da auditoria) ───
+//
+// Antes: o cursor avançava com módulo (`% PRECOLLECTED_LIMIT`), reciclando o
+// mesmo buffer de 10.000 bytes silenciosamente e para sempre -- nenhum
+// consumidor tinha como saber que os "novos" bytes pedidos eram, na
+// verdade, uma repetição exata de bytes já entregues antes na mesma sessão.
+// Agora: o cursor avança sem wraparound; pedir mais bytes do que restam
+// lança PrecollectedExhaustedError (o chamador já propaga exceções da fonte
+// QRNG normalmente -- ver generateQrngSequence). Reiniciar a demonstração é
+// uma ação explícita do usuário (resetPrecollectedCursor), nunca implícita.
 
 /** Total de bytes disponíveis no buffer pré-coletado local. */
 export const PRECOLLECTED_LIMIT = QRNG_PRECOLLECTED.length;
 
 let fallbackOffset = 0;
+const precollectedListeners = new Set();
+
+function notifyPrecollectedListeners() {
+  const remaining = PRECOLLECTED_LIMIT - fallbackOffset;
+  precollectedListeners.forEach((fn) => fn(remaining));
+}
+
+/** Assina mudanças no cursor do fallback (para banners/indicadores reativos). Retorna função de unsubscribe. */
+export function onPrecollectedChange(fn) {
+  precollectedListeners.add(fn);
+  return () => precollectedListeners.delete(fn);
+}
+
+/** Bytes restantes no buffer pré-coletado antes de esgotar (sem reset). */
+export function precollectedRemaining() {
+  return PRECOLLECTED_LIMIT - fallbackOffset;
+}
+
+/**
+ * Reinicia o cursor do fallback para 0 -- ação EXPLÍCITA do usuário
+ * ("Reiniciar demonstração" na UI). Isto reaproveita exatamente os mesmos
+ * 10.000 bytes já usados antes na sessão, não gera uma amostra nova; a UI
+ * que chama isto deve deixar esse aviso visível (item 4).
+ */
+export function resetPrecollectedCursor() {
+  fallbackOffset = 0;
+  notifyPrecollectedListeners();
+}
+
+export class PrecollectedExhaustedError extends Error {
+  constructor(requested, remaining) {
+    super(
+      `Buffer pré-coletado esgotado: restam ${remaining} de ${PRECOLLECTED_LIMIT} bytes, ` +
+      `foram pedidos ${requested}. Use "Reiniciar demonstração" para reciclar os mesmos ` +
+      `${PRECOLLECTED_LIMIT} bytes (não é uma nova amostra) ou troque para uma fonte QRNG ao vivo.`
+    );
+    this.name = "PrecollectedExhaustedError";
+    this.requested = requested;
+    this.remaining = remaining;
+  }
+}
 
 function getPrecollectedBytes(byteCount) {
   const t0 = performance.now();
+  const remaining = PRECOLLECTED_LIMIT - fallbackOffset;
+  if (byteCount > remaining) {
+    throw new PrecollectedExhaustedError(byteCount, remaining);
+  }
   const bytes = new Uint8Array(byteCount);
   for (let i = 0; i < byteCount; i++) {
-    bytes[i] = QRNG_PRECOLLECTED[(fallbackOffset + i) % PRECOLLECTED_LIMIT];
+    bytes[i] = QRNG_PRECOLLECTED[fallbackOffset + i];
   }
-  fallbackOffset = (fallbackOffset + byteCount) % PRECOLLECTED_LIMIT;
+  fallbackOffset += byteCount;
+  notifyPrecollectedListeners();
   const hex = Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
   return {
     bytes, hex,
@@ -53,6 +108,8 @@ function getPrecollectedBytes(byteCount) {
     requestId: null,
     timestamp: new Date().toISOString(),
     latencyMs: Math.round(performance.now() - t0),
+    remaining: PRECOLLECTED_LIMIT - fallbackOffset,
+    provenance: QRNG_PRECOLLECTED_PROVENANCE,
   };
 }
 

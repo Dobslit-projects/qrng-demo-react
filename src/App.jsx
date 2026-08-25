@@ -2,6 +2,7 @@ import { useContext } from "react";
 import { AppProvider, AppContext } from "./contexts/AppContext";
 import { theme, fonts } from "./theme";
 import HardwareStatusBar from "./components/layout/HardwareStatusBar";
+import FallbackBanner from "./components/layout/FallbackBanner";
 import SectionNav from "./components/layout/SectionNav";
 import KapuaSection from "./components/kapua/KapuaSection";
 import VisuaisSection from "./components/visuals/VisuaisSection";
@@ -30,6 +31,7 @@ function AppContent() {
     >
       <style>{fonts}</style>
       <HardwareStatusBar />
+      <FallbackBanner />
       <SectionNav />
       <div style={{ flex: 1, overflow: "auto", padding: NO_PADDING_PAGES.has(activePage) ? 0 : "12px 16px" }}>
         {activePage === "kapua"        && <KapuaSection />}

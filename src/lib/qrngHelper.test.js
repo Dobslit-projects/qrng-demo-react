@@ -8,6 +8,12 @@ import {
   bytesToUint32Array,
   uint32ToFloat,
   exponentialFromUniform,
+  fetchQrngBytes,
+  PRECOLLECTED_LIMIT,
+  PrecollectedExhaustedError,
+  precollectedRemaining,
+  resetPrecollectedCursor,
+  onPrecollectedChange,
 } from "./qrngHelper";
 
 /**
@@ -127,6 +133,68 @@ describe("generateQrngSequence — sem fallback silencioso em caso de erro", () 
     expect(result.source).toBe("pre-collected");
     expect(result.values.length).toBe(5);
     expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Item 4 da auditoria: cursor do fallback pré-coletado SEM wraparound.
+ * Antes deste teste existir, o cursor avançava com módulo e reciclava os
+ * mesmos 10.000 bytes silenciosamente para sempre -- nenhum consumidor
+ * conseguia saber que estava recebendo uma repetição. Estes testes fixam o
+ * novo contrato: esgota, lança erro tipado, nunca embrulha sozinho.
+ */
+describe("fallback pré-coletado — cursor sem wraparound (item 4)", () => {
+  afterEach(() => {
+    resetPrecollectedCursor();
+  });
+
+  it("consome sequencialmente sem repetir bytes já entregues", async () => {
+    resetPrecollectedCursor();
+    const a = await fetchQrngBytes(4000, "pre-collected");
+    const b = await fetchQrngBytes(4000, "pre-collected");
+    expect(a.bytes).not.toEqual(b.bytes);
+    expect(precollectedRemaining()).toBe(PRECOLLECTED_LIMIT - 8000);
+  });
+
+  it("requisições consecutivas até esgotar os 10.000 bytes lançam PrecollectedExhaustedError na que excede o restante", async () => {
+    resetPrecollectedCursor();
+    await fetchQrngBytes(4000, "pre-collected");
+    await fetchQrngBytes(4000, "pre-collected");
+    expect(precollectedRemaining()).toBe(2000);
+    // pedir mais do que resta (2000) deve falhar, não embrulhar para o início
+    await expect(fetchQrngBytes(2001, "pre-collected")).rejects.toThrow(PrecollectedExhaustedError);
+    // o restante exato ainda cabe
+    const last = await fetchQrngBytes(2000, "pre-collected");
+    expect(last.bytes.length).toBe(2000);
+    expect(precollectedRemaining()).toBe(0);
+    // qualquer pedido adicional, por menor que seja, também falha
+    await expect(fetchQrngBytes(1, "pre-collected")).rejects.toThrow(PrecollectedExhaustedError);
+  });
+
+  it("resetPrecollectedCursor reaproveita os mesmos bytes desde o início (não é amostra nova)", async () => {
+    resetPrecollectedCursor();
+    const first = await fetchQrngBytes(100, "pre-collected");
+    resetPrecollectedCursor();
+    const again = await fetchQrngBytes(100, "pre-collected");
+    expect(again.bytes).toEqual(first.bytes);
+    expect(precollectedRemaining()).toBe(PRECOLLECTED_LIMIT - 100);
+  });
+
+  it("onPrecollectedChange notifica assinantes a cada consumo e no reset", async () => {
+    resetPrecollectedCursor();
+    const seen = [];
+    const unsubscribe = onPrecollectedChange((remaining) => seen.push(remaining));
+    await fetchQrngBytes(10, "pre-collected");
+    resetPrecollectedCursor();
+    unsubscribe();
+    expect(seen).toEqual([PRECOLLECTED_LIMIT - 10, PRECOLLECTED_LIMIT]);
+  });
+
+  it("retorna proveniência 'unknown' explícita em vez de inferir do nome do arquivo", async () => {
+    resetPrecollectedCursor();
+    const result = await fetchQrngBytes(10, "pre-collected");
+    expect(result.provenance.capturedAt).toBe("unknown");
+    expect(result.remaining).toBe(PRECOLLECTED_LIMIT - 10);
   });
 });
 

@@ -111,8 +111,9 @@ function KeyCard({ onGoLogin, source }) {
   const stopAnim = () => { clearInterval(animRef.current); animRef.current = null; };
 
   // Auditoria item 4/7: geração de chaves nunca pode usar o buffer
-  // pré-coletado (finito, reciclado em loop, sem proveniência criptográfica)
-  // como se fosse entropia ao vivo do hardware.
+  // pré-coletado (finito, 10.000 bytes, sem wraparound, sem proveniência
+  // criptográfica registrada -- ver qrngFallbackData.js) como se fosse
+  // entropia ao vivo do hardware.
   const blockedByFallback = source === "pre-collected";
 
   const generate = async () => {
@@ -182,8 +183,9 @@ function AISeedCard({ onGoLogin, source }) {
   const [err, setErr] = useState("");
 
   // Auditoria item 4/7: card afirma "seeds baseadas em entropia física" --
-  // isso é falso durante fallback (buffer pré-coletado finito reciclado em
-  // loop), então bloqueamos em vez de servir a alegação incorreta.
+  // isso é falso durante fallback (buffer pré-coletado finito, 10.000
+  // bytes, sem proveniência registrada), então bloqueamos em vez de servir
+  // a alegação incorreta.
   const blockedByFallback = source === "pre-collected";
 
   const generate = async () => {

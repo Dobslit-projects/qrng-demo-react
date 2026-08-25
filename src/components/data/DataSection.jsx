@@ -192,7 +192,7 @@ const DL_SIZES = [
 // ─── Componente principal ─────────────────────────────────────────
 
 export default function DataSection() {
-  const { isOnline, health, latency, qrngSource, status: qrngStatus } = useContext(AppContext);
+  const { isOnline, health, latency, qrngSource, status: qrngStatus, precollectedRemaining } = useContext(AppContext);
 
   // Modo de exportação
   const [mode, setMode] = useState("raw");
@@ -253,8 +253,11 @@ export default function DataSection() {
     if (!isOnline)  return "Backend QRNG offline. Não é possível gerar dados reais agora.";
     if (qrngSource === "pre-collected") {
       const needed = bytesNeeded();
-      if (needed > PRECOLLECTED_LIMIT)
-        return `Fonte pré-coletada tem apenas ${PRECOLLECTED_LIMIT.toLocaleString()} bytes. Reduza o tamanho ou a quantidade para continuar (máx: ${formatBytes(PRECOLLECTED_LIMIT)}).`;
+      // Item 4: o cursor do fallback NÃO tem wraparound -- o limite relevante
+      // aqui é o que RESTA na sessão atual, não o total do buffer (needed
+      // pode caber no total e ainda assim exceder o que já foi consumido).
+      if (needed > precollectedRemaining)
+        return `Fonte pré-coletada: restam apenas ${precollectedRemaining.toLocaleString()} de ${PRECOLLECTED_LIMIT.toLocaleString()} bytes nesta sessão. Reduza o tamanho/quantidade, use "Reiniciar demonstração" no banner acima, ou troque para uma fonte QRNG ao vivo.`;
     }
     if (mode === "raw" || mode === "hex" || mode === "uint8") {
       if (dlSize < 1 || dlSize > MAX_BYTES)

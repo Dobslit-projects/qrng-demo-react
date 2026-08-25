@@ -28,7 +28,7 @@ function LogoImg({ height }) {
 }
 
 export default function HardwareStatusBar() {
-  const { health, latency, isOnline, qrngSource } = useContext(AppContext);
+  const { health, latency, isOnline, qrngSource, precollectedRemaining, precollectedLimit } = useContext(AppContext);
   const isFallback = qrngSource === "pre-collected";
   const statusColor = isOnline ? theme.success : theme.danger;
 
@@ -86,7 +86,7 @@ export default function HardwareStatusBar() {
         )}
         {isFallback && (
           <span style={{ color: theme.warning }}>
-            Usando 1K amostras pre-coletadas
+            Pré-coletado: {formatBytes(precollectedRemaining)} restantes de {formatBytes(precollectedLimit)}
           </span>
         )}
         {!isFallback && !isOnline && (

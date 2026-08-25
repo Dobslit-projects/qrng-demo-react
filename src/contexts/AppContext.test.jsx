@@ -3,9 +3,13 @@ import { render, screen, cleanup, act } from "@testing-library/react";
 import { useContext } from "react";
 import { AppProvider, AppContext } from "./AppContext";
 import HardwareStatusBar from "../components/layout/HardwareStatusBar";
+import { fetchQrngBytes, resetPrecollectedCursor } from "../lib/qrngHelper";
 
 function Probe() {
-  const { status, isOnline, isLiveData, isFallbackSelected, health, qrngSource, setQrngSource } = useContext(AppContext);
+  const {
+    status, isOnline, isLiveData, isFallbackSelected, health, qrngSource, setQrngSource,
+    precollectedRemaining, precollectedLimit, restartPrecollectedDemo,
+  } = useContext(AppContext);
   return (
     <div>
       <span data-testid="status">{status}</span>
@@ -15,6 +19,9 @@ function Probe() {
       <span data-testid="buffer">{health ? health.buffer_bytes_available : "null"}</span>
       <button data-testid="selectPreCollected" onClick={() => setQrngSource("pre-collected")}>seed</button>
       <span data-testid="qrngSource">{qrngSource}</span>
+      <span data-testid="precollectedRemaining">{precollectedRemaining}</span>
+      <span data-testid="precollectedLimit">{precollectedLimit}</span>
+      <button data-testid="restartDemo" onClick={restartPrecollectedDemo}>restart</button>
     </div>
   );
 }
@@ -256,5 +263,42 @@ describe("AppContext — isLiveData / isFallbackSelected (auditoria item 4)", ()
     expect(screen.getByTestId("isOnline").textContent).toBe("false");
     expect(screen.getByTestId("isLiveData").textContent).toBe("false");
     expect(screen.getByTestId("isFallbackSelected").textContent).toBe("false");
+  });
+});
+
+describe("AppContext — cursor do fallback pré-coletado exposto globalmente (item 4)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    localStorage.clear();
+    resetPrecollectedCursor();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+    resetPrecollectedCursor();
+  });
+
+  it("expõe precollectedLimit e precollectedRemaining, e reage a consumo feito por qualquer componente", async () => {
+    globalThis.fetch = vi.fn(() => healthyResponse());
+    renderProbe();
+    expect(screen.getByTestId("precollectedLimit").textContent).toBe("10000");
+    expect(screen.getByTestId("precollectedRemaining").textContent).toBe("10000");
+
+    await act(async () => { await fetchQrngBytes(1500, "pre-collected"); });
+    expect(screen.getByTestId("precollectedRemaining").textContent).toBe("8500");
+  });
+
+  it("restartPrecollectedDemo (botão global) zera o consumo de volta para o limite total", async () => {
+    globalThis.fetch = vi.fn(() => healthyResponse());
+    renderProbe();
+    await act(async () => { await fetchQrngBytes(3000, "pre-collected"); });
+    expect(screen.getByTestId("precollectedRemaining").textContent).toBe("7000");
+
+    await act(async () => {
+      screen.getByTestId("restartDemo").click();
+    });
+    expect(screen.getByTestId("precollectedRemaining").textContent).toBe("10000");
   });
 });

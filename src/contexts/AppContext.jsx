@@ -1,5 +1,11 @@
 import { createContext, useState, useEffect, useMemo, useCallback, useRef } from "react";
 import { fetchHealth, API_ROUTES } from "../qrngApi";
+import {
+  PRECOLLECTED_LIMIT,
+  precollectedRemaining,
+  resetPrecollectedCursor,
+  onPrecollectedChange,
+} from "../lib/qrngHelper";
 
 export const AppContext = createContext();
 
@@ -115,6 +121,19 @@ export function AppProvider({ children }) {
   const [streamError, setStreamError]  = useState(null);
   const [activePage,  setActivePage]   = useState("kapua");
 
+  // Item 4 da auditoria: cursor do fallback pré-coletado, sem wraparound.
+  // Vive como estado de módulo em qrngHelper.js (compartilhado por todos os
+  // consumidores, não por página) -- aqui só assinamos as mudanças para que
+  // o banner global e o indicador da status bar sejam reativos.
+  const [precollectedRemainingCount, setPrecollectedRemainingCount] = useState(precollectedRemaining);
+  useEffect(() => {
+    setPrecollectedRemainingCount(precollectedRemaining());
+    return onPrecollectedChange(setPrecollectedRemainingCount);
+  }, []);
+  const restartPrecollectedDemo = useCallback(() => {
+    resetPrecollectedCursor();
+  }, []);
+
   const setQrngSource = useCallback((src) => {
     setQrngSourceRaw(src);
     try { localStorage.setItem(STORAGE_KEY, src); } catch {}
@@ -164,12 +183,16 @@ export function AppProvider({ children }) {
     remoteLatency,
     fpgaHealth,
     fpgaLatency,
+    precollectedLimit: PRECOLLECTED_LIMIT,
+    precollectedRemaining: precollectedRemainingCount,
+    restartPrecollectedDemo,
     setLatency: () => {
       // kept for backward compat — hysteresis hook manages latency internally
     },
   }), [health, latency, qrngSource, isOnline, isLiveData, isFallbackSelected, lastSuccessAt,
        status, streamError, activePage,
-       remoteHealth, remoteLatency, fpgaHealth, fpgaLatency, setQrngSource]);
+       remoteHealth, remoteLatency, fpgaHealth, fpgaLatency, setQrngSource,
+       precollectedRemainingCount, restartPrecollectedDemo]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;
 }
