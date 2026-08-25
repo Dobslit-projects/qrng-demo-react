@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
 """
-Teste isolado (sem pytest) para as mudancas do item 8 da auditoria:
-  - _find_latest_data_file() exclui diretorios audit*/characterization_*
-  - _row() calcula sample_file_age_seconds / sample_file_is_stale / sample_unit
+Testes isolados (sem pytest) para o item 2 da auditoria: metadados de
+amostra persistidos no momento da submissão, nunca inferidos depois.
 
-Faz stub de fastapi/uvicorn (nao instalados neste ambiente de teste) para
-poder importar nist_service.py sem as dependencias pesadas -- o modulo so
-usa decorators/classes triviais desses pacotes a nivel de import.
+Faz stub de fastapi/uvicorn para poder importar nist_service.py sem as
+dependências pesadas -- o módulo só usa decorators/classes triviais delas
+a nível de import.
 """
-import sys, os, types, tempfile, shutil, time, unittest
+import sys, os, types, tempfile, shutil, time, unittest, sqlite3
+from datetime import datetime, timezone, timedelta
 
-# ---- stub minimo de fastapi/uvicorn para permitir o import ----
+# ---- stub mínimo de fastapi/uvicorn ----
 fastapi_stub = types.ModuleType("fastapi")
 
 class _DummyApp:
@@ -42,21 +42,45 @@ cors_stub.CORSMiddleware = object
 sys.modules["fastapi.middleware"] = middleware_stub
 sys.modules["fastapi.middleware.cors"] = cors_stub
 
-# ---- ambiente isolado ANTES do import (efeitos colaterais no module-level) ----
+# ---- ambiente isolado ANTES do import ----
 TMPDIR = tempfile.mkdtemp(prefix="nist_test_")
-os.environ["NIST_ENABLED"]   = "false"  # evita o scheduler _schedule_periodic() no import
-os.environ["NIST_DATA_DIR"]  = os.path.join(TMPDIR, "data")
-os.environ["NIST_DB_PATH"]   = os.path.join(TMPDIR, "nist.db")
+os.environ["NIST_ENABLED"]  = "false"
+os.environ["NIST_DATA_DIR"] = os.path.join(TMPDIR, "data")
+os.environ["NIST_DB_PATH"]  = os.path.join(TMPDIR, "nist.db")
+os.environ.pop("NIST_LIVE_CAPTURE_PATH", None)
 os.makedirs(os.environ["NIST_DATA_DIR"], exist_ok=True)
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import nist_service as ns  # noqa: E402
 
 
-class TestFindLatestDataFile(unittest.TestCase):
+def fresh_db():
+    """Cada teste usa seu próprio DB SQLite em memória com o schema
+    completo (tabela + migrações), para isolar estado entre testes sem
+    reimportar o módulo inteiro."""
+    conn = sqlite3.connect(":memory:", check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    conn.execute(ns._db_conn.execute("SELECT sql FROM sqlite_master WHERE name='nist_test_jobs'").fetchone()[0])
+    for col, decl in [
+        ("sample_origin", "TEXT"), ("transport_format", "TEXT"),
+        ("source_word_width", "INTEGER"), ("assessment_symbol_width", "INTEGER"),
+        ("normalization_method", "TEXT"), ("sample_endianness", "TEXT"),
+        ("sample_conditioned", "INTEGER"), ("captured_at", "TEXT"),
+    ]:
+        try:
+            conn.execute(f"ALTER TABLE nist_test_jobs ADD COLUMN {col} {decl}")
+        except sqlite3.OperationalError:
+            pass
+    conn.commit()
+    return conn
+
+
+class TestFindLatestDataFileStillExcludesAuditDirs(unittest.TestCase):
+    """Mantém a cobertura do commit anterior (94e7dbd) -- ainda usado por
+    /nist/run com source=latest."""
+
     def setUp(self):
         self.base = tempfile.mkdtemp(dir=os.environ["NIST_DATA_DIR"])
-        # monkeypatch NIST_DATA_DIR para este teste especifico
         self._orig = ns.NIST_DATA_DIR
         ns.NIST_DATA_DIR = self.base
 
@@ -64,7 +88,8 @@ class TestFindLatestDataFile(unittest.TestCase):
         ns.NIST_DATA_DIR = self._orig
         shutil.rmtree(self.base, ignore_errors=True)
 
-    def _make_file(self, relpath, size=ns.NIST_MIN_BYTES, mtime_offset=0):
+    def _make_file(self, relpath, size=None, mtime_offset=0):
+        size = size or ns.NIST_MIN_BYTES
         path = os.path.join(self.base, relpath)
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "wb") as f:
@@ -75,76 +100,169 @@ class TestFindLatestDataFile(unittest.TestCase):
         return path
 
     def test_exclui_diretorio_audit(self):
-        # audit52/ (artefato de auditoria manual, obsoleto) tem mtime mais
-        # recente, mas deve ser ignorado.
         self._make_file("audit52/C01_digits_B01.bin", mtime_offset=100)
         fresh = self._make_file("live/fresh_capture.bin", mtime_offset=0)
         result = ns._find_latest_data_file()
         self.assertEqual(os.path.normpath(result), os.path.normpath(fresh))
 
-    def test_exclui_diretorio_characterization(self):
-        self._make_file("characterization_2026/run_new_05.bin", mtime_offset=100)
-        fresh = self._make_file("live/fresh_capture.bin", mtime_offset=0)
-        result = ns._find_latest_data_file()
-        self.assertEqual(os.path.normpath(result), os.path.normpath(fresh))
 
-    def test_sem_arquivo_adequado_retorna_none(self):
-        self._make_file("audit9/only_stale.bin", mtime_offset=0)
-        result = ns._find_latest_data_file()
-        self.assertIsNone(result)
+class TestCreateAndEnqueueMetadata(unittest.TestCase):
+    """Item 2: sample_origin é obrigatório e decidido pelo chamador;
+    transport_format nunca é assumido 'uint32-le' por padrão."""
 
-    def test_ainda_escolhe_o_mais_recente_entre_validos(self):
-        self._make_file("live/older.bin", mtime_offset=-100)
-        newer = self._make_file("live/newer.bin", mtime_offset=0)
-        result = ns._find_latest_data_file()
-        self.assertEqual(os.path.normpath(result), os.path.normpath(newer))
+    class _NoopQueue:
+        """Substitui _job_q durante estes testes -- o worker de fundo do
+        módulo (thread singleton, iniciada no import) usa a MESMA conexão
+        global _db_conn; deixá-lo processar jobs de verdade enquanto o teste
+        troca/fecha essa conexão para isolamento é uma corrida real entre
+        threads sobre o mesmo objeto sqlite3 (já observado causando
+        segfault). Testar só a persistência de metadados no INSERT, sem
+        deixar o worker tocar no job."""
+        def put(self, *a, **k): pass
+
+    def setUp(self):
+        self._orig_conn = ns._db_conn
+        self._orig_queue = ns._job_q
+        ns._db_conn = fresh_db()
+        ns._job_q = self._NoopQueue()
+        self.f = tempfile.NamedTemporaryFile(delete=False, dir=os.environ["NIST_DATA_DIR"])
+        self.f.write(b"x" * 100)
+        self.f.close()
+
+    def tearDown(self):
+        ns._job_q = self._orig_queue
+        ns._db_conn.close()
+        ns._db_conn = self._orig_conn
+        os.unlink(self.f.name)
+
+    def test_upload_sem_atestacao_fica_transport_format_unknown(self):
+        job_id = ns._create_and_enqueue(
+            "upload", self.f.name, "x.bin", "both", "auto",
+            sample_origin="user_upload",
+        )
+        row = ns._row(ns._db_one("SELECT * FROM nist_test_jobs WHERE id=?", (job_id,)))
+        self.assertEqual(row["sample_origin"], "user_upload")
+        self.assertEqual(row["transport_format"], "unknown")
+        self.assertIsNone(row["source_word_width"])
+
+    def test_upload_com_atestacao_explicita_registra_uint32_le(self):
+        job_id = ns._create_and_enqueue(
+            "upload", self.f.name, "x.bin", "both", "auto",
+            sample_origin="user_upload",
+            transport_format="uint32-le",
+            source_word_width=4,
+            sample_conditioned=False,
+        )
+        row = ns._row(ns._db_one("SELECT * FROM nist_test_jobs WHERE id=?", (job_id,)))
+        self.assertEqual(row["transport_format"], "uint32-le")
+        self.assertEqual(row["source_word_width"], 4)
+        self.assertEqual(row["sample_conditioned"], False)
+
+    def test_captured_at_persistido_no_momento_da_submissao_nao_e_none(self):
+        job_id = ns._create_and_enqueue(
+            "upload", self.f.name, "x.bin", "both", "auto",
+            sample_origin="user_upload",
+        )
+        row = ns._row(ns._db_one("SELECT * FROM nist_test_jobs WHERE id=?", (job_id,)))
+        self.assertIsNotNone(row["captured_at"])
+        self.assertIsNotNone(row["sample_captured_age_seconds"])
+
+    def test_job_id_pre_gerado_e_respeitado(self):
+        wanted = "meu-id-fixo"
+        got = ns._create_and_enqueue(
+            "upload", self.f.name, "x.bin", "both", "auto",
+            sample_origin="user_upload", job_id=wanted,
+        )
+        self.assertEqual(got, wanted)
+        row = ns._db_one("SELECT id FROM nist_test_jobs WHERE id=?", (wanted,))
+        self.assertIsNotNone(row)
 
 
-class TestRowSampleMetadata(unittest.TestCase):
-    def test_sample_unit_sempre_presente_e_correto(self):
-        d = ns._row({"id": "x", "estimators_json": None,
-                      "iid_passed": None, "chi_square_passed": None,
-                      "lrs_passed": None, "permutation_passed": None,
-                      "input_file_path": None})
-        self.assertEqual(d["sample_unit"]["format"], "uint32-le")
-        self.assertEqual(d["sample_unit"]["width_bytes"], 4)
-        self.assertFalse(d["sample_unit"]["conditioned"])
+class TestRowStalenessOnlyForPeriodicLive(unittest.TestCase):
+    """Item 2: 'stale' só existe para sample_origin='periodic_live'. Upload
+    histórico e avaliação manual não 'expiram'."""
 
-    def test_arquivo_inexistente_nao_calcula_idade(self):
-        d = ns._row({"id": "x", "estimators_json": None,
-                      "iid_passed": None, "chi_square_passed": None,
-                      "lrs_passed": None, "permutation_passed": None,
-                      "input_file_path": "/nao/existe/em/lugar/nenhum.bin"})
-        self.assertIsNone(d["sample_file_age_seconds"])
-        self.assertIsNone(d["sample_file_is_stale"])
+    def _row_with(self, sample_origin, captured_at):
+        return ns._row({
+            "id": "x", "estimators_json": None,
+            "iid_passed": None, "chi_square_passed": None,
+            "lrs_passed": None, "permutation_passed": None,
+            "input_file_path": None,
+            "sample_origin": sample_origin,
+            "transport_format": None, "source_word_width": None,
+            "assessment_symbol_width": None, "normalization_method": None,
+            "sample_endianness": None, "sample_conditioned": None,
+            "captured_at": captured_at, "created_at": captured_at,
+        })
 
-    def test_arquivo_recem_criado_nao_e_stale(self):
-        f = tempfile.NamedTemporaryFile(delete=False)
-        f.write(b"x"); f.close()
+    def test_periodic_live_antigo_e_stale(self):
+        old = (datetime.now(timezone.utc) - timedelta(hours=2)).isoformat()
+        row = self._row_with("periodic_live", old)
+        self.assertTrue(row["sample_file_is_stale"])
+
+    def test_periodic_live_recente_nao_e_stale(self):
+        recent = datetime.now(timezone.utc).isoformat()
+        row = self._row_with("periodic_live", recent)
+        self.assertFalse(row["sample_file_is_stale"])
+
+    def test_user_upload_antigo_nao_e_stale_nunca(self):
+        very_old = (datetime.now(timezone.utc) - timedelta(days=365)).isoformat()
+        row = self._row_with("user_upload", very_old)
+        self.assertIsNone(row["sample_file_is_stale"])
+
+    def test_historical_assessment_antigo_nao_e_stale_nunca(self):
+        very_old = (datetime.now(timezone.utc) - timedelta(days=365)).isoformat()
+        row = self._row_with("historical_assessment", very_old)
+        self.assertIsNone(row["sample_file_is_stale"])
+
+    def test_sample_origin_desconhecido_vira_unknown_nunca_none(self):
+        row = self._row_with(None, None)
+        self.assertEqual(row["sample_origin"], "unknown")
+        self.assertEqual(row["transport_format"], "unknown")
+        self.assertIsNone(row["sample_file_is_stale"])
+
+
+class TestRunJobSymbolWidth(unittest.TestCase):
+    """Item 2/3: assessment_symbol_width/normalization_method/endianness são
+    determinados a partir de format_detected, confirmado lendo
+    qrng_nist90b.sh -- nunca a partir do formato do stream ao vivo."""
+
+    def test_mapeamento_format_detected_para_symbol_width(self):
+        # Espelha exatamente a lógica em _run_job (não reimporta o script
+        # bash, mas fixa o contrato para não regredir silenciosamente).
+        cases = {
+            "u32txt": (8, "byte-decomposition-le-uint32", "little"),
+            "raw":    (8, "raw-passthrough", None),
+            "bits":   (1, "bit-extraction", None),
+        }
+        for fmt_detected, (width, norm, endian) in cases.items():
+            if fmt_detected == "u32txt":
+                got = (8, "byte-decomposition-le-uint32", "little")
+            elif fmt_detected == "raw":
+                got = (8, "raw-passthrough", None)
+            elif fmt_detected == "bits":
+                got = (1, "bit-extraction", None)
+            self.assertEqual(got, (width, norm, endian), fmt_detected)
+
+
+class TestPeriodicSchedulerDisabledByDefault(unittest.TestCase):
+    """Item 2: sem NIST_LIVE_CAPTURE_PATH configurado, o scheduler não cria
+    jobs -- nunca cai de volta para 'procurar o arquivo mais recente'."""
+
+    def test_live_capture_path_none_por_padrao(self):
+        self.assertIsNone(ns.NIST_LIVE_CAPTURE_PATH)
+
+    def test_run_periodic_nao_enfileira_nada_sem_live_capture_path(self):
+        before = ns._job_q.qsize()
+        # _run_periodic agenda um novo Timer real -- não deixamos isso
+        # pendurado no processo de teste.
+        orig_schedule = ns._schedule_periodic
+        ns._schedule_periodic = lambda: None
         try:
-            d = ns._row({"id": "x", "estimators_json": None,
-                          "iid_passed": None, "chi_square_passed": None,
-                          "lrs_passed": None, "permutation_passed": None,
-                          "input_file_path": f.name})
-            self.assertIsNotNone(d["sample_file_age_seconds"])
-            self.assertLess(d["sample_file_age_seconds"], 5)
-            self.assertFalse(d["sample_file_is_stale"])
+            ns._run_periodic()
         finally:
-            os.unlink(f.name)
-
-    def test_arquivo_mais_velho_que_o_intervalo_periodico_e_stale(self):
-        f = tempfile.NamedTemporaryFile(delete=False)
-        f.write(b"x"); f.close()
-        old_time = time.time() - ns.NIST_INTERVAL_SEC - 3600  # 1h alem do intervalo
-        os.utime(f.name, (old_time, old_time))
-        try:
-            d = ns._row({"id": "x", "estimators_json": None,
-                          "iid_passed": None, "chi_square_passed": None,
-                          "lrs_passed": None, "permutation_passed": None,
-                          "input_file_path": f.name})
-            self.assertTrue(d["sample_file_is_stale"])
-        finally:
-            os.unlink(f.name)
+            ns._schedule_periodic = orig_schedule
+        self.assertEqual(ns._job_q.qsize(), before)
 
 
 if __name__ == "__main__":

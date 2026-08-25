@@ -28,6 +28,18 @@ NIST_MIN_BYTES     = 1_000_000   # >= 1M samples required by NIST SP 800-90B
 NIST_UPLOAD_DIR    = os.path.join(NIST_DATA_DIR, "uploads")
 DB_PATH            = os.getenv("NIST_DB_PATH", "/home/dobslit/qrng-nist-api/nist.db")
 
+# Auditoria do pipeline QRNG (2026-08-25, item 2): sem um mecanismo de
+# captura ao vivo CONTROLADA (que grava amostras frescas do stream com
+# proveniência conhecida em um local dedicado), o job periódico não deve
+# rodar -- ele ficava preso reavaliando arquivos estáticos de exercícios
+# de auditoria manual antigos, apresentados como se fossem saúde atual do
+# stream. Desabilitado por padrão até NIST_LIVE_CAPTURE_PATH ser
+# configurado para apontar a um mecanismo real de captura (não
+# implementado nesta auditoria -- é uma lacuna de infraestrutura
+# separada). Quando desabilitado, /nist/status expõe isso explicitamente
+# e nenhum job "periodic_live" é criado.
+NIST_LIVE_CAPTURE_PATH = os.getenv("NIST_LIVE_CAPTURE_PATH", "").strip() or None
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("nist")
 
@@ -77,6 +89,43 @@ _db_conn.execute("""
     )
 """)
 _db_conn.commit()
+
+# Migrações não-destrutivas (item 2 da auditoria: metadados persistidos no
+# momento da submissão, nunca inferidos depois por nome/diretório/mtime).
+# sample_origin:            'periodic_live' | 'user_upload' |
+#                            'historical_assessment' | 'restart_campaign' | NULL(=unknown)
+# transport_format:         'uint32-le' | NULL(=unknown) -- só setado quando a
+#                            proveniência da amostra é conhecida como vinda do
+#                            pipeline atual; NUNCA assumido por padrão.
+# source_word_width:        4 | NULL(=unknown), em bytes
+# assessment_symbol_width:  8 | 1 | NULL -- o que foi de fato passado a
+#                            ea_iid/ea_non_iid (bits_per_symbol), determinado
+#                            a partir de format_detected dentro de _run_job.
+# normalization_method:     'raw-passthrough' | 'byte-decomposition-le-uint32'
+#                            | 'bit-extraction' | NULL(=unknown)
+# sample_endianness:        'little' | NULL(=unknown/not-applicable)
+# sample_conditioned:       0 | 1 | NULL(=unknown) -- mesma convenção 0/1 dos
+#                            demais campos booleanos desta tabela
+# captured_at:               ISO8601 ou NULL -- quando a amostra foi
+#                            fisicamente produzida (proxy: mtime do arquivo no
+#                            momento da submissão, quando conhecido; NUNCA
+#                            relido depois). created_at já funciona como
+#                            submitted_at (quando o job foi enfileirado).
+for _col, _decl in [
+    ("sample_origin",            "TEXT"),
+    ("transport_format",         "TEXT"),
+    ("source_word_width",        "INTEGER"),
+    ("assessment_symbol_width",  "INTEGER"),
+    ("normalization_method",     "TEXT"),
+    ("sample_endianness",        "TEXT"),
+    ("sample_conditioned",       "INTEGER"),
+    ("captured_at",              "TEXT"),
+]:
+    try:
+        _db_conn.execute(f"ALTER TABLE nist_test_jobs ADD COLUMN {_col} {_decl}")
+        _db_conn.commit()
+    except sqlite3.OperationalError:
+        pass  # coluna já existe (migração idempotente)
 
 def _db(sql, params=()):
     with _db_lock:
@@ -275,8 +324,42 @@ def _run_job(job_id: str):
             fmt_detected = "raw" if input_path.lower().endswith(".bin") else "u32txt"
 
         sha_used = _sha256(used_path)
-        _db("""UPDATE nist_test_jobs SET normalized_file_path=?, format_detected=?, sha256_used=?
-               WHERE id=?""", (norm_path, fmt_detected, sha_used, job_id))
+
+        # Determinado aqui, no único ponto em que format_detected é
+        # conhecido com certeza -- persistido imediatamente, nunca
+        # re-inferido depois pela API a partir do nome/timestamp do job.
+        # Confirmado lendo qrng_nist90b.sh (item 2/3 da auditoria):
+        #   raw    -> BITS_PER_SYMBOL=8, arquivo usado como está (passthrough)
+        #   u32txt -> BITS_PER_SYMBOL=8, cada uint32 é serializado para 4
+        #             bytes little-endian (struct.pack("<I", v)) antes da
+        #             avaliação -- ou seja, mesmo para entrada "u32txt" o
+        #             NIST avalia SÍMBOLOS DE 8 BITS (bytes), não palavras
+        #             de 32 bits, e usa TODOS os 4 bytes de cada palavra
+        #             (nenhuma lane é descartada).
+        #   bits   -> BITS_PER_SYMBOL=1 (não usado pelo pipeline atual, que
+        #             só produz raw/u32txt)
+        if fmt_detected == "u32txt":
+            symbol_width = 8
+            normalization = "byte-decomposition-le-uint32"
+            endianness = "little"
+        elif fmt_detected == "raw":
+            symbol_width = 8
+            normalization = "raw-passthrough"
+            endianness = None  # o script não reinterpreta limites de palavra em bytes crus
+        elif fmt_detected == "bits":
+            symbol_width = 1
+            normalization = "bit-extraction"
+            endianness = None
+        else:
+            symbol_width = None
+            normalization = None
+            endianness = None
+
+        _db("""UPDATE nist_test_jobs SET
+                normalized_file_path=?, format_detected=?, sha256_used=?,
+                assessment_symbol_width=?, normalization_method=?, sample_endianness=?
+               WHERE id=?""",
+            (norm_path, fmt_detected, sha_used, symbol_width, normalization, endianness, job_id))
 
         # Run script — argv list (no shell=True)
         cmd = [NIST_SCRIPT, used_path, test_type, fmt_detected]
@@ -345,12 +428,50 @@ def _run_job(job_id: str):
                duration_seconds=?, error_message=? WHERE id=?""",
             (_now(), duration, str(e)[:2000], job_id))
 
-def _create_and_enqueue(trigger, input_path, orig_name, test_type, fmt) -> str:
-    job_id = str(uuid.uuid4())
+def _capture_time_iso(path: str) -> Optional[str]:
+    """Melhor proxy disponível para 'quando a amostra foi produzida': o mtime
+    do arquivo, lido UMA VEZ no momento da submissão e persistido -- nunca
+    relido depois (o arquivo pode ser removido/rotacionado)."""
+    try:
+        return datetime.fromtimestamp(os.path.getmtime(path), tz=timezone.utc).isoformat()
+    except OSError:
+        return None
+
+def _create_and_enqueue(
+    trigger, input_path, orig_name, test_type, fmt,
+    sample_origin: str,
+    transport_format: Optional[str] = None,
+    source_word_width: Optional[int] = None,
+    sample_conditioned: Optional[bool] = None,
+    captured_at: Optional[str] = None,
+    job_id: Optional[str] = None,
+) -> str:
+    """
+    sample_origin é obrigatório e deve ser decidido pelo CHAMADOR no momento
+    da submissão -- nunca 'latest'/'periodic' genérico sem essa decisão
+    explícita (item 2 da auditoria). transport_format/source_word_width/
+    sample_conditioned só devem ser preenchidos quando a proveniência da
+    amostra é REALMENTE conhecida (ex.: captura ao vivo controlada, ou
+    upload com atestado explícito do operador) -- por padrão ficam
+    desconhecidos (NULL), nunca assumidos como 'uint32-le' automaticamente.
+
+    job_id pode ser fornecido pelo chamador quando o caminho do arquivo já
+    foi construído a partir de um id gerado antes (ex.: /nist/upload, que
+    precisa do id para nomear o diretório de destino antes de enfileirar).
+    """
+    if job_id is None:
+        job_id = str(uuid.uuid4())
+    if captured_at is None:
+        captured_at = _capture_time_iso(input_path)
     _db("""INSERT INTO nist_test_jobs
-               (id, created_at, status, trigger_type, input_file_path, original_filename, test_type, format_requested)
-           VALUES (?, ?, 'queued', ?, ?, ?, ?, ?)""",
-        (job_id, _now(), trigger, input_path, orig_name, test_type, fmt))
+               (id, created_at, status, trigger_type, input_file_path, original_filename,
+                test_type, format_requested, sample_origin, transport_format,
+                source_word_width, sample_conditioned, captured_at)
+           VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (job_id, _now(), trigger, input_path, orig_name, test_type, fmt,
+         sample_origin, transport_format, source_word_width,
+         None if sample_conditioned is None else int(sample_conditioned),
+         captured_at))
     _job_q.put(job_id)
     return job_id
 
@@ -366,12 +487,41 @@ def _schedule_periodic():
 def _run_periodic():
     if not NIST_ENABLED:
         return
-    f = _find_latest_data_file()
-    if f:
-        log.info(f"[periodic] Testing: {f}")
-        _create_and_enqueue("periodic", f, os.path.basename(f), "both", "auto")
-    else:
-        log.warning("[periodic] No suitable data file found (>= 1 MB)")
+    if not NIST_LIVE_CAPTURE_PATH:
+        # Item 2 da auditoria: sem captura ao vivo controlada configurada,
+        # o scheduler NÃO procura genericamente pelo arquivo mais recente
+        # na árvore compartilhada (isso é o que causava o job periódico
+        # ficar preso reavaliando artefatos de auditoria manual antigos
+        # como se fossem saúde atual). Fica inerte até NIST_LIVE_CAPTURE_PATH
+        # ser configurado para um mecanismo real de captura -- não
+        # implementado aqui, é uma lacuna de infraestrutura separada.
+        log.info("[periodic] NIST_LIVE_CAPTURE_PATH não configurado -- sem amostra live recente, nenhum job criado.")
+        _schedule_periodic()
+        return
+
+    if not os.path.exists(NIST_LIVE_CAPTURE_PATH):
+        log.warning(f"[periodic] NIST_LIVE_CAPTURE_PATH configurado mas arquivo não existe: {NIST_LIVE_CAPTURE_PATH}")
+        _schedule_periodic()
+        return
+
+    try:
+        if os.path.getsize(NIST_LIVE_CAPTURE_PATH) < NIST_MIN_BYTES:
+            log.warning("[periodic] Captura live configurada é menor que NIST_MIN_BYTES -- aguardando.")
+            _schedule_periodic()
+            return
+    except OSError:
+        _schedule_periodic()
+        return
+
+    log.info(f"[periodic] Testing captura live controlada: {NIST_LIVE_CAPTURE_PATH}")
+    _create_and_enqueue(
+        "periodic", NIST_LIVE_CAPTURE_PATH, os.path.basename(NIST_LIVE_CAPTURE_PATH),
+        "both", "auto",
+        sample_origin="periodic_live",
+        transport_format="uint32-le",
+        source_word_width=4,
+        sample_conditioned=False,
+    )
     _schedule_periodic()
 
 if NIST_ENABLED:
@@ -383,23 +533,22 @@ app = FastAPI(title="QRNG NIST SP 800-90B Service", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
 
-# Auditoria do pipeline QRNG (2026-08-25): unidade de amostra confirmada
-# diretamente no código-fonte de todo o pipeline físico -- fifo.c (lido
-# via mmap do registrador AXI FIFO em 0x43C00000 na Red Pitaya) grava
-# exatamente 4 bytes little-endian (htole32) por amostra, sem nenhum
-# processamento/whitening; server_api.py (v1.1) declara explicitamente
-# STREAM_FORMAT="uint32-le", SAMPLE_WIDTH_BYTES=4, CONDITIONED=False.
-# Isto é estático e não varia por job -- não é lido de nenhum arquivo.
-SAMPLE_UNIT_LIVE_STREAM = {
-    "format": "uint32-le",
-    "width_bytes": 4,
-    "conditioned": False,
-    "note": "Confirmado no código-fonte do pipeline físico (fifo.c + server_api.py). "
-            "Arquivos de teste antigos podem ter sido capturados em formatos anteriores "
-            "(ex.: decimal ASCII sem delimitador) -- ver sample_file_age_seconds e "
-            "trigger_type para avaliar se esta amostra específica é representativa do "
-            "stream ao vivo atual.",
-}
+# Confirmado no código-fonte de todo o pipeline físico (auditoria
+# 2026-08-25, item 3): fifo.c lê o registrador AXI FIFO via mmap na Red
+# Pitaya e grava exatamente 4 bytes little-endian (htole32) por amostra,
+# sem processamento; server_api.py v1.1 declara STREAM_FORMAT="uint32-le",
+# SAMPLE_WIDTH_BYTES=4, CONDITIONED=False. Confirmado empiricamente também:
+# captura real de 1.000.000 amostras (2026-08-25T14:04:59Z, SHA-256
+# 9c7ec2803b1b9507407cb105de85f2174d739f2da48f6f292ae8883d20b92495) mostra
+# entropia ≈7,9996 bits em cada um dos 4 byte-lanes e nenhum dos 32 bits
+# constante -- sem evidência de padding de ADC de menor resolução.
+# ISTO DESCREVE SÓ O PIPELINE ATUAL -- nunca é atribuído a um job
+# automaticamente; cada job carrega seus próprios metadados persistidos
+# no momento da submissão (ver colunas transport_format etc.).
+_UNKNOWN = "unknown"
+
+def _meta_or_unknown(value):
+    return _UNKNOWN if value is None else value
 
 def _row(row) -> dict:
     if row is None:
@@ -414,23 +563,39 @@ def _row(row) -> dict:
     for k in ["iid_passed", "chi_square_passed", "lrs_passed", "permutation_passed"]:
         if d.get(k) is not None:
             d[k] = bool(d[k])
+    if d.get("sample_conditioned") is not None:
+        d["sample_conditioned"] = bool(d["sample_conditioned"])
 
-    # Idade do arquivo testado (não a idade do job) -- distingue "acabamos de
-    # testar uma amostra fresca" de "reavaliamos pela enésima vez o mesmo
-    # arquivo estático antigo". Calculado sob demanda a partir do mtime atual
-    # do arquivo, não armazenado no banco (o arquivo pode ter sido
-    # removido/rotacionado desde o job).
-    d["sample_file_age_seconds"] = None
+    # Item 2 da auditoria: metadados NUNCA inferidos aqui a partir de
+    # nome/diretório/timestamp -- só o que foi persistido no momento da
+    # submissão (_create_and_enqueue / _run_job). Jobs anteriores a esta
+    # migração têm essas colunas NULL -- exibidos como "unknown" (nunca
+    # adivinhados retroativamente).
+    d["sample_origin"]           = _meta_or_unknown(d.get("sample_origin"))
+    d["transport_format"]        = _meta_or_unknown(d.get("transport_format"))
+    d["source_word_width"]       = d.get("source_word_width")       # int ou None (unknown)
+    d["assessment_symbol_width"] = d.get("assessment_symbol_width") # int ou None (unknown)
+    d["normalization_method"]    = _meta_or_unknown(d.get("normalization_method"))
+    d["sample_endianness"]       = _meta_or_unknown(d.get("sample_endianness"))
+    d["submitted_at"]            = d.get("created_at")  # alias semântico -- mesma coluna
+
+    # Idade da amostra: usa captured_at persistido (nunca mtime relido ao
+    # vivo -- o arquivo pode ter sido removido/rotacionado desde o job).
+    d["sample_captured_age_seconds"] = None
+    if d.get("captured_at"):
+        try:
+            captured = datetime.fromisoformat(d["captured_at"])
+            d["sample_captured_age_seconds"] = round((datetime.now(timezone.utc) - captured).total_seconds(), 1)
+        except ValueError:
+            pass
+
+    # "Stale" só faz sentido para jobs de monitoramento periódico ao vivo --
+    # um upload histórico ou uma avaliação manual de um arquivo antigo não
+    # "expira" depois de uma hora, porque nunca alegou ser amostra corrente.
     d["sample_file_is_stale"] = None
-    path = d.get("input_file_path")
-    if path and os.path.exists(path):
-        age = time.time() - os.path.getmtime(path)
-        d["sample_file_age_seconds"] = round(age, 1)
-        # "stale" = arquivo mais velho que o intervalo entre execuções
-        # periódicas -- sinal de que não é uma captura fresca do stream.
-        d["sample_file_is_stale"] = age > NIST_INTERVAL_SEC
+    if d.get("sample_origin") == "periodic_live" and d["sample_captured_age_seconds"] is not None:
+        d["sample_file_is_stale"] = d["sample_captured_age_seconds"] > NIST_INTERVAL_SEC
 
-    d["sample_unit"] = SAMPLE_UNIT_LIVE_STREAM
     return d
 
 @app.get("/health")
@@ -453,6 +618,14 @@ def nist_status():
         "has_active_job":    running is not None,
         "next_periodic":     datetime.fromtimestamp(_next_periodic, tz=timezone.utc).isoformat()
                              if _next_periodic else None,
+        # Item 2 da auditoria: expõe explicitamente que não há monitoramento
+        # periódico ao vivo real -- em vez do frontend inferir isso pela
+        # ausência de jobs recentes.
+        "live_capture_configured": NIST_LIVE_CAPTURE_PATH is not None,
+        "live_capture_status": (
+            "not_configured" if NIST_LIVE_CAPTURE_PATH is None
+            else "configured"
+        ),
         "last_job":          _row(last),
     }
 
@@ -504,7 +677,15 @@ async def nist_run(
     else:
         raise HTTPException(400, "source='latest' ou forneça filename")
 
-    job_id = _create_and_enqueue("manual", file_path, orig, test_type, format)
+    # Item 2 da auditoria: mesmo disparado manualmente por um humano, o
+    # arquivo "mais recente" da árvore compartilhada não é uma captura ao
+    # vivo verificada -- rotulado honestamente como avaliação histórica.
+    # transport_format fica desconhecido (não assumido uint32-le) porque a
+    # proveniência real do arquivo escolhido não é verificada aqui.
+    job_id = _create_and_enqueue(
+        "manual", file_path, orig, test_type, format,
+        sample_origin="historical_assessment",
+    )
     return {"job_id": job_id, "status": "queued", "file": os.path.basename(file_path)}
 
 @app.post("/nist/upload")
@@ -512,6 +693,15 @@ async def nist_upload(
     file:      UploadFile = File(...),
     test_type: str        = Form("both"),
     format:    str        = Form("auto"),
+    # Item 2 da auditoria: atestação OPCIONAL do operador sobre a
+    # proveniência da amostra. Nunca inferida automaticamente -- se não
+    # informada, fica "unknown" (não assume uint32-le por padrão, mesmo
+    # que esse seja o formato do pipeline atual). Use quando o upload é,
+    # comprovadamente, uma captura do stream ao vivo atual (ex.: obtida via
+    # GET /v1/raw), não um arquivo de proveniência desconhecida.
+    attested_transport_format: Optional[str] = Form(None),
+    attested_captured_at:      Optional[str] = Form(None),
+    attested_conditioned:      Optional[bool] = Form(None),
 ):
     if not NIST_ENABLED:
         raise HTTPException(503, "NIST desabilitado")
@@ -534,11 +724,18 @@ async def nist_upload(
     saved_path = os.path.join(job_dir, safe_name)
     with open(saved_path, "wb") as f: f.write(content)
 
-    _db("""INSERT INTO nist_test_jobs
-               (id, created_at, status, trigger_type, input_file_path, original_filename, test_type, format_requested)
-           VALUES (?, ?, 'queued', 'upload', ?, ?, ?, ?)""",
-        (job_id, _now(), saved_path, orig, test_type, format))
-    _job_q.put(job_id)
+    if attested_transport_format and attested_transport_format not in ("uint32-le",):
+        raise HTTPException(400, "attested_transport_format inválido -- use 'uint32-le' ou omita.")
+
+    _create_and_enqueue(
+        "upload", saved_path, orig, test_type, format,
+        sample_origin="user_upload",
+        transport_format=attested_transport_format,
+        source_word_width=4 if attested_transport_format == "uint32-le" else None,
+        sample_conditioned=attested_conditioned,
+        captured_at=attested_captured_at,  # None -> cai no mtime do arquivo salvo (momento do upload)
+        job_id=job_id,  # mesmo id já usado no caminho do arquivo acima
+    )
 
     return {
         "job_id":            job_id,

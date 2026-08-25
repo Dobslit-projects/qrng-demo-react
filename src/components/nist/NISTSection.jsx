@@ -383,24 +383,40 @@ export default function NISTSection() {
         ))}
       </div>
 
+      {/* ── Aviso: sem monitoramento periódico ao vivo configurado ── */}
+      {status && status.live_capture_configured === false && (
+        <div style={{
+          padding: "8px 12px", borderRadius: 8,
+          background: theme.textMuted + "12", border: `1px solid ${theme.textMuted}30`,
+          fontSize: 11, color: theme.textDim, fontFamily: mono,
+        }}>
+          ℹ Sem amostra live recente — nenhum mecanismo de captura ao vivo controlada está configurado.
+          O job periódico não está reavaliando nenhum arquivo automaticamente. Resultados abaixo (se
+          houver) vêm de upload manual ou execução avulsa sobre um arquivo específico.
+        </div>
+      )}
+
       {/* ── Last result summary ── */}
       {status?.last_job && (
         <div style={{ ...card }}>
           <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, fontFamily: mono, marginBottom: 4 }}>ÚLTIMO RESULTADO</div>
           <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono, marginBottom: 10, lineHeight: 1.6 }}>
-            Avaliação histórica de uma amostra específica (arquivo abaixo) — não é uma medida contínua da
-            saúde atual do stream ao vivo. Veja "Idade da amostra": se o mesmo arquivo aparece repetidamente
-            entre execuções periódicas, não há captura fresca sendo testada.
+            Origem: <strong>{sampleOriginLabel(status.last_job.sample_origin)}</strong>.{" "}
+            {status.last_job.sample_origin === "periodic_live"
+              ? "Medida periódica da fonte ao vivo — veja \"Idade da amostra\" para saber há quanto tempo foi capturada."
+              : "Avaliação de uma amostra específica, não uma medida contínua da saúde atual do stream ao vivo."}
           </div>
 
-          {/* Aviso destacado quando a amostra testada está desatualizada */}
+          {/* Aviso destacado quando a amostra testada está desatualizada
+              (só se aplica a monitoramento periódico ao vivo -- upload ou
+              avaliação manual de um arquivo histórico não "expira"). */}
           {status.last_job.sample_file_is_stale && (
             <div style={{
               padding: "8px 12px", borderRadius: 8, marginBottom: 10,
               background: theme.warning + "12", border: `1px solid ${theme.warning}35`,
               fontSize: 11, color: theme.warning, fontFamily: mono,
             }}>
-              ⚠ AMOSTRA DESATUALIZADA — este arquivo tem {fmtAge(status.last_job.sample_file_age_seconds)} de idade,
+              ⚠ AMOSTRA DESATUALIZADA — capturada há {fmtAge(status.last_job.sample_captured_age_seconds)},
               mais que o intervalo entre execuções periódicas ({status?.interval_seconds}s). Este resultado
               não reflete o estado atual da fonte ao vivo.
             </div>
@@ -428,22 +444,32 @@ export default function NISTSection() {
               </span>
             </div>
             <div>
-              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>Executado em</div>
+              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>Enviado em</div>
               <span style={{ fontSize: 11, fontFamily: mono, color: theme.textDim }}>
-                {fmtTs(status.last_job.created_at)}
+                {fmtTs(status.last_job.submitted_at)}
               </span>
             </div>
             <div>
               <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>Idade da amostra</div>
               <span style={{ fontSize: 11, fontFamily: mono, color: status.last_job.sample_file_is_stale ? theme.warning : theme.textDim }}>
-                {fmtAge(status.last_job.sample_file_age_seconds)}
+                {fmtAge(status.last_job.sample_captured_age_seconds)}
               </span>
             </div>
             <div>
-              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>Unidade de amostra</div>
+              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>Transporte / origem física</div>
               <span style={{ fontSize: 11, fontFamily: mono, color: theme.textDim }}>
-                {status.last_job.sample_unit
-                  ? `${status.last_job.sample_unit.format} · ${status.last_job.sample_unit.width_bytes}B · ${status.last_job.sample_unit.conditioned ? "condicionado" : "sem conditioning"}`
+                {status.last_job.transport_format}
+                {status.last_job.source_word_width != null ? ` · ${status.last_job.source_word_width}B/palavra` : ""}
+                {status.last_job.sample_conditioned != null
+                  ? ` · ${status.last_job.sample_conditioned ? "condicionado" : "sem conditioning"}`
+                  : ""}
+              </span>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>Símbolo avaliado pelo NIST</div>
+              <span style={{ fontSize: 11, fontFamily: mono, color: theme.textDim }}>
+                {status.last_job.assessment_symbol_width != null
+                  ? `${status.last_job.assessment_symbol_width} bit(s) · ${status.last_job.normalization_method}`
                   : "—"}
               </span>
             </div>
