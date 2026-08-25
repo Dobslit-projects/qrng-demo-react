@@ -1,6 +1,5 @@
 import { useContext } from "react";
 import { theme } from "../../theme";
-import { getApiPrefix } from "../../qrngApi";
 import { AppContext, SOURCE_LABELS } from "../../contexts/AppContext";
 
 export default function Footer() {
