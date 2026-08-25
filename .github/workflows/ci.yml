@@ -1,0 +1,79 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  client-api:
+    name: qrng-client-api (testes + OpenAPI)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: qrng-client-api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: qrng-client-api/package-lock.json
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Testes (unitários + integração + contrato OpenAPI)
+        run: npm test
+
+      - name: Regenerar especificação OpenAPI e checar drift
+        run: |
+          npm run openapi:generate
+          if ! git diff --quiet -- openapi/qrng-public-v1.yaml; then
+            echo "::error::openapi/qrng-public-v1.yaml está desatualizado em relação ao código."
+            echo "Rode 'npm run openapi:generate' em qrng-client-api/ e commite o resultado."
+            git diff -- openapi/qrng-public-v1.yaml
+            exit 1
+          fi
+
+  frontend:
+    name: Frontend (build + testes)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: "npm"
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Lint
+        run: npm run lint
+        continue-on-error: true # lint tem débito pré-existente não relacionado a esta auditoria
+
+      - name: Testes
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  nist-service:
+    name: qrng-nist-api (testes Python)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: qrng-nist-api
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Testes
+        run: python3 test/test_nist_service.py

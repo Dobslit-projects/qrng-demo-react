@@ -1,0 +1,960 @@
+# GERADO AUTOMATICAMENTE por `npm run openapi:generate` a partir dos
+# comentários @openapi em qrng-client-api/server.js. Não edite este
+# arquivo manualmente -- edite os comentários JSDoc no código e rode
+# o comando novamente. O CI falha se este arquivo divergir do gerado.
+openapi: 3.0.3
+info:
+  title: Kuapoã QRNG — API Pública
+  version: 1.0.0
+  description: >-
+    API pública do gerador quântico de números aleatórios (QRNG) do Kuapoã/Dobslit. Fonte física:
+    FPGA Red Pitaya, stream uint32 little-endian, sem conditioning (confirmado no código-fonte do
+    pipeline físico). Bytes brutos são servidos sem processamento adicional; a avaliação de
+    min-entropia é feita separadamente pela suíte NIST SP 800-90B (ver aba Teste NIST / /qrng/nist/
+    no frontend) — nenhum endpoint aqui certifica ou garante um nível de entropia.
+  contact:
+    name: Dobslit
+servers:
+  - url: https://bongo.dobslit.com/qrng/v1
+    description: Produção (via nginx, proxy para o client-api)
+  - url: http://127.0.0.1:3010/v1
+    description: Local (client-api direto, sem nginx)
+tags:
+  - name: Auth
+    description: Registro, login e identidade do usuário
+  - name: Tokens
+    description: Emissão, rotação e revogação de tokens de API pessoais
+  - name: Random
+    description: Geração de bytes aleatórios (endpoint principal)
+  - name: Health
+    description: Saúde da API e do upstream FPGA
+  - name: Usage
+    description: Cota, uso e histórico de chamadas do token
+  - name: Admin
+    description: Administração de tokens e usuários (role=admin)
+components:
+  securitySchemes:
+    bearerAuthJWT:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: >-
+        Sessão de usuário (login via /v1/auth/login ou /v1/auth/register). Usada pelos endpoints
+        /v1/auth/me, /v1/tokens e /v1/admin/*.
+    bearerAuthToken:
+      type: http
+      scheme: bearer
+      description: >-
+        Token de API pessoal (formato dobslit_qrng_live_<hex>, emitido por POST /v1/tokens). Usado
+        pelos endpoints de consumo: /v1/random, /v1/health. Endpoints /v1/me/* aceitam tanto este
+        token quanto o JWT de sessão.
+  schemas:
+    ErrorResponse:
+      type: object
+      properties:
+        request_id:
+          type: string
+          example: req_a383397963db4222
+          nullable: true
+        error:
+          type: string
+          example: INVALID_TOKEN
+        message:
+          type: string
+          example: Token inválido ou revogado.
+      required:
+        - error
+    RandomResponse:
+      type: object
+      description: >-
+        Corpo retornado quando format=hex|base64|uint8. Para format=binary (ou omitido, dependendo
+        da rota — ver cada endpoint), o corpo é application/octet-stream com os bytes brutos, não
+        este JSON.
+      properties:
+        request_id:
+          type: string
+          example: req_a383397963db4222
+        source:
+          type: string
+          example: dobslit-qrng-ufpe-fpga
+        bytes:
+          type: integer
+          example: 32
+          description: Quantidade de bytes gerados.
+        format:
+          type: string
+          enum:
+            - hex
+            - base64
+            - uint8
+          example: hex
+        random:
+          description: >-
+            hex: string hexadecimal (2N caracteres). base64: string base64. uint8: array de N
+            inteiros [0,255].
+          oneOf:
+            - type: string
+              example: 5c0eda118fdf680778ecf97c4ab89cb7
+            - type: array
+              items:
+                type: integer
+                minimum: 0
+                maximum: 255
+        timestamp:
+          type: string
+          format: date-time
+      required:
+        - request_id
+        - source
+        - bytes
+        - format
+        - random
+        - timestamp
+    AuthResponse:
+      type: object
+      properties:
+        token:
+          type: string
+          description: JWT de sessão, válido por 30 dias.
+        email:
+          type: string
+          format: email
+        role:
+          type: string
+          enum:
+            - user
+            - admin
+      required:
+        - token
+        - email
+        - role
+    TokenInfo:
+      type: object
+      properties:
+        has_token:
+          type: boolean
+        token_prefix:
+          type: string
+          example: dobslit_qrng_live_a1b2c3d4
+        name:
+          type: string
+        status:
+          type: string
+          enum:
+            - active
+            - revoked
+        quota_daily:
+          type: integer
+        requests_today:
+          type: integer
+        bytes_today:
+          type: integer
+        created_at:
+          type: string
+          format: date-time
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+    TokenIssued:
+      type: object
+      description: Retornado apenas na criação/rotação — o token completo NUNCA é exibido novamente.
+      properties:
+        message:
+          type: string
+        token:
+          type: string
+          example: dobslit_qrng_live_<40 hex chars>
+        prefix:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+    UsageResponse:
+      type: object
+      properties:
+        has_token:
+          type: boolean
+        token_name:
+          type: string
+        status:
+          type: string
+        quota_daily_requests:
+          type: integer
+        quota_daily_bytes:
+          type: integer
+        max_bytes_per_request:
+          type: integer
+        requests_today:
+          type: integer
+        bytes_today:
+          type: integer
+        remaining_requests_today:
+          type: integer
+        remaining_bytes_today:
+          type: integer
+        requests_7d:
+          type: integer
+        bytes_7d:
+          type: integer
+        requests_30d:
+          type: integer
+        bytes_30d:
+          type: integer
+        last_used_at:
+          type: string
+          format: date-time
+          nullable: true
+        daily_history:
+          type: array
+          items:
+            type: object
+            properties:
+              date:
+                type: string
+                format: date
+              requests_count:
+                type: integer
+              bytes_count:
+                type: integer
+              errors_count:
+                type: integer
+    RequestLogEntry:
+      type: object
+      properties:
+        request_id:
+          type: string
+        endpoint:
+          type: string
+        bytes_requested:
+          type: integer
+        format:
+          type: string
+          nullable: true
+        status_code:
+          type: integer
+        ip_address:
+          type: string
+        duration_ms:
+          type: integer
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+    HealthSelfResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+        service:
+          type: string
+          example: qrng-client-api
+        uptime_seconds:
+          type: number
+        timestamp:
+          type: string
+          format: date-time
+    HealthResponse:
+      type: object
+      description: >-
+        Requer token. `upstream` é a resposta bruta do broker FPGA (ver /health no server_api.py
+        upstream — buffer_bytes_available, source_status, stream_format, sample_width_bytes,
+        conditioned).
+      properties:
+        request_id:
+          type: string
+        status:
+          type: string
+          example: ok
+        api:
+          type: string
+          example: dobslit-qrng-client-api
+        source:
+          type: string
+          example: ufpe-fpga
+        upstream:
+          type: object
+          additionalProperties: true
+  responses:
+    Unauthorized:
+      description: Token ausente, inválido ou expirado.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: 'Autenticado, mas sem permissão (ex.: rota de admin sem role=admin).'
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    RateLimited:
+      description: Limite de requisições por IP ou por token excedido.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+      headers:
+        Retry-After:
+          schema:
+            type: integer
+          description: Segundos até poder tentar novamente.
+    QuotaExceeded:
+      description: Cota diária de requisições ou bytes excedida.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    UpstreamError:
+      description: Upstream FPGA indisponível, com formato inesperado, ou timeout.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+paths:
+  /auth/register:
+    post:
+      tags:
+        - Auth
+      summary: Cria uma conta de usuário e retorna um JWT de sessão.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+                  minLength: 8
+      responses:
+        '200':
+          description: Conta criada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '400':
+          description: Campos ausentes ou senha muito curta (< 8 caracteres).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: E-mail já cadastrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/login:
+    post:
+      tags:
+        - Auth
+      summary: Autentica com e-mail/senha e retorna um JWT de sessão.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+                - password
+              properties:
+                email:
+                  type: string
+                  format: email
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Login bem-sucedido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuthResponse'
+        '401':
+          description: E-mail ou senha incorretos.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/me:
+    get:
+      tags:
+        - Auth
+      summary: Retorna os dados da conta autenticada.
+      security:
+        - bearerAuthJWT: []
+      responses:
+        '200':
+          description: Dados do usuário.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  id:
+                    type: integer
+                  email:
+                    type: string
+                    format: email
+                  role:
+                    type: string
+                    enum:
+                      - user
+                      - admin
+                  created_at:
+                    type: string
+                    format: date-time
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /tokens:
+    post:
+      tags:
+        - Tokens
+      summary: Emite o token de API pessoal (um por usuário).
+      description: >
+        O valor completo do token só é retornado nesta chamada -- apenas o prefixo fica recuperável
+        depois via GET /me/token. Use /me/token/rotate para gerar um novo se perdê-lo.
+      security:
+        - bearerAuthJWT: []
+      responses:
+        '200':
+          description: Token criado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenIssued'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '409':
+          description: Usuário já tem um token ativo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /me/token:
+    get:
+      tags:
+        - Tokens
+      summary: Retorna metadados do token ativo (nunca o valor completo).
+      security:
+        - bearerAuthJWT: []
+        - bearerAuthToken: []
+      responses:
+        '200':
+          description: Metadados do token, ou { has_token false } se nenhum existir.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenInfo'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /me/token/rotate:
+    post:
+      tags:
+        - Tokens
+      summary: Revoga o token atual e emite um novo (mesma cota/nome).
+      security:
+        - bearerAuthJWT: []
+        - bearerAuthToken: []
+      responses:
+        '200':
+          description: Novo token emitido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokenIssued'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Nenhum token ativo encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /me/token/revoke:
+    post:
+      tags:
+        - Tokens
+      summary: Revoga o token ativo (sem emitir um novo).
+      security:
+        - bearerAuthJWT: []
+        - bearerAuthToken: []
+      responses:
+        '200':
+          description: Token revogado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                  revoked_at:
+                    type: string
+                    format: date-time
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          description: Nenhum token ativo encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /me/usage:
+    get:
+      tags:
+        - Usage
+      summary: Cota diária, uso hoje/7d/30d e histórico diário do token.
+      security:
+        - bearerAuthJWT: []
+        - bearerAuthToken: []
+      responses:
+        '200':
+          description: Resumo de uso.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UsageResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /me/requests:
+    get:
+      tags:
+        - Usage
+      summary: Histórico das últimas chamadas feitas com o token.
+      security:
+        - bearerAuthJWT: []
+        - bearerAuthToken: []
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 10000
+          description: Máximo de entradas a retornar.
+      responses:
+        '200':
+          description: Lista de requisições (mais recentes primeiro).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  requests:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/RequestLogEntry'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /upstream/status:
+    get:
+      tags:
+        - Health
+      summary: Histórico de disponibilidade do upstream FPGA (últimas 500 transições, uptime 24h).
+      security:
+        - bearerAuthJWT: []
+        - bearerAuthToken: []
+      responses:
+        '200':
+          description: Status atual, uptime estimado nas últimas 24h e eventos recentes.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  current:
+                    type: object
+                    properties:
+                      status:
+                        type: string
+                        enum:
+                          - up
+                          - down
+                          - unknown
+                      checkedAt:
+                        type: string
+                        format: date-time
+                        nullable: true
+                      responseMs:
+                        type: integer
+                        nullable: true
+                  uptime_24h_pct:
+                    type: number
+                    nullable: true
+                  recent_events:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        status:
+                          type: string
+                        response_ms:
+                          type: integer
+                          nullable: true
+                        detail:
+                          type: string
+                          nullable: true
+                        checked_at:
+                          type: string
+                          format: date-time
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+  /admin/tokens:
+    get:
+      tags:
+        - Admin
+      summary: Lista todos os tokens de todos os usuários (requer role=admin).
+      security:
+        - bearerAuthJWT: []
+      responses:
+        '200':
+          description: Lista de tokens com uso de hoje.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  tokens:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                        user_id:
+                          type: integer
+                        token_prefix:
+                          type: string
+                        name:
+                          type: string
+                        status:
+                          type: string
+                        quota_daily:
+                          type: integer
+                        created_at:
+                          type: string
+                          format: date-time
+                        last_used_at:
+                          type: string
+                          format: date-time
+                          nullable: true
+                        email:
+                          type: string
+                          format: email
+                        requests_today:
+                          type: integer
+                        bytes_today:
+                          type: integer
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /admin/tokens/{id}/revoke:
+    post:
+      tags:
+        - Admin
+      summary: Revoga o token de qualquer usuário (requer role=admin).
+      security:
+        - bearerAuthJWT: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Token revogado.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Token não encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /admin/tokens/{id}/quota:
+    patch:
+      tags:
+        - Admin
+      summary: Ajusta a cota diária de requisições de um token (requer role=admin).
+      security:
+        - bearerAuthJWT: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - quota_daily
+              properties:
+                quota_daily:
+                  type: integer
+                  minimum: 1
+      responses:
+        '200':
+          description: Cota atualizada.
+        '400':
+          description: quota_daily ausente ou inválida.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Token não encontrado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /admin/users:
+    get:
+      tags:
+        - Admin
+      summary: Lista todos os usuários (requer role=admin).
+      security:
+        - bearerAuthJWT: []
+      responses:
+        '200':
+          description: Lista de usuários.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  users:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id:
+                          type: integer
+                        email:
+                          type: string
+                          format: email
+                        role:
+                          type: string
+                        created_at:
+                          type: string
+                          format: date-time
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Saúde do client-api e do upstream FPGA (requer token).
+      description: >
+        Diferente de /health/self (liveness do processo Node), esta rota consulta o upstream FPGA de
+        verdade -- reflete se a fonte física está acessível AGORA, não apenas se a API está no ar.
+      security:
+        - bearerAuthToken: []
+      responses:
+        '200':
+          description: Upstream respondeu.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/UpstreamError'
+  /random:
+    get:
+      tags:
+        - Random
+      summary: Gera bytes aleatórios da fonte QRNG (FPGA Red Pitaya, uint32-LE, sem conditioning).
+      description: >
+        Confirmado no código-fonte de todo o pipeline físico (auditoria 2026-08-25): o upstream lê
+        um registrador AXI FIFO diretamente via mmap na Red Pitaya e grava exatamente 4 bytes
+        little-endian por amostra, sem nenhum processamento (whitening/debiasing/conditioning). Esta
+        rota entrega esses bytes brutos -- nenhuma avaliação de entropia é feita aqui; ver a suíte
+        NIST SP 800-90B separadamente para isso.
+      security:
+        - bearerAuthToken: []
+      parameters:
+        - name: bytes
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 32
+          description: >-
+            Quantidade de bytes a gerar. Limite por requisição = MAX_BYTES_PER_REQUEST (padrão 1
+            MiB).
+        - name: format
+          in: query
+          schema:
+            type: string
+            enum:
+              - hex
+              - base64
+              - uint8
+          description: >
+            hex (padrão): string hexadecimal de 2N caracteres. base64: string base64 dos N bytes.
+            uint8: array JSON de N inteiros em [0,255]. Sem este parâmetro, o corpo é
+            application/octet-stream com os N bytes brutos.
+      responses:
+        '200':
+          description: Bytes gerados.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RandomResponse'
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          description: bytes acima de MAX_BYTES_PER_REQUEST.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: bytes ou format inválidos.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          description: >
+            Upstream retornou erro OU o Content-Type declarado não é suportado pelo contrato
+            (UPSTREAM_UNSUPPORTED_CONTENT_TYPE, UPSTREAM_MISSING_CONTENT_TYPE,
+            UPSTREAM_INVALID_JSON, UPSTREAM_JSON_SCHEMA_MISMATCH, UPSTREAM_LENGTH_MISMATCH,
+            UPSTREAM_LEGACY_FORMAT_DISABLED) -- ver interpretUpstreamResponse().
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: >-
+            Upstream indisponível, timeout, ou buffer com menos bytes que o pedido
+            (INSUFFICIENT_ENTROPY).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        429_quota:
+          description: (usa código 429) Cota diária de requisições ou bytes excedida.
+  /bulk-random-jobs:
+    post:
+      tags:
+        - Random
+      summary: NÃO IMPLEMENTADO — stub reservado para geração assíncrona em lote (retorna 501).
+      security:
+        - bearerAuthToken: []
+      responses:
+        '501':
+          description: Não implementado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /bulk-random-jobs/{job_id}:
+    get:
+      tags:
+        - Random
+      summary: NÃO IMPLEMENTADO (retorna 501).
+      security:
+        - bearerAuthToken: []
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '501':
+          description: Não implementado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /bulk-random-jobs/{job_id}/download:
+    get:
+      tags:
+        - Random
+      summary: NÃO IMPLEMENTADO (retorna 501).
+      security:
+        - bearerAuthToken: []
+      parameters:
+        - name: job_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '501':
+          description: Não implementado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /health/self:
+    get:
+      tags:
+        - Health
+      summary: Liveness do processo Node — não consulta o upstream FPGA. Sem autenticação.
+      description: >
+        Só confirma que o processo qrng-client-api está no ar. Para saber se a fonte FPGA está
+        acessível, use GET /health (requer token).
+      responses:
+        '200':
+          description: Processo vivo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthSelfResponse'
+  /metrics:
+    get:
+      tags:
+        - Health
+      summary: Métricas no formato Prometheus (requests/bytes/erros por status_code em /v1/random).
+      description: >
+        Fora do prefixo /v1 -- não é versionada como o resto da API pública. Protegida por
+        METRICS_TOKEN (env var) quando definida; sem autenticação quando METRICS_TOKEN não está
+        configurada.
+      security:
+        - bearerAuthToken: []
+      responses:
+        '200':
+          description: Métricas em texto, formato Prometheus (Content-Type text/plain).
+          content:
+            text/plain:
+              schema:
+                type: string
+        '401':
+          description: METRICS_TOKEN configurada e não enviada/incorreta.

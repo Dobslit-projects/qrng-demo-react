@@ -142,6 +142,44 @@ app.use((req, res, next) => {
   next();
 });
 
+// ── OpenAPI / Swagger (item 9 da auditoria do pipeline QRNG) ──────────────────
+// Especificação GERADA a partir dos comentários @openapi acima de cada rota
+// deste arquivo (swagger-jsdoc) — nunca escrita manualmente à parte do
+// código, para não divergir dele. Cópia estática versionada em
+// openapi/qrng-public-v1.yaml (regenerar com `npm run openapi:generate`;
+// o CI falha se o arquivo commitado divergir do gerado).
+//
+// Montados ANTES do rate limiting global de propósito — documentação não
+// deve competir por cota com tráfego de produção, e os limites de
+// requisição do serviço em si não fazem sentido aplicados à própria UI de
+// docs (mantém as respostas do QRNG protegidas pelo rate limit normal,
+// que continua abaixo, aplicado só a partir daqui).
+
+const swaggerUi = require("swagger-ui-express");
+const { buildSpec: buildOpenapiSpec } = require("./openapi/spec");
+const openapiSpec = buildOpenapiSpec();
+
+app.get("/v1/openapi.json", (_req, res) => res.json(openapiSpec));
+
+app.use("/v1/docs", swaggerUi.serve, swaggerUi.setup(openapiSpec, {
+  customSiteTitle: "Kuapoã QRNG API — Docs",
+}));
+
+app.get("/v1/redoc", (_req, res) => {
+  res.type("html").send(`<!doctype html>
+<html>
+  <head>
+    <title>Kuapoã QRNG API — ReDoc</title>
+    <meta charset="utf-8"/>
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+  </head>
+  <body>
+    <redoc spec-url="/v1/openapi.json"></redoc>
+    <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
+  </body>
+</html>`);
+});
+
 // ── Rate limiting — global por IP ─────────────────────────────────────────────
 
 app.use(rateLimit({
@@ -340,6 +378,35 @@ async function fetchWithTimeout(url, ms) {
 
 // ── Auth: registro e login ────────────────────────────────────────────────────
 
+/**
+ * @openapi
+ * /auth/register:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Cria uma conta de usuário e retorna um JWT de sessão.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, password]
+ *             properties:
+ *               email: { type: string, format: email }
+ *               password: { type: string, minLength: 8 }
+ *     responses:
+ *       200:
+ *         description: Conta criada.
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/AuthResponse' }
+ *       400:
+ *         description: Campos ausentes ou senha muito curta (< 8 caracteres).
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       409:
+ *         description: E-mail já cadastrado.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ */
 app.post("/v1/auth/register", async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: "MISSING_FIELDS", message: "Email e senha são obrigatórios." });
@@ -357,6 +424,30 @@ app.post("/v1/auth/register", async (req, res) => {
   }
 });
 
+/**
+ * @openapi
+ * /auth/login:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Autentica com e-mail/senha e retorna um JWT de sessão.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email, password]
+ *             properties:
+ *               email: { type: string, format: email }
+ *               password: { type: string }
+ *     responses:
+ *       200:
+ *         description: Login bem-sucedido.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/AuthResponse' } } }
+ *       401:
+ *         description: E-mail ou senha incorretos.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ */
 app.post("/v1/auth/login", async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: "MISSING_FIELDS" });
@@ -368,6 +459,27 @@ app.post("/v1/auth/login", async (req, res) => {
   res.json({ token, email: user.email, role: user.role });
 });
 
+/**
+ * @openapi
+ * /auth/me:
+ *   get:
+ *     tags: [Auth]
+ *     summary: Retorna os dados da conta autenticada.
+ *     security: [{ bearerAuthJWT: [] }]
+ *     responses:
+ *       200:
+ *         description: Dados do usuário.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 id: { type: integer }
+ *                 email: { type: string, format: email }
+ *                 role: { type: string, enum: [user, admin] }
+ *                 created_at: { type: string, format: date-time }
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ */
 app.get("/v1/auth/me", requireAuth, (req, res) => {
   const user = db.prepare("SELECT id, email, role, created_at FROM users WHERE id = ?").get(req.user.sub);
   if (!user) return res.status(404).json({ error: "USER_NOT_FOUND" });
@@ -376,6 +488,26 @@ app.get("/v1/auth/me", requireAuth, (req, res) => {
 
 // ── POST /v1/tokens ───────────────────────────────────────────────────────────
 
+/**
+ * @openapi
+ * /tokens:
+ *   post:
+ *     tags: [Tokens]
+ *     summary: Emite o token de API pessoal (um por usuário).
+ *     description: >
+ *       O valor completo do token só é retornado nesta chamada -- apenas o
+ *       prefixo fica recuperável depois via GET /me/token. Use
+ *       /me/token/rotate para gerar um novo se perdê-lo.
+ *     security: [{ bearerAuthJWT: [] }]
+ *     responses:
+ *       200:
+ *         description: Token criado.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/TokenIssued' } } }
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       409:
+ *         description: Usuário já tem um token ativo.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ */
 app.post("/v1/tokens", requireAuth, (req, res) => {
   const existing = db.prepare("SELECT id FROM api_tokens WHERE user_id = ? AND status = 'active'").get(req.user.sub);
   if (existing) {
@@ -392,6 +524,19 @@ app.post("/v1/tokens", requireAuth, (req, res) => {
 
 // ── GET /v1/me/token ──────────────────────────────────────────────────────────
 
+/**
+ * @openapi
+ * /me/token:
+ *   get:
+ *     tags: [Tokens]
+ *     summary: Retorna metadados do token ativo (nunca o valor completo).
+ *     security: [{ bearerAuthJWT: [] }, { bearerAuthToken: [] }]
+ *     responses:
+ *       200:
+ *         description: Metadados do token, ou { has_token false } se nenhum existir.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/TokenInfo' } } }
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ */
 app.get("/v1/me/token", resolveUser, (req, res) => {
   const row = req.tokenRow;
   if (!row) return res.json({ has_token: false });
@@ -412,6 +557,22 @@ app.get("/v1/me/token", resolveUser, (req, res) => {
 
 // ── POST /v1/me/token/rotate ──────────────────────────────────────────────────
 
+/**
+ * @openapi
+ * /me/token/rotate:
+ *   post:
+ *     tags: [Tokens]
+ *     summary: Revoga o token atual e emite um novo (mesma cota/nome).
+ *     security: [{ bearerAuthJWT: [] }, { bearerAuthToken: [] }]
+ *     responses:
+ *       200:
+ *         description: Novo token emitido.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/TokenIssued' } } }
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       404:
+ *         description: Nenhum token ativo encontrado.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ */
 app.post("/v1/me/token/rotate", resolveUser, (req, res) => {
   const old = req.tokenRow;
   if (!old) return res.status(404).json({ error: "NO_TOKEN", message: "Nenhum token ativo encontrado." });
@@ -427,6 +588,28 @@ app.post("/v1/me/token/rotate", resolveUser, (req, res) => {
 
 // ── POST /v1/me/token/revoke ──────────────────────────────────────────────────
 
+/**
+ * @openapi
+ * /me/token/revoke:
+ *   post:
+ *     tags: [Tokens]
+ *     summary: Revoga o token ativo (sem emitir um novo).
+ *     security: [{ bearerAuthJWT: [] }, { bearerAuthToken: [] }]
+ *     responses:
+ *       200:
+ *         description: Token revogado.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message: { type: string }
+ *                 revoked_at: { type: string, format: date-time }
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       404:
+ *         description: Nenhum token ativo encontrado.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ */
 app.post("/v1/me/token/revoke", resolveUser, (req, res) => {
   const row = req.tokenRow;
   if (!row) return res.status(404).json({ error: "NO_TOKEN" });
@@ -437,6 +620,19 @@ app.post("/v1/me/token/revoke", resolveUser, (req, res) => {
 
 // ── GET /v1/me/usage ──────────────────────────────────────────────────────────
 
+/**
+ * @openapi
+ * /me/usage:
+ *   get:
+ *     tags: [Usage]
+ *     summary: Cota diária, uso hoje/7d/30d e histórico diário do token.
+ *     security: [{ bearerAuthJWT: [] }, { bearerAuthToken: [] }]
+ *     responses:
+ *       200:
+ *         description: Resumo de uso.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/UsageResponse' } } }
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ */
 app.get("/v1/me/usage", resolveUser, (req, res) => {
   const row = req.tokenRow;
   if (!row) return res.json({ has_token: false });
@@ -476,6 +672,31 @@ app.get("/v1/me/usage", resolveUser, (req, res) => {
 
 // ── GET /v1/me/requests ───────────────────────────────────────────────────────
 
+/**
+ * @openapi
+ * /me/requests:
+ *   get:
+ *     tags: [Usage]
+ *     summary: Histórico das últimas chamadas feitas com o token.
+ *     security: [{ bearerAuthJWT: [] }, { bearerAuthToken: [] }]
+ *     parameters:
+ *       - name: limit
+ *         in: query
+ *         schema: { type: integer, default: 20, maximum: 10000 }
+ *         description: Máximo de entradas a retornar.
+ *     responses:
+ *       200:
+ *         description: Lista de requisições (mais recentes primeiro).
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 requests:
+ *                   type: array
+ *                   items: { $ref: '#/components/schemas/RequestLogEntry' }
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ */
 app.get("/v1/me/requests", resolveUser, (req, res) => {
   const row = req.tokenRow;
   if (!row) return res.json({ requests: [] });
@@ -489,6 +710,39 @@ app.get("/v1/me/requests", resolveUser, (req, res) => {
 
 // ── GET /v1/upstream/status ───────────────────────────────────────────────────
 
+/**
+ * @openapi
+ * /upstream/status:
+ *   get:
+ *     tags: [Health]
+ *     summary: Histórico de disponibilidade do upstream FPGA (últimas 500 transições, uptime 24h).
+ *     security: [{ bearerAuthJWT: [] }, { bearerAuthToken: [] }]
+ *     responses:
+ *       200:
+ *         description: Status atual, uptime estimado nas últimas 24h e eventos recentes.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 current:
+ *                   type: object
+ *                   properties:
+ *                     status: { type: string, enum: [up, down, unknown] }
+ *                     checkedAt: { type: string, format: date-time, nullable: true }
+ *                     responseMs: { type: integer, nullable: true }
+ *                 uptime_24h_pct: { type: number, nullable: true }
+ *                 recent_events:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       status: { type: string }
+ *                       response_ms: { type: integer, nullable: true }
+ *                       detail: { type: string, nullable: true }
+ *                       checked_at: { type: string, format: date-time }
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ */
 app.get("/v1/upstream/status", resolveUser, (req, res) => {
   const events = db.prepare("SELECT status, response_ms, detail, checked_at FROM upstream_health_log ORDER BY id DESC LIMIT 50").all();
   const ago24h = new Date(Date.now() - 86400000).toISOString();
@@ -512,6 +766,40 @@ app.get("/v1/upstream/status", resolveUser, (req, res) => {
 
 // ── Admin ─────────────────────────────────────────────────────────────────────
 
+/**
+ * @openapi
+ * /admin/tokens:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Lista todos os tokens de todos os usuários (requer role=admin).
+ *     security: [{ bearerAuthJWT: [] }]
+ *     responses:
+ *       200:
+ *         description: Lista de tokens com uso de hoje.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 tokens:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id: { type: integer }
+ *                       user_id: { type: integer }
+ *                       token_prefix: { type: string }
+ *                       name: { type: string }
+ *                       status: { type: string }
+ *                       quota_daily: { type: integer }
+ *                       created_at: { type: string, format: date-time }
+ *                       last_used_at: { type: string, format: date-time, nullable: true }
+ *                       email: { type: string, format: email }
+ *                       requests_today: { type: integer }
+ *                       bytes_today: { type: integer }
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       403: { $ref: '#/components/responses/Forbidden' }
+ */
 app.get("/v1/admin/tokens", requireAuth, requireAdmin, (req, res) => {
   const today  = new Date().toISOString().slice(0, 10);
   const tokens = db.prepare(`
@@ -527,6 +815,27 @@ app.get("/v1/admin/tokens", requireAuth, requireAdmin, (req, res) => {
   res.json({ tokens });
 });
 
+/**
+ * @openapi
+ * /admin/tokens/{id}/revoke:
+ *   post:
+ *     tags: [Admin]
+ *     summary: Revoga o token de qualquer usuário (requer role=admin).
+ *     security: [{ bearerAuthJWT: [] }]
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Token revogado.
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       403: { $ref: '#/components/responses/Forbidden' }
+ *       404:
+ *         description: Token não encontrado.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ */
 app.post("/v1/admin/tokens/:id/revoke", requireAuth, requireAdmin, (req, res) => {
   const now    = new Date().toISOString();
   const result = db.prepare("UPDATE api_tokens SET status = 'revoked', revoked_at = ? WHERE id = ?").run(now, req.params.id);
@@ -534,6 +843,39 @@ app.post("/v1/admin/tokens/:id/revoke", requireAuth, requireAdmin, (req, res) =>
   res.json({ message: "Token revogado.", revoked_at: now });
 });
 
+/**
+ * @openapi
+ * /admin/tokens/{id}/quota:
+ *   patch:
+ *     tags: [Admin]
+ *     summary: Ajusta a cota diária de requisições de um token (requer role=admin).
+ *     security: [{ bearerAuthJWT: [] }]
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         schema: { type: integer }
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [quota_daily]
+ *             properties:
+ *               quota_daily: { type: integer, minimum: 1 }
+ *     responses:
+ *       200:
+ *         description: Cota atualizada.
+ *       400:
+ *         description: quota_daily ausente ou inválida.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       403: { $ref: '#/components/responses/Forbidden' }
+ *       404:
+ *         description: Token não encontrado.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ */
 app.patch("/v1/admin/tokens/:id/quota", requireAuth, requireAdmin, (req, res) => {
   const quota  = parseInt(req.body.quota_daily, 10);
   if (!quota || quota < 1) return res.status(400).json({ error: "INVALID_QUOTA" });
@@ -542,6 +884,33 @@ app.patch("/v1/admin/tokens/:id/quota", requireAuth, requireAdmin, (req, res) =>
   res.json({ message: "Cota atualizada.", quota_daily: quota });
 });
 
+/**
+ * @openapi
+ * /admin/users:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Lista todos os usuários (requer role=admin).
+ *     security: [{ bearerAuthJWT: [] }]
+ *     responses:
+ *       200:
+ *         description: Lista de usuários.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 users:
+ *                   type: array
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       id: { type: integer }
+ *                       email: { type: string, format: email }
+ *                       role: { type: string }
+ *                       created_at: { type: string, format: date-time }
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       403: { $ref: '#/components/responses/Forbidden' }
+ */
 app.get("/v1/admin/users", requireAuth, requireAdmin, (req, res) => {
   const users = db.prepare("SELECT id, email, role, created_at FROM users ORDER BY created_at DESC").all();
   res.json({ users });
@@ -549,6 +918,25 @@ app.get("/v1/admin/users", requireAuth, requireAdmin, (req, res) => {
 
 // ── GET /v1/health ────────────────────────────────────────────────────────────
 
+/**
+ * @openapi
+ * /health:
+ *   get:
+ *     tags: [Health]
+ *     summary: Saúde do client-api e do upstream FPGA (requer token).
+ *     description: >
+ *       Diferente de /health/self (liveness do processo Node), esta rota
+ *       consulta o upstream FPGA de verdade -- reflete se a fonte física
+ *       está acessível AGORA, não apenas se a API está no ar.
+ *     security: [{ bearerAuthToken: [] }]
+ *     responses:
+ *       200:
+ *         description: Upstream respondeu.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/HealthResponse' } } }
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       429: { $ref: '#/components/responses/RateLimited' }
+ *       503: { $ref: '#/components/responses/UpstreamError' }
+ */
 app.get("/v1/health", attachRequestId, requireToken, checkTokenRate, async (req, res) => {
   const requestId = req.requestId;
   const t0        = Date.now();
@@ -687,6 +1075,63 @@ function interpretUpstreamResponse(contentType, rawBuffer, requestedBytes) {
 
 // ── GET /v1/random ────────────────────────────────────────────────────────────
 
+/**
+ * @openapi
+ * /random:
+ *   get:
+ *     tags: [Random]
+ *     summary: Gera bytes aleatórios da fonte QRNG (FPGA Red Pitaya, uint32-LE, sem conditioning).
+ *     description: >
+ *       Confirmado no código-fonte de todo o pipeline físico (auditoria 2026-08-25):
+ *       o upstream lê um registrador AXI FIFO diretamente via mmap na Red Pitaya e
+ *       grava exatamente 4 bytes little-endian por amostra, sem nenhum processamento
+ *       (whitening/debiasing/conditioning). Esta rota entrega esses bytes brutos --
+ *       nenhuma avaliação de entropia é feita aqui; ver a suíte NIST SP 800-90B
+ *       separadamente para isso.
+ *     security: [{ bearerAuthToken: [] }]
+ *     parameters:
+ *       - name: bytes
+ *         in: query
+ *         schema: { type: integer, minimum: 1, default: 32 }
+ *         description: Quantidade de bytes a gerar. Limite por requisição = MAX_BYTES_PER_REQUEST (padrão 1 MiB).
+ *       - name: format
+ *         in: query
+ *         schema: { type: string, enum: [hex, base64, uint8] }
+ *         description: >
+ *           hex (padrão): string hexadecimal de 2N caracteres.
+ *           base64: string base64 dos N bytes.
+ *           uint8: array JSON de N inteiros em [0,255].
+ *           Sem este parâmetro, o corpo é application/octet-stream com os N bytes brutos.
+ *     responses:
+ *       200:
+ *         description: Bytes gerados.
+ *         content:
+ *           application/json:
+ *             schema: { $ref: '#/components/schemas/RandomResponse' }
+ *           application/octet-stream:
+ *             schema: { type: string, format: binary }
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       413:
+ *         description: bytes acima de MAX_BYTES_PER_REQUEST.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       422:
+ *         description: bytes ou format inválidos.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       429: { $ref: '#/components/responses/RateLimited' }
+ *       429_quota:
+ *         description: (usa código 429) Cota diária de requisições ou bytes excedida.
+ *       502:
+ *         description: >
+ *           Upstream retornou erro OU o Content-Type declarado não é
+ *           suportado pelo contrato (UPSTREAM_UNSUPPORTED_CONTENT_TYPE,
+ *           UPSTREAM_MISSING_CONTENT_TYPE, UPSTREAM_INVALID_JSON,
+ *           UPSTREAM_JSON_SCHEMA_MISMATCH, UPSTREAM_LENGTH_MISMATCH,
+ *           UPSTREAM_LEGACY_FORMAT_DISABLED) -- ver interpretUpstreamResponse().
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       503:
+ *         description: Upstream indisponível, timeout, ou buffer com menos bytes que o pedido (INSUFFICIENT_ENTROPY).
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ */
 app.get("/v1/random", attachRequestId, requireToken, checkTokenRate, parseBytes, checkQuota, async (req, res) => {
   const bytes     = req.requestedBytes;
   const format    = req.query.format || "hex";
@@ -765,12 +1210,66 @@ const BULK_NOT_IMPLEMENTED = {
   docs:    "See /docs/scalability.md for the roadmap.",
 };
 
+/**
+ * @openapi
+ * /bulk-random-jobs:
+ *   post:
+ *     tags: [Random]
+ *     summary: "NÃO IMPLEMENTADO — stub reservado para geração assíncrona em lote (retorna 501)."
+ *     security: [{ bearerAuthToken: [] }]
+ *     responses:
+ *       501:
+ *         description: Não implementado.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ * /bulk-random-jobs/{job_id}:
+ *   get:
+ *     tags: [Random]
+ *     summary: "NÃO IMPLEMENTADO (retorna 501)."
+ *     security: [{ bearerAuthToken: [] }]
+ *     parameters:
+ *       - name: job_id
+ *         in: path
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       501:
+ *         description: Não implementado.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ * /bulk-random-jobs/{job_id}/download:
+ *   get:
+ *     tags: [Random]
+ *     summary: "NÃO IMPLEMENTADO (retorna 501)."
+ *     security: [{ bearerAuthToken: [] }]
+ *     parameters:
+ *       - name: job_id
+ *         in: path
+ *         required: true
+ *         schema: { type: string }
+ *     responses:
+ *       501:
+ *         description: Não implementado.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ */
 app.post("/v1/bulk-random-jobs",                 requireToken, (_req, res) => res.status(501).json(BULK_NOT_IMPLEMENTED));
 app.get ("/v1/bulk-random-jobs/:job_id",         requireToken, (_req, res) => res.status(501).json(BULK_NOT_IMPLEMENTED));
 app.get ("/v1/bulk-random-jobs/:job_id/download",requireToken, (_req, res) => res.status(501).json(BULK_NOT_IMPLEMENTED));
 
 // ── GET /v1/health/self — liveness sem autenticação ──────────────────────────
 
+/**
+ * @openapi
+ * /health/self:
+ *   get:
+ *     tags: [Health]
+ *     summary: Liveness do processo Node — não consulta o upstream FPGA. Sem autenticação.
+ *     description: >
+ *       Só confirma que o processo qrng-client-api está no ar. Para saber se a
+ *       fonte FPGA está acessível, use GET /health (requer token).
+ *     responses:
+ *       200:
+ *         description: Processo vivo.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/HealthSelfResponse' } } }
+ */
 app.get("/v1/health/self", (_req, res) => {
   res.json({
     status: "ok",
@@ -784,6 +1283,24 @@ app.get("/v1/health/self", (_req, res) => {
 
 const METRICS_TOKEN = process.env.METRICS_TOKEN || null;
 
+/**
+ * @openapi
+ * /metrics:
+ *   get:
+ *     tags: [Health]
+ *     summary: Métricas no formato Prometheus (requests/bytes/erros por status_code em /v1/random).
+ *     description: >
+ *       Fora do prefixo /v1 -- não é versionada como o resto da API pública.
+ *       Protegida por METRICS_TOKEN (env var) quando definida; sem
+ *       autenticação quando METRICS_TOKEN não está configurada.
+ *     security: [{ bearerAuthToken: [] }]
+ *     responses:
+ *       200:
+ *         description: Métricas em texto, formato Prometheus (Content-Type text/plain).
+ *         content: { text/plain: { schema: { type: string } } }
+ *       401:
+ *         description: METRICS_TOKEN configurada e não enviada/incorreta.
+ */
 app.get("/metrics", (req, res) => {
   if (METRICS_TOKEN) {
     const auth = req.headers.authorization || "";
