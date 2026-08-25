@@ -127,11 +127,24 @@ def _safe_name(name: str) -> str:
     return name[:200] or "upload"
 
 def _find_latest_data_file() -> Optional[str]:
+    # Auditoria do pipeline QRNG (2026-08-25): "audit*" e "characterization_*"
+    # dentro de NIST_DATA_DIR são artefatos de exercícios manuais pontuais
+    # (ex.: audit52/C01_digits_B01.bin, criado em 2026-08-13, ANTES da
+    # reescrita de server_api.py para uint32-LE em 2026-08-15 -- um formato
+    # já obsoleto) -- não são capturas automáticas do stream ao vivo. Sem
+    # excluí-los, o job periódico ficava preso reavaliando repetidamente o
+    # mesmo arquivo estático e desatualizado, apresentado como se fosse a
+    # saúde atual da fonte. NÃO existe hoje nenhum processo que capture
+    # automaticamente amostras frescas do stream ao vivo para este
+    # diretório -- isso é uma lacuna de infraestrutura, não corrigida aqui
+    # (fora do escopo desta auditoria); até que exista, o job periódico
+    # pode legitimamente não encontrar nenhum arquivo adequado.
+    EXCLUDED_PATTERNS = ["uploads", "results_", ".log", ".lost", "sha256", "audit", "characterization_"]
     candidates = []
     for ext in ["*.txt", "*.bin"]:
         for p in Path(NIST_DATA_DIR).rglob(ext):
-            s = str(p)
-            if any(x in s for x in ["uploads", "results_", ".log", ".lost", "sha256"]):
+            s = str(p).lower()
+            if any(x in s for x in EXCLUDED_PATTERNS):
                 continue
             try:
                 if p.stat().st_size >= NIST_MIN_BYTES:
@@ -369,6 +382,25 @@ if NIST_ENABLED:
 app = FastAPI(title="QRNG NIST SP 800-90B Service", version="1.0.0")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 
+
+# Auditoria do pipeline QRNG (2026-08-25): unidade de amostra confirmada
+# diretamente no código-fonte de todo o pipeline físico -- fifo.c (lido
+# via mmap do registrador AXI FIFO em 0x43C00000 na Red Pitaya) grava
+# exatamente 4 bytes little-endian (htole32) por amostra, sem nenhum
+# processamento/whitening; server_api.py (v1.1) declara explicitamente
+# STREAM_FORMAT="uint32-le", SAMPLE_WIDTH_BYTES=4, CONDITIONED=False.
+# Isto é estático e não varia por job -- não é lido de nenhum arquivo.
+SAMPLE_UNIT_LIVE_STREAM = {
+    "format": "uint32-le",
+    "width_bytes": 4,
+    "conditioned": False,
+    "note": "Confirmado no código-fonte do pipeline físico (fifo.c + server_api.py). "
+            "Arquivos de teste antigos podem ter sido capturados em formatos anteriores "
+            "(ex.: decimal ASCII sem delimitador) -- ver sample_file_age_seconds e "
+            "trigger_type para avaliar se esta amostra específica é representativa do "
+            "stream ao vivo atual.",
+}
+
 def _row(row) -> dict:
     if row is None:
         return None
@@ -382,6 +414,23 @@ def _row(row) -> dict:
     for k in ["iid_passed", "chi_square_passed", "lrs_passed", "permutation_passed"]:
         if d.get(k) is not None:
             d[k] = bool(d[k])
+
+    # Idade do arquivo testado (não a idade do job) -- distingue "acabamos de
+    # testar uma amostra fresca" de "reavaliamos pela enésima vez o mesmo
+    # arquivo estático antigo". Calculado sob demanda a partir do mtime atual
+    # do arquivo, não armazenado no banco (o arquivo pode ter sido
+    # removido/rotacionado desde o job).
+    d["sample_file_age_seconds"] = None
+    d["sample_file_is_stale"] = None
+    path = d.get("input_file_path")
+    if path and os.path.exists(path):
+        age = time.time() - os.path.getmtime(path)
+        d["sample_file_age_seconds"] = round(age, 1)
+        # "stale" = arquivo mais velho que o intervalo entre execuções
+        # periódicas -- sinal de que não é uma captura fresca do stream.
+        d["sample_file_is_stale"] = age > NIST_INTERVAL_SEC
+
+    d["sample_unit"] = SAMPLE_UNIT_LIVE_STREAM
     return d
 
 @app.get("/health")

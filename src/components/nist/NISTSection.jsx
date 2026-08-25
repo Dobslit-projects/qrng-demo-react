@@ -348,6 +348,13 @@ export default function NISTSection() {
 
   const fmtTs = (ts) => ts ? new Date(ts).toLocaleString("pt-BR") : "—";
   const fmtN  = (n)  => n != null ? n.toFixed(4) : "—";
+  const fmtAge = (seconds) => {
+    if (seconds == null) return "—";
+    if (seconds < 60) return `${Math.round(seconds)}s`;
+    if (seconds < 3600) return `${Math.round(seconds / 60)}min`;
+    if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
+    return `${(seconds / 86400).toFixed(1)} dias`;
+  };
 
   /* ── render ─────────────────────────────────────────────── */
   return (
@@ -379,7 +386,26 @@ export default function NISTSection() {
       {/* ── Last result summary ── */}
       {status?.last_job && (
         <div style={{ ...card }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, fontFamily: mono, marginBottom: 10 }}>ÚLTIMO RESULTADO</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, fontFamily: mono, marginBottom: 4 }}>ÚLTIMO RESULTADO</div>
+          <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono, marginBottom: 10, lineHeight: 1.6 }}>
+            Avaliação histórica de uma amostra específica (arquivo abaixo) — não é uma medida contínua da
+            saúde atual do stream ao vivo. Veja "Idade da amostra": se o mesmo arquivo aparece repetidamente
+            entre execuções periódicas, não há captura fresca sendo testada.
+          </div>
+
+          {/* Aviso destacado quando a amostra testada está desatualizada */}
+          {status.last_job.sample_file_is_stale && (
+            <div style={{
+              padding: "8px 12px", borderRadius: 8, marginBottom: 10,
+              background: theme.warning + "12", border: `1px solid ${theme.warning}35`,
+              fontSize: 11, color: theme.warning, fontFamily: mono,
+            }}>
+              ⚠ AMOSTRA DESATUALIZADA — este arquivo tem {fmtAge(status.last_job.sample_file_age_seconds)} de idade,
+              mais que o intervalo entre execuções periódicas ({status?.interval_seconds}s). Este resultado
+              não reflete o estado atual da fonte ao vivo.
+            </div>
+          )}
+
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
             <div>
               <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>Status</div>
@@ -405,6 +431,20 @@ export default function NISTSection() {
               <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>Executado em</div>
               <span style={{ fontSize: 11, fontFamily: mono, color: theme.textDim }}>
                 {fmtTs(status.last_job.created_at)}
+              </span>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>Idade da amostra</div>
+              <span style={{ fontSize: 11, fontFamily: mono, color: status.last_job.sample_file_is_stale ? theme.warning : theme.textDim }}>
+                {fmtAge(status.last_job.sample_file_age_seconds)}
+              </span>
+            </div>
+            <div>
+              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>Unidade de amostra</div>
+              <span style={{ fontSize: 11, fontFamily: mono, color: theme.textDim }}>
+                {status.last_job.sample_unit
+                  ? `${status.last_job.sample_unit.format} · ${status.last_job.sample_unit.width_bytes}B · ${status.last_job.sample_unit.conditioned ? "condicionado" : "sem conditioning"}`
+                  : "—"}
               </span>
             </div>
           </div>
