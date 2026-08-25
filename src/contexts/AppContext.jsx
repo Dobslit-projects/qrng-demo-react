@@ -40,6 +40,7 @@ function useHysteresisHealth(apiPrefix) {
   const [health, setHealth]   = useState(null);
   const [latency, setLatency] = useState(null);
   const [status, setStatus]   = useState("checking"); // "checking" | "online" | "offline"
+  const [lastSuccessAt, setLastSuccessAt] = useState(null); // epoch ms do último poll bem-sucedido
   const failsRef     = useRef(0);
   const successRef   = useRef(0);
   const statusRef     = useRef("checking");
@@ -73,6 +74,7 @@ function useHysteresisHealth(apiPrefix) {
           statusRef.current = "online";
           setStatus("online");
           setHealth(h);
+          setLastSuccessAt(Date.now());
           if (h._latencyMs) setLatency(h._latencyMs);
         }
       } else {
@@ -93,7 +95,7 @@ function useHysteresisHealth(apiPrefix) {
     return () => { mounted = false; clearTimeout(timer); };
   }, [apiPrefix]);
 
-  return { health, latency, status };
+  return { health, latency, status, lastSuccessAt };
 }
 
 function computeStatus(qrngSource, health, hookStatus) {
@@ -106,8 +108,8 @@ function computeStatus(qrngSource, health, hookStatus) {
 }
 
 export function AppProvider({ children }) {
-  const { health: remoteHealth, latency: remoteLatency, status: remoteHookStatus } = useHysteresisHealth(API_ROUTES.remote);
-  const { health: fpgaHealth,   latency: fpgaLatency,   status: fpgaHookStatus   } = useHysteresisHealth(API_ROUTES.fpga);
+  const { health: remoteHealth, latency: remoteLatency, status: remoteHookStatus, lastSuccessAt: remoteLastSuccessAt } = useHysteresisHealth(API_ROUTES.remote);
+  const { health: fpgaHealth,   latency: fpgaLatency,   status: fpgaHookStatus,   lastSuccessAt: fpgaLastSuccessAt   } = useHysteresisHealth(API_ROUTES.fpga);
 
   const [qrngSource, setQrngSourceRaw] = useState(loadSource);
   const [streamError, setStreamError]  = useState(null);
@@ -118,14 +120,31 @@ export function AppProvider({ children }) {
     try { localStorage.setItem(STORAGE_KEY, src); } catch {}
   }, []);
 
-  const health     = qrngSource === "remote" ? remoteHealth     : qrngSource === "fpga" ? fpgaHealth     : null;
-  const latency    = qrngSource === "remote" ? remoteLatency    : qrngSource === "fpga" ? fpgaLatency    : null;
-  const hookStatus = qrngSource === "remote" ? remoteHookStatus : qrngSource === "fpga" ? fpgaHookStatus : null;
+  const health        = qrngSource === "remote" ? remoteHealth        : qrngSource === "fpga" ? fpgaHealth        : null;
+  const latency        = qrngSource === "remote" ? remoteLatency       : qrngSource === "fpga" ? fpgaLatency       : null;
+  const hookStatus      = qrngSource === "remote" ? remoteHookStatus    : qrngSource === "fpga" ? fpgaHookStatus    : null;
+  const lastSuccessAt = qrngSource === "remote" ? remoteLastSuccessAt : qrngSource === "fpga" ? fpgaLastSuccessAt : null;
 
   const status = computeStatus(qrngSource, health, hookStatus);
   // "checking" conta como online: a 1ª verificação real ainda não terminou,
   // então não há motivo pra travar botões nem mostrar "offline"/fallback.
+  // ATENÇÃO (auditoria item 4): isOnline É INTENCIONALMENTE true também para
+  // "checking" e "pre-collected" -- é um flag de "seguro habilitar botões/
+  // não mostrar banner de erro assustador", não um flag de proveniência dos
+  // dados. Ele NÃO diz se os dados vieram de uma fonte QRNG ao vivo. Use
+  // isLiveData (abaixo) sempre que a distinção real importar -- geração de
+  // chaves/seeds operacionais, avaliação NIST da "amostra atual", ou
+  // qualquer alegação de "isto veio do hardware agora".
   const isOnline = status === "online" || status === "pre-collected" || status === "checking";
+
+  // true SOMENTE quando uma checagem de rede real confirmou sucesso.
+  // false para "checking" (ainda não confirmado), "pre-collected" (fonte
+  // local finita, nunca é "ao vivo"), "degraded" e "offline".
+  const isLiveData = status === "online";
+
+  // true quando o usuário selecionou explicitamente a fonte pré-coletada
+  // em Configurações — distinto de uma falha de rede que force fallback.
+  const isFallbackSelected = qrngSource === "pre-collected";
 
   const value = useMemo(() => ({
     health,
@@ -133,6 +152,9 @@ export function AppProvider({ children }) {
     qrngSource,
     setQrngSource,
     isOnline,
+    isLiveData,
+    isFallbackSelected,
+    lastSuccessAt,
     status,      // "checking" | "online" | "degraded" | "offline" | "pre-collected"
     streamError,
     setStreamError,
@@ -145,7 +167,8 @@ export function AppProvider({ children }) {
     setLatency: () => {
       // kept for backward compat — hysteresis hook manages latency internally
     },
-  }), [health, latency, qrngSource, isOnline, status, streamError, activePage,
+  }), [health, latency, qrngSource, isOnline, isLiveData, isFallbackSelected, lastSuccessAt,
+       status, streamError, activePage,
        remoteHealth, remoteLatency, fpgaHealth, fpgaLatency, setQrngSource]);
 
   return <AppContext.Provider value={value}>{children}</AppContext.Provider>;

@@ -5,12 +5,16 @@ import { AppProvider, AppContext } from "./AppContext";
 import HardwareStatusBar from "../components/layout/HardwareStatusBar";
 
 function Probe() {
-  const { status, isOnline, health } = useContext(AppContext);
+  const { status, isOnline, isLiveData, isFallbackSelected, health, qrngSource, setQrngSource } = useContext(AppContext);
   return (
     <div>
       <span data-testid="status">{status}</span>
       <span data-testid="isOnline">{String(isOnline)}</span>
+      <span data-testid="isLiveData">{String(isLiveData)}</span>
+      <span data-testid="isFallbackSelected">{String(isFallbackSelected)}</span>
       <span data-testid="buffer">{health ? health.buffer_bytes_available : "null"}</span>
+      <button data-testid="selectPreCollected" onClick={() => setQrngSource("pre-collected")}>seed</button>
+      <span data-testid="qrngSource">{qrngSource}</span>
     </div>
   );
 }
@@ -198,5 +202,59 @@ describe("AppContext — status do QRNG (checking/online/offline)", () => {
       expect(maxInFlightByUrl[url]).toBeLessThanOrEqual(1);
     }
     expect(Object.keys(maxInFlightByUrl).length).toBeGreaterThan(0);
+  });
+});
+
+describe("AppContext — isLiveData / isFallbackSelected (auditoria item 4)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it("isLiveData é false durante 'checking', mesmo isOnline sendo true", async () => {
+    globalThis.fetch = vi.fn(() => new Promise(() => {})); // nunca resolve
+    renderProbe();
+    expect(screen.getByTestId("status").textContent).toBe("checking");
+    expect(screen.getByTestId("isOnline").textContent).toBe("true");
+    expect(screen.getByTestId("isLiveData").textContent).toBe("false");
+  });
+
+  it("isLiveData só vira true depois que 'online' é confirmado por uma resposta real", async () => {
+    globalThis.fetch = vi.fn(() => healthyResponse());
+    renderProbe();
+    await flushMicrotasks();
+    expect(screen.getByTestId("status").textContent).toBe("online");
+    expect(screen.getByTestId("isLiveData").textContent).toBe("true");
+  });
+
+  it("fonte pre-collected: isOnline true (não trava UI) mas isLiveData SEMPRE false e isFallbackSelected true", async () => {
+    globalThis.fetch = vi.fn(() => healthyResponse());
+    renderProbe();
+    await act(async () => {
+      screen.getByTestId("selectPreCollected").click();
+    });
+    expect(screen.getByTestId("qrngSource").textContent).toBe("pre-collected");
+    expect(screen.getByTestId("status").textContent).toBe("pre-collected");
+    expect(screen.getByTestId("isOnline").textContent).toBe("true");
+    expect(screen.getByTestId("isLiveData").textContent).toBe("false");
+    expect(screen.getByTestId("isFallbackSelected").textContent).toBe("true");
+  });
+
+  it("offline confirmado: isOnline false e isLiveData false", async () => {
+    globalThis.fetch = vi.fn(() => failedResponse());
+    renderProbe();
+    await flushMicrotasks();
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    await act(async () => { await vi.advanceTimersByTimeAsync(2000); });
+    expect(screen.getByTestId("status").textContent).toBe("offline");
+    expect(screen.getByTestId("isOnline").textContent).toBe("false");
+    expect(screen.getByTestId("isLiveData").textContent).toBe("false");
+    expect(screen.getByTestId("isFallbackSelected").textContent).toBe("false");
   });
 });

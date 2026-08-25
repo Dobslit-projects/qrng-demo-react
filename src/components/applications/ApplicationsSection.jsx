@@ -110,7 +110,16 @@ function KeyCard({ onGoLogin, source }) {
 
   const stopAnim = () => { clearInterval(animRef.current); animRef.current = null; };
 
+  // Auditoria item 4/7: geração de chaves nunca pode usar o buffer
+  // pré-coletado (finito, reciclado em loop, sem proveniência criptográfica)
+  // como se fosse entropia ao vivo do hardware.
+  const blockedByFallback = source === "pre-collected";
+
   const generate = async () => {
+    if (blockedByFallback) {
+      setErr("Geração de chaves bloqueada na fonte Fallback Local — troque para uma fonte QRNG ao vivo em Configurações.");
+      return;
+    }
     setBusy(true); setErr(""); setMeta(null); setHex("");
     animRef.current = setInterval(() => {
       setHex(Array.from({length: size * 2}, () => "0123456789abcdef"[Math.floor(Math.random() * 16)]).join(""));
@@ -151,7 +160,8 @@ function KeyCard({ onGoLogin, source }) {
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         {keyPresets.map(p => <SizeBtn key={p.bytes} label={p.label} active={size === p.bytes} onClick={() => { setSize(p.bytes); setHex(""); setMeta(null); }} />)}
       </div>
-      <Btn onClick={generate} color={theme.quantum} disabled={busy}>{busy ? "Gerando..." : "Gerar chave quântica"}</Btn>
+      <Btn onClick={generate} color={theme.quantum} disabled={busy || blockedByFallback}>{busy ? "Gerando..." : "Gerar chave quântica"}</Btn>
+      {blockedByFallback && <ErrMsg msg="MODO DEMONSTRAÇÃO — geração de chaves indisponível com dados pré-coletados." />}
       <HexBox hex={hex} placeholder="Selecione o tamanho e clique em Gerar..." />
       <ErrMsg msg={err} />
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -171,7 +181,16 @@ function AISeedCard({ onGoLogin, source }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
 
+  // Auditoria item 4/7: card afirma "seeds baseadas em entropia física" --
+  // isso é falso durante fallback (buffer pré-coletado finito reciclado em
+  // loop), então bloqueamos em vez de servir a alegação incorreta.
+  const blockedByFallback = source === "pre-collected";
+
   const generate = async () => {
+    if (blockedByFallback) {
+      setErr("Geração de seed bloqueada na fonte Fallback Local — troque para uma fonte QRNG ao vivo em Configurações.");
+      return;
+    }
     setBusy(true); setErr(""); setResult(null);
     try {
       const r = await fetchQrngBytes(8, source);
@@ -198,7 +217,8 @@ function AISeedCard({ onGoLogin, source }) {
         Modelos de IA usam aleatoriedade em inicialização de pesos, divisão de datasets e experimentos.
         O Kuapoã fornece seeds baseadas em entropia física para experimentos mais robustos e reprodutíveis.
       </p>
-      <Btn onClick={generate} color={theme.quantum} disabled={busy}>{busy ? "Gerando..." : "Gerar seed para IA"}</Btn>
+      <Btn onClick={generate} color={theme.quantum} disabled={busy || blockedByFallback}>{busy ? "Gerando..." : "Gerar seed para IA"}</Btn>
+      {blockedByFallback && <ErrMsg msg="MODO DEMONSTRAÇÃO — geração de seed indisponível com dados pré-coletados." />}
       {result && (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
