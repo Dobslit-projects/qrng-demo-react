@@ -127,9 +127,20 @@ export default function DataExport() {
       <div style={{ background: theme.surface, borderRadius: 12, border: `1px solid ${theme.border}`, padding: 20, flex: 1 }}>
         <div style={{ fontSize: 13, color: theme.textDim, lineHeight: 1.8 }}>
           Baixe bytes aleatorios brutos gerados pelo hardware quantico Red Pitaya.
-          Os dados sao fornecidos em formato binario puro (.bin), prontos para uso em
-          aplicacoes criptograficas, simulacoes Monte Carlo ou pesquisa academica.
-          Cada byte possui 8 bits de entropia verdadeira derivada de fenomenos quanticos.
+          Os dados sao fornecidos em formato binario puro (.bin, uint32-LE, sem
+          condicionamento), adequados para simulacoes Monte Carlo e pesquisa academica.
+          {/* Rodada de estabilizacao (2026-08-26), item 14: a alegacao anterior
+              ("8 bits de entropia verdadeira por byte", "pronto para uso em
+              aplicacoes criptograficas") nao tem evidencia -- duas capturas
+              independentes mostraram min-entropia estimada (SP 800-90B,
+              nao-IID) entre 6,98 e 7,33 bits/byte, abaixo de 8, e a validacao
+              da fonte (restart campaign, health tests) ainda nao foi
+              concluida. Ver documentacao tecnica antes de usar estes dados
+              para geracao de chaves, seeds ou qualquer material criptografico
+              operacional -- veja tambem o bloqueio equivalente em Aplicacoes. */}
+          A min-entropia estimada da fonte ainda esta em validacao — nao use estes
+          dados como material criptografico operacional sem consultar a documentacao
+          tecnica mais recente.
         </div>
       </div>
     </div>
