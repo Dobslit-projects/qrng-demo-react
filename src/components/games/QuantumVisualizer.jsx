@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState, useCallback, useContext } from "react";
 import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
-import { fetchQRNGBytes, getApiPrefix } from "../../qrngApi";
+import { fetchQrngBytesViaToken } from "../../lib/qrngHelper";
 import { lcgNext } from "../../prng";
 import * as galaxy from "./visualizations/galaxySpiral";
 import * as mandala from "./visualizations/mandala";
@@ -97,13 +97,21 @@ export default function QuantumVisualizer() {
   const refillBuffer = useCallback(async () => {
     if (fetchingRef.current || qrngBufferRef.current.length > 6000) return;
     fetchingRef.current = true;
-    const apiPrefix = getApiPrefix(globalSource);
+    // NOTA (auditoria item 3/4): globalSource "remote" vs "fpga" não produz
+    // rotas de rede diferentes hoje -- fetchQrngBytesViaToken sempre usa o
+    // client-api autenticado (/qrng/v1/), independente da fonte escolhida
+    // em Configurações. O rótulo abaixo é apenas cosmético; ver relatório
+    // de auditoria sobre unificar isso com o restante do app.
     const labelMap = { remote: "Remota (SP)", fpga: "FPGA", "pre-collected": "Pre-coletado" };
     try {
       if (globalSource === "pre-collected") {
+        // NOTA (auditoria item 4): "pre-collected" aqui cai no catch abaixo
+        // e usa Math.random(), NÃO o buffer QRNG_PRECOLLECTED real usado por
+        // DataSection/AnalysisSection -- rotulado genericamente "Fallback",
+        // sem distinguir das duas situações. Ver relatório de auditoria.
         throw new Error("pre-collected");
       }
-      const { bytes } = await fetchQRNGBytes(8192, apiPrefix);
+      const { bytes } = await fetchQrngBytesViaToken(8192);
       qrngBufferRef.current.push(...bytes);
       setQrngSourceLabel(labelMap[globalSource] || globalSource);
     } catch {

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useContext, useMemo } from "react";
 import { theme } from "../../theme";
 import { generatePRNGSequence } from "../../prng";
-import { generateQRNGSequence } from "../../qrngHelpers";
+import { generateQrngSequence, errorMessage } from "../../lib/qrngHelper";
 import { AppContext } from "../../contexts/AppContext";
 import Btn from "../ui/Btn";
 import ScatterCanvas from "./ScatterCanvas";
@@ -23,20 +23,31 @@ export default function AnalysisSection() {
   const [qrngSeq, setQrngSeq] = useState([]);
   const [prngBits, setPrngBits] = useState([]);
   const [qrngBits, setQrngBits] = useState([]);
+  const [error, setError] = useState(null);
 
   const generate = useCallback(async () => {
     setBusy(true);
+    setError(null);
     const s = parseInt(inputSeed) || 42;
     setSeed(s);
     const p = generatePRNGSequence(s, count);
-    const qResult = await generateQRNGSequence(count, qrngSource);
 
-    setPrngSeq(p);
-    setQrngSeq(qResult.values);
-    if (qResult.latencyMs !== null) setLatency(qResult.latencyMs);
-    setPrngBits(p.slice(0, 64).map((v) => (v > 0.5 ? 1 : 0)));
-    setQrngBits(qResult.values.slice(0, 64).map((v) => (v > 0.5 ? 1 : 0)));
-    setBusy(false);
+    // generateQrngSequence NÃO faz fallback silencioso em caso de erro
+    // (item 4 da auditoria) -- se a fonte escolhida falhar, mostramos o
+    // erro explicitamente em vez de substituir invisivelmente por dados
+    // pré-coletados rotulados como se fossem a fonte pedida.
+    try {
+      const qResult = await generateQrngSequence(count, qrngSource);
+      setPrngSeq(p);
+      setQrngSeq(qResult.values);
+      if (qResult.latencyMs !== null) setLatency(qResult.latencyMs);
+      setPrngBits(p.slice(0, 64).map((v) => (v > 0.5 ? 1 : 0)));
+      setQrngBits(qResult.values.slice(0, 64).map((v) => (v > 0.5 ? 1 : 0)));
+    } catch (err) {
+      setError(errorMessage(err));
+    } finally {
+      setBusy(false);
+    }
   }, [inputSeed, count, qrngSource, setLatency]);
 
   useEffect(() => { generate(); }, []);
@@ -102,6 +113,16 @@ export default function AnalysisSection() {
             {busy ? "Gerando..." : "Gerar"}
           </Btn>
         </div>
+
+        {error && (
+          <div style={{
+            padding: "10px 14px", borderRadius: 8,
+            background: theme.danger + "10", border: `1px solid ${theme.danger}30`,
+            fontSize: 12, color: theme.danger, fontFamily: mono,
+          }}>
+            ✗ {error}
+          </div>
+        )}
 
         {/* Two-column comparison */}
         <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>

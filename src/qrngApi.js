@@ -24,78 +24,14 @@ export async function fetchHealth(apiPrefix = "/api") {
   }
 }
 
-function getAuthHeaders() {
+// Usado por lib/qrngHelper.js (adaptador canônico) e pelas funções de
+// developer/admin abaixo. fetchQRNGBytes/fetchQRNGRandInt/fetchQRNGSeed
+// (que viviam aqui) foram consolidadas em lib/qrngHelper.js como
+// fetchQrngBytesViaToken/fetchQrngRandIntViaToken/fetchQrngRandIntsViaToken
+// -- ver item 3 da auditoria do pipeline QRNG (adaptador único).
+export function getAuthHeaders() {
   const jwt = localStorage.getItem("qrng_auth_jwt");
   return jwt ? { Authorization: `Bearer ${jwt}` } : {};
-}
-
-function hexToBytes(hex) {
-  const bytes = [];
-  for (let i = 0; i + 1 < hex.length; i += 2) {
-    bytes.push(parseInt(hex.substr(i, 2), 16));
-  }
-  return bytes;
-}
-
-export async function fetchQRNGBytes(count, _apiPrefix) {
-  const t0 = performance.now();
-  const requestBytes = Math.min(count * 5, 1048576);
-  const r = await fetch(`${CLIENT_API}/random?bytes=${requestBytes}&format=hex`, {
-    headers: getAuthHeaders(),
-    signal: AbortSignal.timeout(30000),
-  });
-  if (!r.ok) throw new Error(`QRNG error: ${r.status}`);
-  const json = await r.json();
-  const bytes = hexToBytes(json.random || "");
-  return { bytes: bytes.slice(0, count), latencyMs: Math.round(performance.now() - t0) };
-}
-
-/**
- * Sorteia um inteiro uniforme em [min, max] via rejection sampling sobre uint32.
- * Corrige viés de módulo (n % range sem rejeição): para faixas que não dividem
- * 2^32 exatamente, `n % range` favorece sistematicamente os valores mais baixos
- * da faixa. Pede um lote de candidatos uint32 e descarta os que caem acima do
- * maior múltiplo de `range` que cabe em 2^32 — mesmo método já usado em
- * DataSection.jsx (pickInt) e lib/qrngHelper.js (uniformIntFromBytes).
- */
-export async function fetchQRNGRandInt(min, max, _apiPrefix) {
-  const t0 = performance.now();
-  const range = max - min + 1;
-  if (!Number.isInteger(range) || range < 1 || range > 4294967296) {
-    throw new Error(`QRNG randint: faixa inválida [${min}, ${max}]`);
-  }
-  const limit = Math.floor(4294967296 / range) * range;
-
-  for (let attempt = 0; attempt < 8; attempt++) {
-    // 32 bytes = 8 candidatos uint32 por requisição, para reduzir chamadas
-    // extras quando o primeiro candidato é rejeitado.
-    const r = await fetch(`${CLIENT_API}/random?bytes=32&format=hex`, {
-      headers: getAuthHeaders(),
-      signal: AbortSignal.timeout(10000),
-    });
-    if (!r.ok) throw new Error(`QRNG randint error: ${r.status}`);
-    const json = await r.json();
-    const hex = json.random || "";
-    for (let i = 0; i + 8 <= hex.length; i += 8) {
-      const n = parseInt(hex.slice(i, i + 8), 16);
-      if (n < limit) {
-        return { value: min + (n % range), latencyMs: Math.round(performance.now() - t0) };
-      }
-    }
-  }
-  throw new Error("QRNG randint: rejection sampling não convergiu após múltiplas tentativas");
-}
-
-export async function fetchQRNGSeed(bytes, _apiPrefix) {
-  const t0 = performance.now();
-  const r = await fetch(`${CLIENT_API}/random?bytes=${bytes}&format=hex`, {
-    headers: getAuthHeaders(),
-    signal: AbortSignal.timeout(15000),
-  });
-  if (!r.ok) throw new Error(`QRNG seed error: ${r.status}`);
-  const json = await r.json();
-  const hex = json.random || "";
-  return { bytes: hexToBytes(hex), hex, latencyMs: Math.round(performance.now() - t0) };
 }
 
 // ── Auth & Developer API ───────────────────────────────────────────────────────
