@@ -1,0 +1,19 @@
+# Capturado via `pip freeze` no venv realmente usado em produção
+# (/home/dobslit/qrng-api/venv), 2026-08-26. Python 3.14.4.
+# Serve tanto server_api.py (uvicorn) quanto nist_service.py --
+# ambos rodam sob o mesmo venv, per qrng-nist-api.service's ExecStart.
+annotated-doc==0.0.4
+annotated-types==0.7.0
+anyio==4.13.0
+click==8.4.1
+fastapi==0.136.3
+h11==0.16.0
+idna==3.18
+pydantic==2.13.4
+pydantic_core==2.46.4
+python-multipart==0.0.32
+starlette==1.2.1
+typing-inspection==0.4.2
+typing_extensions==4.15.0
+uvicorn==0.48.0
+websocket-client==1.9.0

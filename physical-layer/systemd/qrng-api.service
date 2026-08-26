@@ -1,0 +1,19 @@
+# /etc/systemd/system/qrng-api.service
+[Unit]
+Description=QRNG API (uvicorn)
+After=network.target qrng-fifo.service
+Wants=qrng-fifo.service
+
+[Service]
+Type=simple
+User=dobslit
+WorkingDirectory=/home/dobslit/qrng-api
+ExecStart=/home/dobslit/qrng-api/venv/bin/python -m uvicorn server_api:app --host 127.0.0.1 --port 8001
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Install]
+WantedBy=multi-user.target

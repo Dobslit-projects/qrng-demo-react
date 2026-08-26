@@ -1,0 +1,22 @@
+[Unit]
+Description=QRNG NIST SP 800-90B Validation Service
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+User=dobslit
+WorkingDirectory=/home/dobslit/qrng-nist-api
+ExecStart=/home/dobslit/qrng-api/venv/bin/python nist_service.py
+Restart=always
+RestartSec=10
+TimeoutStopSec=10
+Environment=NIST_ENABLED=true
+Environment=NIST_TEST_INTERVAL_SECONDS=3600
+Environment=NIST_SUITE_DIR=/home/dobslit/SP800-90B_EntropyAssessment/cpp
+Environment=NIST_SCRIPT=/home/dobslit/SP800-90B_EntropyAssessment/cpp/qrng_nist90b.sh
+Environment=NIST_DATA_DIR=/home/dobslit/qrng_data_nist
+Environment=NIST_DB_PATH=/home/dobslit/qrng-nist-api/nist.db
+
+[Install]
+WantedBy=multi-user.target

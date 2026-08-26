@@ -1,0 +1,29 @@
+[Unit]
+Description=QRNG SSH Reverse Tunnel para VM nova (portas 18001, 18002, 22222)
+After=network-online.target qrng-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=dobslit
+ExecStartPre=/usr/bin/ssh -i /home/dobslit/.ssh/qrng_ufpe_tunnel \
+  -o StrictHostKeyChecking=no \
+  -o BatchMode=yes \
+  -o ConnectTimeout=10 \
+  root@2.24.117.58 \
+  "fuser -k 18001/tcp 2>/dev/null; fuser -k 18002/tcp 2>/dev/null; sleep 0.5; true"
+ExecStart=/usr/bin/ssh -i /home/dobslit/.ssh/qrng_ufpe_tunnel \
+  -N \
+  -o StrictHostKeyChecking=no \
+  -o ExitOnForwardFailure=yes \
+  -o ServerAliveInterval=10 \
+  -o ServerAliveCountMax=6 \
+  -o TCPKeepAlive=yes \
+  -o ConnectTimeout=15 \
+  -R 127.0.0.1:18001:127.0.0.1:8001 \
+  -R 127.0.0.1:18002:127.0.0.1:8002 \
+  -R 127.0.0.1:22222:localhost:22 \
+  root@2.24.117.58
+Restart=always
+RestartSec=15
+TimeoutStopSec=5

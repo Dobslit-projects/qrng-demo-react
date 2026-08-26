@@ -1,0 +1,14 @@
+#!/bin/bash
+
+echo "Creating named fifo"
+mkfifo /tmp/fifo_qrng
+echo "Establishing TCP connection with QRNG"
+nc 10.0.10.2 12345 > /tmp/fifo_qrng &
+
+#cd /home/dobslit/qrng-api
+#echo "Activating VENV"
+#source venv/bin/activate
+#echo "Activating Uvicorn Server API"
+#/usr/bin/python3 -m uvicorn server_api:app --host 127.0.0.1 --port 8001 &
+echo "Activating SSH tunnel"
+ssh -i ~/.ssh/qrng_ufpe_tunnel -N -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 -o ServerAliveCountMax=3 -R 18001:127.0.0.1:8001 root@189.126.105.45 &
