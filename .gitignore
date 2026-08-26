@@ -39,3 +39,8 @@ qrng-web-demo-main/
 *.bak.*
 __pycache__/
 *.pyc
+
+# Playwright (item 10)
+test-results/
+playwright-report/
+e2e-results.json
