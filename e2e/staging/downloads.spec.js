@@ -11,12 +11,15 @@ const hasBOM = (b) => b.length >= 3 && b[0] === 0xEF && b[1] === 0xBB && b[2] ==
 
 async function gotoDados(page) {
   await page.goto("/qrng/", { waitUntil: "domcontentloaded" });
-  await page.getByRole("button", { name: "Dados", exact: true }).click();
+  await page.getByRole("button", { name: "Dados", exact: true }).first().click();
   await expect(page.getByText("Modo de Exportação")).toBeVisible();
 }
 
 async function pickMode(page, label) {
-  await page.getByRole("button", { name: label, exact: true }).click();
+  await page.getByRole("button", { name: label, exact: true }).first().click();
+  // escolhe um preset de tamanho múltiplo de 4 (1 KB) quando existir
+  const kb = page.getByRole("button", { name: "1 KB", exact: true });
+  if (await kb.count()) await kb.first().click();
 }
 
 async function generateAndDownload(page) {
@@ -37,9 +40,9 @@ test.describe("downloads — aba Dados", () => {
     expect(name).toMatch(/\.bin$/);
     expect(buf.length).toBeGreaterThan(0);
     expect(hasBOM(buf)).toBe(false);
-    // sem texto/JSON acidental
-    expect(buf.includes(Buffer.from("{"))).toBe(false);
-    // decodifica como uint32-LE (transport word)
+    // .bin é binário puro: decodifica como uint32-LE (transport word).
+    // (NÃO se checa "ausência do byte 0x7B" -- binário aleatório contém todos
+    //  os valores de byte; a checagem de 'sem JSON' vale só p/ hex/uint8.)
     expect(buf.length % 4).toBe(0);
     const words = buf.length / 4;
     let anyNonZero = false;
