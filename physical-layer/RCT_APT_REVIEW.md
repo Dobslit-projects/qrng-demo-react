@@ -199,22 +199,25 @@ São **limites superiores**, não a taxa exata.
 
 **(C) Simulação empírica** — Monte Carlo seeded, em **regime tratável** (cutoffs
 pequenos, `p` alto, onde os eventos são frequentes). **Não** se observa evento raro
-direto. Valida que as fórmulas de (A)/(B) são cotas superiores válidas:
+direto. Serve para verificar se as fórmulas de (A)/(B) se comportam como cotas
+superiores nas configurações testadas — não é evidência sobre a fonte física:
 
 | teste | resultado |
 |---|---|
-| C1 RCT: `sim ≤ p_max^(C−1)` | **CONFIRMADO** nos 5 casos; `sim/bound` ≈ 0,07–0,17 (o bound é conservador) |
-| C2 APT (janela não sobreposta): `sim ≤ P(Binom(W−1,p_max) ≥ C−1)` | **CONFIRMADO** nos 5 casos; `sim/bound` ≈ 0,12–0,17 |
+| C1 RCT vs `p_max^(C−1)` | O valor observado na simulação foi **consistente com o limite analítico** nas 5 configurações avaliadas (`sim/bound` ≈ 0,07–0,17; o bound é conservador). |
+| C2 APT (janela não sobreposta) vs `P(Binom(W−1,p_max) ≥ C−1)` | O valor observado na simulação foi **consistente com o limite analítico** nas 5 configurações avaliadas (`sim/bound` ≈ 0,12–0,17). |
 | C3 janela **sobreposta × não sobreposta** | a não sobreposta (implementada) reseta a referência a cada W; a sobreposta reavalia a cada amostra e tem taxa por-amostra menor mas oportunidades correlacionadas — comparação registrada, sem mudança de implementação |
-| C4 **interação 4 lanes** (RCT, C=3, uniforme) | `qualquer-das-4` = **0,79 × (4 × single)** → sub-aditivo, o limite de união é uma cota superior válida; lanes ~independentes |
+| C4 **interação 4 lanes** (RCT, C=3) | **Cenário sintético**: 4 streams i.i.d. uniformes gerados conforme o modelo do script. Nesse cenário, `qualquer-das-4` ≈ **0,79 × (4 × single)** → subaditividade **válida apenas para esse cenário sintético**. A razão 0,79 **não demonstra independência das lanes físicas**; o union bound permanece um **teto conservador**. A dependência real entre lanes deve ser avaliada nas **capturas da fonte** (ver §8 do plano). |
 | C5 **sensibilidade à taxa** | linear (só um multiplicador): 0,1×/1×/10×/100× a taxa → MTBF ÷ 10 a cada ×10 |
 | C6 **sensibilidade a p_max** | ±0,001 em torno de 0,00793 move o MTBF ~2× e pode ±1 no cutoff do APT |
 | IC 95% (Wilson) | reportado por linha em C1/C2 |
 
 ### 12.2 Taxa agregada de falso bloqueio (limite de união dos 8 testes)
 
-Lanes quase-independentes (C4); RCT+APT na mesma lane positivamente correlacionados ⇒
-a soma é **limite superior**.
+O limite de união (soma das taxas dos 8 testes) é um **teto conservador**: no cenário
+sintético de C4 as 4 lanes contribuem de forma aproximadamente aditiva, e RCT+APT na
+mesma lane são positivamente correlacionados (a soma superestima). Isto **não** é uma
+afirmação sobre a dependência entre as lanes físicas.
 
 | α | RCT/lane | APT/lane | **(A)** worst-case (1 a cada) | **(B)** iid-uniforme (1 a cada) |
 |---|---|---|---|---|
@@ -262,7 +265,7 @@ sobre o bound (A), validado por (C) só no regime tratável.
 | política de falha | definida no módulo (1 falha → `FAILED`, sem histerese) — **a revisar** à luz de §12 |
 | duração da recuperação | procedimento explícito existe; **duração operacional não definida** |
 | efeito operacional de um falso positivo | **não quantificado** (quanto custa um `FAILED` falso na entrega?) |
-| comportamento entre lanes | union bound validado (C4); k-de-n ainda hipótese |
+| comportamento entre lanes | union bound = teto conservador (superestima); a dependência real entre lanes físicas é **inconclusiva** — pendente das capturas da fonte. k-de-n continua hipótese. |
 | janela e semântica do APT | W=512, janela **não sobreposta**, `B` conta a referência (§2, §5) — a manter ou revisar junto com a decisão de α |
 
 **Registrado explicitamente:**

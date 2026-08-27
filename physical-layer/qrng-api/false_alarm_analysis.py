@@ -247,8 +247,9 @@ def simulate_apt(n_symbols, C, W, p_max, seed, sliding=False):
 
 
 def simulate_four_lanes(n_words, C_rct, seed):
-    """4 lanes iid uniformes independentes; mede a taxa de palavras em que
-    ALGUMA lane dispara o RCT, para comparar com 4x a taxa single-lane."""
+    """Cenario SINTETICO: 4 streams i.i.d. uniformes gerados por RNGs
+    independentes deste script (NAO as lanes fisicas). Mede a taxa de palavras
+    em que ALGUMA stream dispara o RCT, para comparar com 4x a taxa single."""
     rngs = [random.Random(seed + 100 + i) for i in range(4)]
     sts = [_RCT(C_rct) for _ in range(4)]
     any_fail = 0
@@ -317,9 +318,11 @@ if __name__ == "__main__":
         ok = hi <= bound * 1.05
         ok_all = ok_all and ok
         print(f"        {p_max:7.4f}  {C:2d}  {Wsim:3d}  {rate:.3e} ({k:5d})  [{lo:.2e},{hi:.2e}]  {bound:.3e}   {frac:.3f}      {'sim' if ok else 'NAO'}")
-    print(f"\n    -> C1/C2: a simulacao NUNCA excede o bound analitico"
-          f"  [{'CONFIRMADO' if ok_all else 'FALHOU -- rever'}]. O bound e conservador"
-          f" (sim ~ 0.1-0.2x dele numa fonte iid) -- e o lado seguro para dimensionar alpha.")
+    print(f"\n    -> C1/C2: o valor observado na simulacao ficou "
+          f"{'consistente com o limite analitico' if ok_all else 'INCONSISTENTE -- rever'} "
+          f"nas configuracoes avaliadas. O bound e conservador (sim ~ 0.1-0.2x dele nestes"
+          f" casos sinteticos) -- e o lado seguro para dimensionar alpha. NAO e evidencia"
+          f" sobre a fonte fisica.")
 
     print(f"\n    C3. APT janela SOBREPOSTA vs NAO sobreposta (mesma p, C, W)")
     print("        A janela nao sobreposta reseta a referencia a cada W; a sobreposta")
@@ -329,7 +332,9 @@ if __name__ == "__main__":
         _, r_sl, _ = simulate_apt(N // 2, C, Wsim, p_max, SEED, sliding=True)
         print(f"        p_max={p_max:.4f} C={C} W={Wsim}: nao-sobreposta {r_ns:.3e}/janela   sobreposta {r_sl:.3e}/amostra")
 
-    print(f"\n    C4. Interacao entre 4 lanes (RCT, iid uniforme, C=3)")
+    print(f"\n    C4. Interacao entre 4 lanes -- CENARIO SINTETICO (RCT, C=3)")
+    print("        4 streams i.i.d. uniformes gerados conforme o modelo deste script")
+    print("        (nao sao as lanes fisicas nem capturas da fonte).")
     Nw = 3_000_000
     # single-lane uniforme, C=3: gerador uniforme direto
     rng = random.Random(SEED + 7); st = _RCT(3); s1 = 0
@@ -341,7 +346,10 @@ if __name__ == "__main__":
     print(f"        single-lane (C=3, uniforme): {single:.3e}/palavra  ({s1} em {Nw:,})")
     print(f"        alguma-das-4-lanes         : {rany:.3e}/palavra  ({kany} em {Nw:,})")
     print(f"        4x single (uniao)          : {4*single:.3e}  -> razao medida/uniao = {rany/(4*single) if single else float('nan'):.3f}")
-    print("        (razao ~1 confirma quase-aditividade; lanes ~independentes)")
+    print("        A subaditividade vale SO neste cenario sintetico. A razao 0.79 NAO")
+    print("        demonstra independencia das lanes fisicas; o union bound continua um")
+    print("        teto conservador. A dependencia real deve ser avaliada nas capturas")
+    print("        da fonte (correlacao linear ~0 NAO e prova de independencia).")
 
     print(f"\n    C5. Sensibilidade a taxa de simbolos (linear -- so um multiplicador)")
     a = 2.0 ** (-30)
@@ -361,8 +369,11 @@ if __name__ == "__main__":
 
     print("\n" + "=" * 76)
     print("LIMITACOES (recapitulacao):")
-    print("  - regime real (eventos raros) NAO simulado -- valores de (A)/(B) sao")
-    print("    analiticos, validados por (C) apenas no regime tratavel.")
+    print("  - regime real (eventos raros) NAO simulado -- (A)/(B) sao analiticos; (C)")
+    print("    so verifica o comportamento das formulas no regime tratavel/sintetico.")
     print("  - taxa = transporte, nao amostra fisica confirmada.")
-    print("  - modelo iid/estacionario; captura real tem viés sistematico pequeno.")
+    print("  - modelo iid/estacionario; captura real tem vies sistematico pequeno.")
+    print("  - C4 NAO demonstra independencia das lanes FISICAS -- so subaditividade")
+    print("    num cenario sintetico. Union bound = teto conservador. Dependencia real")
+    print("    das lanes: avaliar nas capturas da fonte (corr. linear ~0 nao e prova).")
     print("  - MTBF != garantia. Nenhum alpha selecionado. RCT/APT fora do live.")
