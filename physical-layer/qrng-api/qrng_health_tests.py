@@ -14,9 +14,21 @@ real (nao versionado, roda ao vivo) e uma mudanca separada que requer
 autorizacao explicita -- ver o pedido: "pare antes de... implantar health
 tests no caminho live".
 
-Thresholds calculados a partir da min-entropia SP 800-90B nao-IID
-(conservadora) medida por lane na captura de referencia (ver
-docs/nist_lane0_noniid_20260826_output.txt e
+Formulas (SP 800-90B 4.4, alpha = 2^-20 -- valor com que as Tabelas 1 e 2 do
+documento foram calculadas):
+  RCT:  C = 1 + ceil(-log2(alpha) / H)                    (secao 4.4.1)
+  APT:  C = 1 + CRITBINOM(W, 2^-H, 1 - alpha)             (secao 4.4.2)
+        CRITBINOM(W, p, q) = menor k com P(Binomial(W, p) <= k) >= q.
+        Contador do teste = B (comeca em 1, a referencia conta); a janela
+        FALHA quando B >= C.  Ver apt_cutoff() e APTState para as variaveis.
+
+Verificacao independente (test_qrng_health_tests.py) contra a Tabela 2 da
+SP 800-90B (W=512): H=8 -> C=13, H=4 -> 62, H=2 -> 177, H=1 -> 311, H=0.5 -> 410
+(valores literais do documento, mais uma 2a implementacao de referencia
+independente via math.comb).
+
+Thresholds por lane, da min-entropia SP 800-90B nao-IID (conservadora) medida
+por lane na captura de referencia (docs/nist_lane0_noniid_20260826_output.txt,
 docs/nist_lanes123_noniid_20260826_output.txt), alpha=2^-20:
 
     lane0: H=6.978486  RCT=4   APT(W=512)=18
@@ -24,10 +36,14 @@ docs/nist_lanes123_noniid_20260826_output.txt), alpha=2^-20:
     lane2: H=7.331528  RCT=4   APT(W=512)=16
     lane3: H=7.182924  RCT=4   APT(W=512)=16
 
-Estes valores sao PRELIMINARES -- calculados sobre uma unica captura de
-referencia, nao a estimativa final apos a restart campaign (item 8,
-bloqueada). Devem ser revalidados quando uma estimativa de min-entropia
-mais robusta existir.
+Estes valores sao PRELIMINARES: (a) calculados sobre UMA captura de
+referencia, nao a estimativa pos restart campaign (item 8, bloqueada); (b)
+com alpha=2^-20, a taxa AGREGADA de falso bloqueio na vazao real do pipeline
+(~170 mil simbolos/s por lane, medida em 2026-08-27) e da ordem de 1 a cada
+poucos segundos (ver RCT_APT_REVIEW.md secao "Falso alarme"). Antes de
+qualquer integracao live, alpha e os cutoffs precisam ser reorcados para um
+objetivo operacional (1 falso bloqueio por dia/mes/ano -> alpha ~2^-33 a
+2^-43; ver a tabela no RCT_APT_REVIEW.md). Nada disso e aplicado aqui.
 """
 import math
 import time
@@ -41,27 +57,60 @@ def rct_cutoff(min_entropy_bits_per_symbol: float, alpha: float = 2 ** -20) -> i
     return 1 + math.ceil(-math.log2(alpha) / min_entropy_bits_per_symbol)
 
 
+def _binom_cdf(n: int, k: int, p: float) -> float:
+    """P(X <= k) para X ~ Binomial(n, p). Soma direta da PMF via lgamma.
+    Estavel para os n (<=512) e p (>= 2^-8) deste modulo."""
+    if k < 0:
+        return 0.0
+    if k >= n:
+        return 1.0
+    total = 0.0
+    for i in range(0, k + 1):
+        logpmf = (math.lgamma(n + 1) - math.lgamma(i + 1) - math.lgamma(n - i + 1)
+                  + i * math.log(p) + (n - i) * math.log1p(-p))
+        total += math.exp(logpmf)
+    return min(total, 1.0)
+
+
+def _critbinom(n: int, p: float, q: float) -> int:
+    """Equivalente a CRITBINOM/BINOM.INV do Excel:
+    menor inteiro k em [0, n] tal que P(Binomial(n, p) <= k) >= q.
+    Busca binaria sobre a CDF (monotona em k)."""
+    lo, hi = 0, n
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if _binom_cdf(n, mid, p) >= q:
+            hi = mid
+        else:
+            lo = mid + 1
+    return lo
+
+
 def apt_cutoff(min_entropy_bits_per_symbol: float, window: int = 512, alpha: float = 2 ** -20) -> int:
-    """SP 800-90B 4.4.2: menor C tal que P(X >= C) <= alpha, X ~ Binomial(window-1, 2^-H)."""
-    p = 2 ** (-min_entropy_bits_per_symbol)
-    n = window - 1
+    """Cutoff C do Adaptive Proportion Test, formula publicada na NIST SP 800-90B 4.4.2:
 
-    def log_binom_pmf(n, k, p):
-        return (math.lgamma(n + 1) - math.lgamma(k + 1) - math.lgamma(n - k + 1)
-                + k * math.log(p) + (n - k) * math.log(1 - p))
+        C = 1 + CRITBINOM(W, 2^(-H), 1 - alpha)
 
-    def tail_prob(n, c, p):
-        total = 0.0
-        for k in range(c, n + 1):
-            total += math.exp(log_binom_pmf(n, k, p))
-            if total > 1:
-                break
-        return total
+    Variaveis (exatamente como na SP 800-90B):
+      W     = window  -- numero de amostras por janela do APT (512 para dados
+              nao-binarios; a 1a amostra da janela e a referencia A).
+      H     = min_entropy_bits_per_symbol  -- min-entropia por simbolo (bits).
+      p     = 2^(-H)  -- probabilidade (limite superior) da amostra de
+              referencia se repetir, sob a hipotese de min-entropia da SP.
+      alpha = probabilidade alvo de falso positivo por janela (SP 800-90B: 2^-20;
+              as tabelas 1 e 2 do documento foram calculadas com esse valor).
+      CRITBINOM(W, p, 1-alpha) = menor k tal que P(Binomial(W, p) <= k) >= 1-alpha.
 
-    c = int(n * p) + 1
-    while tail_prob(n, c, p) > alpha and c < n:
-        c += 1
-    return c
+    O contador do teste e B (comeca em 1 -- a referencia conta, ver APTState);
+    a janela FALHA quando B >= C. Como B = 1 + (matches entre as W-1 amostras
+    seguintes), B >= C <=> matches >= C-1. A tabela de C abaixo (test_...py)
+    reproduz os valores publicados na Tabela 2 da SP 800-90B para W=512:
+    H=8->13, H=4->62, H=2->177, H=1->311, H=0.5->410.
+    """
+    if min_entropy_bits_per_symbol <= 0:
+        raise ValueError("min_entropy_bits_per_symbol deve ser > 0")
+    p = 2.0 ** (-min_entropy_bits_per_symbol)
+    return 1 + _critbinom(window, p, 1.0 - alpha)
 
 
 # Thresholds preliminares por lane (ver docstring do modulo).
