@@ -1973,9 +1973,14 @@ app.use((err, req, res, next) => {
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 
+// Endereço de bind. DEFAULT "127.0.0.1" -- reproduz o deploy de produção
+// (host network + nginx no mesmo host). Em rede bridge de container (staging),
+// defina BIND_ADDR=0.0.0.0 para o nginx de outro container alcançar o serviço.
+const BIND_ADDR = process.env.BIND_ADDR || "127.0.0.1";
+
 if (require.main === module) {
-  app.listen(PORT, "127.0.0.1", () => {
-    console.log(`QRNG client API  → http://127.0.0.1:${PORT}`);
+  app.listen(PORT, BIND_ADDR, () => {
+    console.log(`QRNG client API  → http://${BIND_ADDR}:${PORT}`);
     console.log(`Database         → ${DB_PATH}`);
     console.log(`Admin email      → ${ADMIN_EMAIL || "(não configurado)"}`);
     console.log(`Max bytes/req    → ${MAX_BYTES_PER_REQUEST.toLocaleString()} bytes`);

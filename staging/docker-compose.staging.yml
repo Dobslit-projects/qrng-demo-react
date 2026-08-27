@@ -14,7 +14,7 @@ name: kapua-staging
 services:
   fixture-upstream:
     build:
-      context: ./staging/fixture-upstream
+      context: ./fixture-upstream
     image: kapua-staging-fixture-upstream:local
     environment:
       FIXTURE_SEED: "20260827"
@@ -29,7 +29,7 @@ services:
 
   qrng-client-api:
     build:
-      context: ./qrng-client-api
+      context: ../qrng-client-api
     image: kapua-staging-client-api:local
     depends_on:
       fixture-upstream:
@@ -39,16 +39,17 @@ services:
       QRNG_UPSTREAM: "http://fixture-upstream:18091"
       QRNG_SOURCE_LABEL: "staging-fixture-replay"
       QRNG_PROVENANCE: "replay"
+      BIND_ADDR: "0.0.0.0"
       JWT_SECRET: "staging-only-not-a-secret-e2e"
       ADMIN_EMAIL: "admin@staging.invalid"
       DB_PATH: "/data/staging.db"
       MAX_JSON_BODY_BYTES: "8kb"
       # limites pequenos p/ exercitar rate limit / cota em testes deterministicos
       RATE_LIMIT_PER_IP_PER_MINUTE: "1000"
-      RATE_LIMIT_PER_TOKEN_PER_MINUTE: "20"
-      DAILY_QUOTA_REQUESTS: "500"
+      RATE_LIMIT_PER_TOKEN_PER_MINUTE: "300"
+      DAILY_QUOTA_REQUESTS: "100000"
       PUBLIC_MAX_BYTES_PER_REQUEST: "65536"
-      PUBLIC_RATE_LIMIT_PER_IP_PER_MINUTE: "15"
+      PUBLIC_RATE_LIMIT_PER_IP_PER_MINUTE: "60"
       PUBLIC_DAILY_QUOTA_REQUESTS_PER_IP: "300"
       ALLOW_LEGACY_TEXT_UPSTREAM: "false"
       METRICS_TOKEN: "staging-metrics"
@@ -58,7 +59,7 @@ services:
 
   web:
     build:
-      context: .
+      context: ..
       dockerfile: staging/web.Dockerfile
     image: kapua-staging-web:local
     depends_on: [qrng-client-api, fixture-upstream]
