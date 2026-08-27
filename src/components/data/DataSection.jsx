@@ -1,7 +1,7 @@
 import { useState, useContext } from "react";
 import { theme, formatBytes } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
-import { fetchQrngBytes, PRECOLLECTED_LIMIT } from "../../lib/qrngHelper";
+import { fetchQrngBytes, fetchQrngRawBytes, PRECOLLECTED_LIMIT } from "../../lib/qrngHelper";
 import Btn from "../ui/Btn";
 
 const MONO = "'IBM Plex Mono', monospace";
@@ -308,8 +308,13 @@ export default function DataSection() {
 
     try {
       const needed  = bytesNeeded();
-      const result  = await fetchQrngBytes(needed, qrngSource);
-      const { bytes, hex } = result;
+      // Modo "raw": binário real da API (application/octet-stream, N bytes
+      // exatos). Demais modos: JSON hex (rejection sampling etc. operam sobre
+      // os bytes decodificados). Ver qrngHelper.js item 2.
+      const result  = snap.mode === "raw"
+        ? await fetchQrngRawBytes(needed, qrngSource)
+        : await fetchQrngBytes(needed, qrngSource);
+      const { bytes } = result;
       const latencyMs = result.latencyMs;
       const source    = result.source ?? (qrngSource === "pre-collected" ? "pré-coletado" : "qrng");
 

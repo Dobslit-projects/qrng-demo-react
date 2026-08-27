@@ -1,7 +1,6 @@
 import { describe, it, expect, vi, afterEach } from "vitest";
 import {
   fetchQrngRandIntViaToken,
-  fetchQrngRandIntsViaToken,
   uniformIntsFromBytes,
   bytesToDiscreteFloats,
   generateQrngSequence,
@@ -9,6 +8,8 @@ import {
   uint32ToFloat,
   exponentialFromUniform,
   fetchQrngBytes,
+  fetchQrngRawBytes,
+  fetchQrngRawBytesViaToken,
   PRECOLLECTED_LIMIT,
   PrecollectedExhaustedError,
   precollectedRemaining,
@@ -294,5 +295,81 @@ describe("exponentialFromUniform — transformada inversa (X = -mean * ln(1 - U)
     const sampleMean = sum / (n - 1);
     expect(sampleMean).toBeGreaterThan(4.5);
     expect(sampleMean).toBeLessThan(5.5);
+  });
+});
+
+// ─── Modo binário real: fetchQrngRawBytes / fetchQrngRawBytesViaToken ──────
+describe("fetchQrngRawBytes — binário real (item 2), não hex decodificado no cliente", () => {
+  function mockRawOnce(bytesArray, headers = {}) {
+    const buf = new Uint8Array(bytesArray).buffer;
+    const hmap = new Map(Object.entries({
+      "x-request-id": "req_0123456789abcdef",
+      "x-qrng-source": "dobslit-qrng-ufpe-fpga",
+      "x-qrng-conditioned": "false",
+      ...headers,
+    }));
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      arrayBuffer: async () => buf,
+      json: async () => { throw new Error("raw mode must not call .json() on success"); },
+      headers: { get: (k) => (hmap.has(k) ? hmap.get(k) : null) },
+    });
+  }
+
+  it("pede ?format=raw (nunca ?format=hex) e lê arrayBuffer(), não json()", async () => {
+    mockRawOnce([0x00, 0x7f, 0x80, 0xff]);
+    const out = await fetchQrngRawBytes(4, "remote");
+    expect(globalThis.fetch).toHaveBeenCalledTimes(1);
+    const url = globalThis.fetch.mock.calls[0][0];
+    expect(url).toContain("format=raw");
+    expect(url).not.toContain("format=hex");
+    expect(Array.from(out.bytes)).toEqual([0x00, 0x7f, 0x80, 0xff]);
+  });
+
+  it("os N bytes chegam sem transformação; hex derivado bate byte a byte", async () => {
+    const src = [1, 2, 3, 250, 251, 252, 0, 255];
+    mockRawOnce(src);
+    const out = await fetchQrngRawBytes(src.length, "fpga");
+    expect(out.bytes).toBeInstanceOf(Uint8Array);
+    expect(out.bytes.length).toBe(src.length);
+    expect(Array.from(out.bytes)).toEqual(src);
+    expect(out.hex).toBe("010203fafbfc00ff");
+  });
+
+  it("propaga proveniência e request_id pelos headers (não do corpo)", async () => {
+    mockRawOnce([9, 9], { "x-request-id": "req_abc", "x-qrng-source": "dobslit-qrng-ufpe-fpga" });
+    const out = await fetchQrngRawBytes(2, "remote");
+    expect(out.requestId).toBe("req_abc");
+    expect(out.source).toBe("dobslit-qrng-ufpe-fpga");
+    expect(out.conditioned).toBe("false");
+  });
+
+  it("fonte pre-collected não chama rede (usa o buffer local, sem format=raw)", async () => {
+    resetPrecollectedCursor();
+    globalThis.fetch = vi.fn();
+    const out = await fetchQrngRawBytes(16, "pre-collected");
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(out.bytes.length).toBe(16);
+    resetPrecollectedCursor();
+  });
+
+  it("erro HTTP vira exceção (não retorna bytes silenciosamente)", async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: false, status: 503,
+      json: async () => ({ error: "QRNG_UNAVAILABLE" }),
+      headers: { get: () => null },
+    });
+    await expect(fetchQrngRawBytes(8, "remote")).rejects.toThrow(/QRNG_UNAVAILABLE|503/);
+  });
+
+  it("fetchQrngRawBytesViaToken usa CLIENT_API /random?format=raw com Authorization", async () => {
+    mockRawOnce([10, 20, 30, 40]);
+    localStorage.setItem("qrng_auth_jwt", "jwt-xyz");
+    const out = await fetchQrngRawBytesViaToken(4);
+    const [url, opts] = globalThis.fetch.mock.calls[0];
+    expect(url).toContain("/random?bytes=4&format=raw");
+    expect(opts.headers.Authorization).toBe("Bearer jwt-xyz");
+    expect(Array.from(out.bytes)).toEqual([10, 20, 30, 40]);
+    localStorage.removeItem("qrng_auth_jwt");
   });
 });

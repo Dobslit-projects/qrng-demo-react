@@ -36,6 +36,8 @@ export default defineConfig({
     globals: true,
     // qrng-client-api/ é um projeto Node separado com sua própria suíte
     // (node --test, supertest) — não faz parte dos testes do frontend.
-    exclude: ["**/node_modules/**", "qrng-client-api/**"],
+    // e2e/ é a suíte Playwright (@playwright/test) — roda por `npm run test:e2e`,
+    // nunca pelo vitest (test.describe do Playwright quebra fora do runner dele).
+    exclude: ["**/node_modules/**", "qrng-client-api/**", "e2e/**", "physical-layer/**"],
   },
 })

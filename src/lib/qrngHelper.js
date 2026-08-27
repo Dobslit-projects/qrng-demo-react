@@ -168,6 +168,60 @@ export async function fetchQrngBytesViaToken(byteCount) {
   return decodeQrngJsonResponse(json, t0);
 }
 
+// ─── Modo binário real (item 2 da estabilização) ──────────────────────────
+//
+// Antes: o modo "Raw Binário" da aba Dados e o download .bin baixavam
+// `?format=hex` e desempacotavam a string hex no cliente (2× o tráfego, e
+// não era binário de verdade vindo da API). Agora usam `?format=raw`, que a
+// API entrega como application/octet-stream com EXATAMENTE os N bytes
+// (Content-Length = N), sem JSON/prefixo/BOM. hex/uint8/range/montecarlo
+// continuam usando fetchQrngBytes()/fetchQrngBytesViaToken() (JSON hex),
+// intocados -- nenhum consumidor existente muda de comportamento.
+
+function decodeRawResponse(buf, r, t0) {
+  const bytes = new Uint8Array(buf);
+  return {
+    bytes,
+    hex: bytesToHex(bytes),
+    source:      r.headers.get("x-qrng-source") || null,
+    requestId:   r.headers.get("x-request-id") || null,
+    conditioned: r.headers.get("x-qrng-conditioned"), // string "false" quando presente
+    timestamp:   new Date().toISOString(),
+    latencyMs:   Math.round(performance.now() - t0),
+  };
+}
+
+/** N bytes da fonte ativa em binário real (application/octet-stream). Pré-coletada: buffer local. */
+export async function fetchQrngRawBytes(byteCount, source = "remote") {
+  if (source === "pre-collected") {
+    return getPrecollectedBytes(byteCount);
+  }
+  const apiPrefix = API_ROUTES[source] || API_ROUTES.remote;
+  const t0 = performance.now();
+  const r = await fetch(`${apiPrefix}/random?bytes=${byteCount}&format=raw`, {
+    signal: AbortSignal.timeout(60000),
+  });
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(body.detail || body.error || body.message || `QRNG API error ${r.status}`);
+  }
+  return decodeRawResponse(await r.arrayBuffer(), r, t0);
+}
+
+/** N bytes em binário real via token pessoal (client-api /v1/random?format=raw). */
+export async function fetchQrngRawBytesViaToken(byteCount) {
+  const t0 = performance.now();
+  const r = await fetch(`${CLIENT_API}/random?bytes=${byteCount}&format=raw`, {
+    headers: getAuthHeaders(),
+    signal: AbortSignal.timeout(30000),
+  });
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    throw new Error(body.message || body.error || `QRNG API error ${r.status}`);
+  }
+  return decodeRawResponse(await r.arrayBuffer(), r, t0);
+}
+
 // ─── Conversões derivadas (bytes → hex / uint32 / float / int) ─────────────
 
 export function bytesToHex(bytes) {

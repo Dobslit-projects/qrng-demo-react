@@ -1,7 +1,7 @@
 import { useState, useContext } from "react";
 import { theme, formatBytes } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
-import { fetchQrngBytes, errorMessage, PRECOLLECTED_LIMIT } from "../../lib/qrngHelper";
+import { fetchQrngRawBytes, errorMessage, PRECOLLECTED_LIMIT } from "../../lib/qrngHelper";
 import Btn from "../ui/Btn";
 
 const presets = [
@@ -32,7 +32,9 @@ export default function DataExport() {
     setDownloading(true);
     setDlError(null);
     try {
-      const { bytes } = await fetchQrngBytes(downloadSize, qrngSource);
+      // Download .bin usa o modo binário real da API (application/octet-stream,
+      // N bytes exatos) em vez de baixar hex e desempacotar no cliente (item 2).
+      const { bytes } = await fetchQrngRawBytes(downloadSize, qrngSource);
       const blob = new Blob([bytes], { type: "application/octet-stream" });
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
