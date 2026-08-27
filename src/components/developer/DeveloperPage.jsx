@@ -211,14 +211,14 @@ export default function DeveloperPage() {
     try {
       const res = await devGetUsage();
       if (res.ok) setUsage(res.data);
-    } catch {}
+    } catch { /* uso e informativo; falha nao bloqueia a pagina */ }
   }, []);
 
   const loadRequests = useCallback(async () => {
     try {
       const res = await devGetRequests(20);
       if (res.ok) setRequests(res.data.requests);
-    } catch {}
+    } catch { /* historico e informativo; falha nao bloqueia a pagina */ }
   }, []);
 
   // Carrega token depois que user é definido

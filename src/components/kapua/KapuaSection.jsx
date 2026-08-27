@@ -382,7 +382,7 @@ function FlowPipeline({ selected, onSelect, flowStep }) {
 
 /* ── Component Info Panel ─────────────────────────────────────────────────── */
 
-function ComponentPanel({ selected, onSelect, flowStep, onPlayFlow, isFlowPlaying }) {
+function ComponentPanel({ selected, onSelect, onPlayFlow, isFlowPlaying }) {
   const c = COMPONENTS[selected];
   if (!c) return null;
   return (

@@ -22,9 +22,6 @@ export function monobitTest(bytes) {
   }
 
   const ratio = ones / total;
-  // z-score: deviation from 0.5
-  const s = (ones - total / 2) / Math.sqrt(total / 4);
-  const pValue = Math.exp(-s * s / 2); // simplified p-value approximation
   const passed = Math.abs(ratio - 0.5) < 0.03; // within 3% of 50/50
 
   return {
@@ -94,10 +91,7 @@ export function chiSquareTest(bytes) {
     chiSq += (diff * diff) / expected;
   }
 
-  // Degrees of freedom = 255
-  // For df=255, critical value at p=0.01 is ~310
-  // For df=255, expected chi-sq is 255, std dev ~22.6
-  const zScore = (chiSq - 255) / 22.6;
+  // Degrees of freedom = 255. Critical value at p=0.01 is ~310.
   const passed = chiSq < 310;
 
   return {

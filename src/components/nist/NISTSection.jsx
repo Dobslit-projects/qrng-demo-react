@@ -42,6 +42,33 @@ function PassBadge({ passed }) {
   return <span style={badge(passed ? theme.success : theme.danger)}>{passed ? "Passou" : "Falhou"}</span>;
 }
 
+// Linha rotulo/valor do modal de detalhe. No escopo do modulo (nao dentro de
+// JobModal) para nao recriar o componente a cada render -- ver
+// react-hooks/static-components.
+function H({ label, value, dim }) {
+  return (
+    <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px solid ${theme.border}` }}>
+      <span style={{ fontSize: 11, color: dim ? theme.textMuted : theme.textDim, fontFamily: mono }}>{label}</span>
+      <span style={{ fontSize: 12, fontWeight: 600, fontFamily: mono, color: theme.text }}>
+        {value !== null && value !== undefined ? (typeof value === "number" ? value.toFixed(6) : String(value)) : "—"}
+      </span>
+    </div>
+  );
+}
+
+// Rotulo humano para sample_origin do job NIST (proveniencia). Forward-compat
+// com a taxonomia do servico NIST corrigido: live | historical | unknown.
+function sampleOriginLabel(origin) {
+  const map = {
+    periodic_live: "Medida periódica da fonte ao vivo",
+    live:          "Captura ao vivo",
+    historical:    "Arquivo histórico",
+    upload:        "Upload manual",
+    unknown:       "Desconhecida",
+  };
+  return map[origin] || (origin ? String(origin) : "Desconhecida");
+}
+
 function Btn({ onClick, disabled, color, small, children }) {
   return (
     <button
@@ -95,15 +122,6 @@ function JobModal({ job, log, onClose }) {
   const [tab, setTab] = useState("resumo");
 
   if (!job) return null;
-
-  const H = ({ label, value, dim }) => (
-    <div style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: `1px solid ${theme.border}` }}>
-      <span style={{ fontSize: 11, color: dim ? theme.textMuted : theme.textDim, fontFamily: mono }}>{label}</span>
-      <span style={{ fontSize: 12, fontWeight: 600, fontFamily: mono, color: theme.text }}>
-        {value !== null && value !== undefined ? (typeof value === "number" ? value.toFixed(6) : String(value)) : "—"}
-      </span>
-    </div>
-  );
 
   return (
     <div
@@ -307,7 +325,7 @@ export default function NISTSection() {
           setActiveJobId(null);
           refresh();
         }
-      } catch {}
+      } catch { /* poll transitorio; a proxima iteracao tenta de novo */ }
     }, 2500);
     return () => clearInterval(pollRef.current);
   }, [activeJobId, refresh]);
@@ -342,7 +360,7 @@ export default function NISTSection() {
     try {
       const l = await nistJobLog(job.id);
       setJobLog(l);
-    } catch {}
+    } catch { /* log e opcional; o modal abre mesmo sem ele */ }
     finally { setLoadingLog(false); }
   };
 

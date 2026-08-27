@@ -56,7 +56,7 @@ function Arrow({ online }) {
   );
 }
 
-export default function DataPipeline({ source, latency, bytesUsed }) {
+export default function DataPipeline({ source, latency }) {
   // Item 5 da auditoria: isOnline (true também para pre-collected/checking)
   // não pode decidir se a animação "fluindo pelo hardware" e o rótulo de
   // fonte são mostrados -- QuantumVisualizer agora pode passar `source`

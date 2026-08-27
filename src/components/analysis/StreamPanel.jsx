@@ -227,6 +227,11 @@ export default function StreamPanel() {
     return () => { if (rafRef.current) cancelAnimationFrame(rafRef.current); };
   }, [streaming, vizMode]);
 
+  // Leitura de relogio de parede para o cronometro "tempo de stream" (valor
+  // puramente informativo). Um tick de estado dedicado so para isto
+  // adicionaria re-render por segundo a um painel que ja re-renderiza com os
+  // dados do stream -- pior. eslint-disable pontual e justificado.
+  // eslint-disable-next-line react-hooks/purity
   const elapsed = stats.startTime ? Math.round((Date.now() - stats.startTime) / 1000) : 0;
 
   return (

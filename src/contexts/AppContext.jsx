@@ -19,7 +19,7 @@ function loadSource() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
     if (saved && ["remote", "pre-collected", "fpga"].includes(saved)) return saved;
-  } catch {}
+  } catch { /* localStorage indisponivel (modo privado etc.) -- usa o default */ }
   return "remote";
 }
 
@@ -187,7 +187,7 @@ export function AppProvider({ children }) {
 
   const setQrngSource = useCallback((src) => {
     setQrngSourceRaw(src);
-    try { localStorage.setItem(STORAGE_KEY, src); } catch {}
+    try { localStorage.setItem(STORAGE_KEY, src); } catch { /* persistencia best-effort */ }
   }, []);
 
   const health        = qrngSource === "remote" ? remoteHealth        : qrngSource === "fpga" ? fpgaHealth        : null;
@@ -202,6 +202,11 @@ export function AppProvider({ children }) {
   const apiReachable           = qrngSource === "remote" ? remoteApiReachable           : qrngSource === "fpga" ? fpgaApiReachable           : false;
   const lastBlockReceivedAt    = qrngSource === "remote" ? remoteLastBlockReceivedAt    : qrngSource === "fpga" ? fpgaLastBlockReceivedAt    : null;
   const inputRateBytesPerSecond = qrngSource === "remote" ? remoteInputRate              : qrngSource === "fpga" ? fpgaInputRate              : null;
+  // Leitura de relogio de parede para exibir "ha quanto tempo veio o ultimo
+  // bloco". A alternativa (um tick de estado no provider) forcaria re-render
+  // periodico de TODOS os consumidores do contexto -- pior que ler a hora aqui
+  // para um valor puramente informativo. eslint-disable pontual, justificado.
+  // eslint-disable-next-line react-hooks/purity
   const lastBlockAgeSeconds = lastBlockReceivedAt !== null ? (Date.now() - lastBlockReceivedAt) / 1000 : null;
   // freshDataAvailable: o payload de /health reportou buffer com bytes
   // disponíveis agora -- distinto de apiReachable (o processo respondeu,

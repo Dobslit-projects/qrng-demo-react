@@ -45,7 +45,7 @@ function generatePrngBytes(count, seedRef) {
 }
 
 export default function QuantumVisualizer() {
-  const { isOnline, latency, qrngSource: globalSource } = useContext(AppContext);
+  const { latency, qrngSource: globalSource } = useContext(AppContext);
   const [mode, setMode] = useState("galaxy");
   const [qrngSourceLabel, setQrngSourceLabel] = useState("...");
   const [bytesUsed, setBytesUsed] = useState(0);

@@ -43,7 +43,7 @@ function StatusDot({ online, degraded }) {
   );
 }
 
-function SourceCard({ source, isActive, health, latency, onSelect, onTest }) {
+function SourceCard({ source, isActive, health, latency, onSelect }) {
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
 

@@ -12,7 +12,7 @@ import StreamPanel from "./StreamPanel";
 const mono = "'IBM Plex Mono', monospace";
 
 export default function AnalysisSection() {
-  const { qrngSource, setQrngSource, setLatency } = useContext(AppContext);
+  const { qrngSource, setLatency } = useContext(AppContext);
 
   const [inputSeed, setInputSeed] = useState("42");
   const [seed, setSeed] = useState(42);

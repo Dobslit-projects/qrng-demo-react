@@ -1,8 +1,8 @@
-import { useState, useContext, useRef, useEffect, useCallback } from "react";
+import { useState, useContext, useRef, useEffect } from "react";
 import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
 import {
-  fetchQrngBytes, bytesToHex, bytesToUint32Array,
+  fetchQrngBytes, bytesToUint32Array,
   uint32ToFloat, uniformIntFromBytes, errorMessage,
 } from "../../lib/qrngHelper";
 import Btn from "../ui/Btn";
@@ -99,7 +99,7 @@ const keyTags = {
   256: ["High-Entropy Pool"], 512: ["Multi-Key Derivation"], 1024: ["Bulk Entropy"],
 };
 
-function KeyCard({ onGoLogin, source }) {
+function KeyCard({ source }) {
   const [size, setSize] = useState(32);
   const [hex, setHex] = useState("");
   const [meta, setMeta] = useState(null);
@@ -190,7 +190,7 @@ function KeyCard({ onGoLogin, source }) {
 
 /* ── Card 2: Seed para IA ─────────────────────────────────────────────────── */
 
-function AISeedCard({ onGoLogin, source }) {
+function AISeedCard({ source }) {
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -218,8 +218,6 @@ function AISeedCard({ onGoLogin, source }) {
       setErr(errorMessage(e));
     } finally { setBusy(false); }
   };
-
-  const copy = async (text) => { await navigator.clipboard.writeText(text); };
 
   return (
     <div style={card}>
@@ -272,7 +270,7 @@ function AISeedCard({ onGoLogin, source }) {
 
 /* ── Card 3: Monte Carlo π ────────────────────────────────────────────────── */
 
-function MonteCarloCard({ onGoLogin, source }) {
+function MonteCarloCard({ source }) {
   const canvasRef = useRef(null);
   const [nPoints, setNPoints] = useState(1000);
   const [result, setResult] = useState(null);
@@ -375,7 +373,7 @@ function MonteCarloCard({ onGoLogin, source }) {
 
 /* ── Card 4: Sorteio Auditável ────────────────────────────────────────────── */
 
-function RaffleCard({ onGoLogin, source }) {
+function RaffleCard({ source }) {
   const [names, setNames] = useState("");
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
@@ -463,7 +461,7 @@ function RaffleCard({ onGoLogin, source }) {
 
 /* ── Card 5: Jogos ────────────────────────────────────────────────────────── */
 
-function GamesCard({ onGoLogin, source }) {
+function GamesCard({ source }) {
   const [coin, setCoin] = useState(null);
   const [dice, setDice] = useState(null);
   const [coinMeta, setCoinMeta] = useState(null);
@@ -541,7 +539,7 @@ function GamesCard({ onGoLogin, source }) {
 
 /* ── Card 6: Random Walk ──────────────────────────────────────────────────── */
 
-function RandomWalkCard({ onGoLogin, source }) {
+function RandomWalkCard({ source }) {
   const canvasRef = useRef(null);
   const [steps, setSteps] = useState(256);
   const [result, setResult] = useState(null);
@@ -654,7 +652,7 @@ function RandomWalkCard({ onGoLogin, source }) {
 
 /* ── Card 7: Otimização ───────────────────────────────────────────────────── */
 
-function OptimCard({ onGoLogin, source }) {
+function OptimCard({ source }) {
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -729,8 +727,7 @@ function OptimCard({ onGoLogin, source }) {
 /* ── Main Section ─────────────────────────────────────────────────────────── */
 
 export default function ApplicationsSection() {
-  const { setActivePage, qrngSource } = useContext(AppContext);
-  const goLogin = useCallback(() => setActivePage("developer"), [setActivePage]);
+  const { qrngSource } = useContext(AppContext);
   const source = qrngSource;
 
   return (
@@ -752,13 +749,13 @@ export default function ApplicationsSection() {
           </div>
         </div>
 
-        <KeyCard onGoLogin={goLogin} source={source} />
-        <AISeedCard onGoLogin={goLogin} source={source} />
-        <MonteCarloCard onGoLogin={goLogin} source={source} />
-        <RaffleCard onGoLogin={goLogin} source={source} />
-        <GamesCard onGoLogin={goLogin} source={source} />
-        <RandomWalkCard onGoLogin={goLogin} source={source} />
-        <OptimCard onGoLogin={goLogin} source={source} />
+        <KeyCard source={source} />
+        <AISeedCard source={source} />
+        <MonteCarloCard source={source} />
+        <RaffleCard source={source} />
+        <GamesCard source={source} />
+        <RandomWalkCard source={source} />
+        <OptimCard source={source} />
       </div>
     </div>
   );

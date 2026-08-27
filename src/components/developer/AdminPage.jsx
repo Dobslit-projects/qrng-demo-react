@@ -153,6 +153,10 @@ export default function AdminPage() {
     if (ur.ok) setUsers(ur.data.users);
   }, []);
 
+  // Carga inicial dos dados de admin (fetch-on-mount). loadData e um
+  // useCallback estavel ([] deps); o setState so ocorre apos o await, nao
+  // sincronamente -- a regra e conservadora demais para este padrao canonico.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { loadData(); }, [loadData]);
 
   return (
