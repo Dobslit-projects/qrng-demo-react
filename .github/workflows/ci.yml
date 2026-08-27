@@ -101,3 +101,35 @@ jobs:
 
       - name: Testes RCT/APT + maquina de estados de saude (modulo isolado)
         run: python3 -m unittest -v test_qrng_health_tests
+
+  e2e-staging:
+    name: E2E Playwright (staging determinístico)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Subir staging reproduzível (upstream = fixture replay)
+        run: |
+          docker compose -p kapua-staging -f staging/docker-compose.staging.yml up -d --build
+          for i in $(seq 1 40); do
+            curl -fsS http://127.0.0.1:18080/qrng/v1/health/self && break || sleep 3
+          done
+          curl -fsS http://127.0.0.1:18080/qrng/v1/health/self
+
+      - name: Playwright (e2e/staging) — etapa BLOQUEANTE
+        run: |
+          docker run --rm --network kapua-staging \
+            -v "$PWD":/work -w /work \
+            -e E2E_BASE_URL=http://web:80 \
+            -e FIXTURE_CTL_URL=http://fixture-upstream:18091 \
+            -e E2E_STAGING_ONLY=1 -e CI=1 \
+            mcr.microsoft.com/playwright:v1.62.1-noble \
+            bash -lc "npm ci --no-audit --no-fund && npx playwright test --reporter=list"
+
+      - name: Logs do staging em caso de falha
+        if: failure()
+        run: docker compose -p kapua-staging -f staging/docker-compose.staging.yml logs --tail=120
+
+      - name: Derrubar staging
+        if: always()
+        run: docker compose -p kapua-staging -f staging/docker-compose.staging.yml down -v

@@ -26,7 +26,12 @@ const app = express();
 // deste deploy) -- um cliente externo nao consegue falsificar o cabecalho
 // para pular essa checagem, porque a conexao dele nunca chega direto do
 // loopback.
-app.set("trust proxy", "loopback");
+//
+// Configuravel via TRUST_PROXY (item da fase de staging). DEFAULT "loopback"
+// -- produção INALTERADA (nginx no mesmo host, network_mode host). Um staging
+// em rede bridge (nginx em outro container) precisa confiar tambem na subnet
+// privada do bridge: TRUST_PROXY="loopback, uniquelocal".
+app.set("trust proxy", process.env.TRUST_PROXY || "loopback");
 
 // ── Limite explícito do corpo da requisição (item 3 da estabilização) ─────────
 //

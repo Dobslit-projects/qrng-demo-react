@@ -40,6 +40,7 @@ services:
       QRNG_SOURCE_LABEL: "staging-fixture-replay"
       QRNG_PROVENANCE: "replay"
       BIND_ADDR: "0.0.0.0"
+      TRUST_PROXY: "loopback, uniquelocal"
       JWT_SECRET: "staging-only-not-a-secret-e2e"
       ADMIN_EMAIL: "admin@staging.invalid"
       DB_PATH: "/data/staging.db"
@@ -65,6 +66,7 @@ services:
     depends_on: [qrng-client-api, fixture-upstream]
     ports:
       - "127.0.0.1:${STAGING_WEB_PORT:-18080}:80"
+      - "${STAGING_WEB_EXT:-127.0.0.1}:${STAGING_WEB_EXT_PORT:-18081}:80"
     networks: [kapua-staging]
 
 networks:
