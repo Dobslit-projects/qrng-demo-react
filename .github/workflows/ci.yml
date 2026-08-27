@@ -102,6 +102,14 @@ jobs:
       - name: Testes RCT/APT + maquina de estados de saude (modulo isolado)
         run: python3 -m unittest -v test_qrng_health_tests
 
+      - name: Harness de instrumentacao do pipeline fisico (item 7 - so fixture/replay)
+        working-directory: physical-layer/instrumentation
+        run: python3 -m unittest -v test_harness
+
+      - name: Harness da restart campaign (item 9 - so piloto fixture, nunca mil)
+        working-directory: physical-layer/restart-campaign
+        run: python3 -m unittest -v test_harness
+
   e2e-staging:
     name: E2E Playwright (staging determinístico)
     runs-on: ubuntu-latest
