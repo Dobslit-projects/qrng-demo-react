@@ -40,7 +40,7 @@ services:
       QRNG_SOURCE_LABEL: "staging-fixture-replay"
       QRNG_PROVENANCE: "replay"
       BIND_ADDR: "0.0.0.0"
-      TRUST_PROXY: "loopback, uniquelocal"
+      TRUST_PROXY: "2"  # 2 saltos no staging bridge: docker-proxy(gateway) + web nginx. (prod usa "loopback": nginx no mesmo host)
       JWT_SECRET: "staging-only-not-a-secret-e2e"
       ADMIN_EMAIL: "admin@staging.invalid"
       DB_PATH: "/data/staging.db"
