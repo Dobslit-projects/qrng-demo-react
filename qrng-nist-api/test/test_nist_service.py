@@ -7,7 +7,7 @@ Faz stub de fastapi/uvicorn para poder importar nist_service.py sem as
 dependências pesadas -- o módulo só usa decorators/classes triviais delas
 a nível de import.
 """
-import sys, os, types, tempfile, shutil, time, unittest, sqlite3
+import sys, os, types, tempfile, shutil, time, unittest, sqlite3, asyncio, hashlib
 from datetime import datetime, timezone, timedelta
 
 # ---- stub mínimo de fastapi/uvicorn ----
@@ -16,6 +16,9 @@ fastapi_stub = types.ModuleType("fastapi")
 class _DummyApp:
     def __init__(self, *a, **k): pass
     def add_middleware(self, *a, **k): pass
+    def middleware(self, *a, **k):
+        def deco(fn): return fn
+        return deco
     def get(self, *a, **k):
         def deco(fn): return fn
         return deco
@@ -263,6 +266,115 @@ class TestPeriodicSchedulerDisabledByDefault(unittest.TestCase):
         finally:
             ns._schedule_periodic = orig_schedule
         self.assertEqual(ns._job_q.qsize(), before)
+
+
+class _FakeUpload:
+    """UploadFile-like: só o .read(n) assíncrono, servindo bytes em blocos."""
+    def __init__(self, data: bytes):
+        self._buf = memoryview(data)
+        self._pos = 0
+    async def read(self, n=-1):
+        if n is None or n < 0:
+            n = len(self._buf) - self._pos
+        chunk = bytes(self._buf[self._pos:self._pos + n])
+        self._pos += len(chunk)
+        return chunk
+
+
+class TestUploadPolicyStreaming(unittest.TestCase):
+    """Item 5: streaming para temporário, limite 128 MiB, SHA-256 no caminho,
+    validação de conteúdo, limpeza segura. O corpo nunca é lido inteiro em
+    memória (o handler chama _stream_upload_to_file em blocos)."""
+
+    def setUp(self):
+        self.dir = tempfile.mkdtemp(prefix="upl_")
+        self._orig_max = ns.NIST_UPLOAD_MAX_BYTES
+        self._orig_chunk = ns.NIST_UPLOAD_CHUNK
+
+    def tearDown(self):
+        ns.NIST_UPLOAD_MAX_BYTES = self._orig_max
+        ns.NIST_UPLOAD_CHUNK = self._orig_chunk
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _stream(self, data):
+        dst = os.path.join(self.dir, "out.part")
+        return dst, asyncio.run(ns._stream_upload_to_file(_FakeUpload(data), dst))
+
+    def test_streaming_grava_tudo_e_hash_confere(self):
+        ns.NIST_UPLOAD_CHUNK = 7  # blocos minúsculos: prova que é em pedaços
+        data = os.urandom(1000)
+        dst, (total, sha, exceeded) = self._stream(data)
+        self.assertFalse(exceeded)
+        self.assertEqual(total, 1000)
+        self.assertEqual(sha, hashlib.sha256(data).hexdigest())
+        with open(dst, "rb") as f:
+            self.assertEqual(f.read(), data)
+
+    def test_limite_excedido_para_cedo_e_nao_retorna_hash(self):
+        ns.NIST_UPLOAD_MAX_BYTES = 512
+        ns.NIST_UPLOAD_CHUNK = 64
+        dst, (total, sha, exceeded) = self._stream(os.urandom(4096))
+        self.assertTrue(exceeded)
+        self.assertIsNone(sha)
+        self.assertGreater(total, 512)          # detectou depois de passar do limite
+        self.assertLessEqual(total, 512 + 64)   # mas parou quase imediatamente (1 bloco)
+
+    def test_validacao_conteudo_bin_aceita_qualquer_byte(self):
+        p = os.path.join(self.dir, "a.bin")
+        with open(p, "wb") as f:
+            f.write(os.urandom(4096))
+        ok, _ = ns._validate_upload_content(p, ".bin")
+        self.assertTrue(ok)
+
+    def test_validacao_conteudo_txt_rejeita_binario_e_vazio(self):
+        p = os.path.join(self.dir, "b.txt")
+        with open(p, "wb") as f:
+            f.write(b"\x00\x01\x02\xff no digits here")
+        ok, why = ns._validate_upload_content(p, ".txt")
+        self.assertFalse(ok)
+        empty = os.path.join(self.dir, "c.txt")
+        open(empty, "wb").close()
+        ok2, _ = ns._validate_upload_content(empty, ".txt")
+        self.assertFalse(ok2)
+
+    def test_validacao_conteudo_txt_aceita_inteiros(self):
+        p = os.path.join(self.dir, "d.txt")
+        with open(p, "w") as f:
+            f.write("123 456 789\n1011\n")
+        ok, _ = ns._validate_upload_content(p, ".txt")
+        self.assertTrue(ok)
+
+    def test_safe_unlink_nunca_levanta(self):
+        ns._safe_unlink(None)
+        ns._safe_unlink(os.path.join(self.dir, "nao-existe.part"))  # sem exceção
+
+    def test_normalization_por_extensao(self):
+        self.assertEqual(ns._normalization_for_ext(".bin"), "raw-passthrough")
+        self.assertEqual(ns._normalization_for_ext(".txt"), "byte-decomposition-le-uint32")
+        self.assertEqual(ns._normalization_for_ext(".csv"), "byte-decomposition-le-uint32")
+        self.assertEqual(ns._normalization_for_ext(".xyz"), "unknown")
+
+    def test_allowed_ext_e_limite_128mib(self):
+        self.assertEqual(ns.NIST_ALLOWED_UPLOAD_EXT, {".bin", ".txt", ".csv"})
+        self.assertEqual(self._orig_max, 128 * 1024 * 1024)
+
+
+class TestServiceIdentity(unittest.TestCase):
+    """Item 5: /health e /nist/status devem expor version/commit/build_date/env
+    para nunca confundir staging com produção."""
+
+    def test_constantes_de_versao_existem(self):
+        for name in ("SERVICE_VERSION", "SERVICE_COMMIT", "SERVICE_BUILD_DATE", "SERVICE_ENV"):
+            self.assertTrue(hasattr(ns, name))
+
+    def test_health_carrega_identidade_e_politica(self):
+        h = ns.health()
+        self.assertEqual(h["version"], ns.SERVICE_VERSION)
+        self.assertIn("commit", h)
+        self.assertEqual(h["upload_policy"]["max_bytes"], ns.NIST_UPLOAD_MAX_BYTES)
+        self.assertFalse(h["upload_policy"]["full_file_in_memory"])
+        self.assertTrue(h["upload_policy"]["streamed_to_temp_file"])
+        self.assertEqual(sorted(h["upload_policy"]["allowed_extensions"]), [".bin", ".csv", ".txt"])
 
 
 if __name__ == "__main__":

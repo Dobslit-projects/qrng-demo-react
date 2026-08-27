@@ -116,13 +116,19 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Subir staging reproduzível (upstream = fixture replay)
+      - name: Subir staging reproduzível (upstream = fixture replay + NIST staging)
         run: |
+          export NIST_SERVICE_COMMIT="${GITHUB_SHA}"
+          export NIST_SERVICE_BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
           docker compose -p kapua-staging -f staging/docker-compose.staging.yml up -d --build
           for i in $(seq 1 40); do
             curl -fsS http://127.0.0.1:18080/qrng/v1/health/self && break || sleep 3
           done
           curl -fsS http://127.0.0.1:18080/qrng/v1/health/self
+          for i in $(seq 1 40); do
+            curl -fsS http://127.0.0.1:18080/qrng/nist/health && break || sleep 3
+          done
+          curl -fsS http://127.0.0.1:18080/qrng/nist/health
 
       - name: Playwright (e2e/staging) — etapa BLOQUEANTE
         run: |

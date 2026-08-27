@@ -58,12 +58,44 @@ services:
       - client-api-data:/data
     networks: [kapua-staging]
 
+  # NIST SP 800-90B — serviço de STAGING (fase item 5).
+  # Versão CONTROLADA de qrng-nist-api/nist_service.py (correções A–H migradas).
+  # Porta 18092 separada; DB / data dir / upload dir isolados (nunca os de
+  # produção :18002 / /home/dobslit/...). Assessment é um script FAKE
+  # determinístico — a suíte SP 800-90B real NÃO está na imagem. /health e
+  # /nist/status expõem version + commit + environment=staging.
+  nist-staging:
+    build:
+      context: ..
+      dockerfile: staging/nist-staging/Dockerfile
+      args:
+        NIST_SERVICE_COMMIT: "${NIST_SERVICE_COMMIT:-unknown}"
+        NIST_SERVICE_BUILD_DATE: "${NIST_SERVICE_BUILD_DATE:-unknown}"
+    image: kapua-staging-nist:local
+    environment:
+      NIST_DB_PATH: "/data/nist-staging.db"
+      NIST_DATA_DIR: "/staging-data"
+      NIST_MIN_BYTES: "256"                 # só staging: amostras pequenas nos testes
+      # default do código é 128 MiB (asserção unitária). Aqui reduzido a 1 MiB
+      # só para o teste "acima do limite" rodar rápido no CI.
+      NIST_UPLOAD_MAX_BYTES: "1048576"
+      NIST_SERVICE_ENV: "staging"
+    volumes:
+      - nist-staging-data:/data
+      - nist-staging-samples:/staging-data
+    networks: [kapua-staging]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:18092/health',timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+
   web:
     build:
       context: ..
       dockerfile: staging/web.Dockerfile
     image: kapua-staging-web:local
-    depends_on: [qrng-client-api, fixture-upstream]
+    depends_on: [qrng-client-api, fixture-upstream, nist-staging]
     ports:
       - "127.0.0.1:${STAGING_WEB_PORT:-18080}:80"
       - "${STAGING_WEB_EXT:-127.0.0.1}:${STAGING_WEB_EXT_PORT:-18081}:80"
@@ -76,3 +108,7 @@ networks:
 volumes:
   client-api-data:
     name: kapua-staging-client-api-data
+  nist-staging-data:
+    name: kapua-staging-nist-data
+  nist-staging-samples:
+    name: kapua-staging-nist-samples

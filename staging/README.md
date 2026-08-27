@@ -22,6 +22,7 @@ build, imagens + IDs (sha256), portas, endpoints, persistência.
 |---|---|---|---|---|
 | `fixture-upstream` | `kapua-staging-fixture-upstream:local` | imita o contrato de `server_api.py` (`/health`, `/random`, `/v1/raw`, `/v1/uint32`, `/stream`) servindo **replay determinístico** (PRNG seed `20260827`, pool 8 MiB). `POST /_ctl/{offline,online,reset}` para dirigir testes. | `kapua-staging` (bridge privada) | interna `:18091` |
 | `qrng-client-api` | `kapua-staging-client-api:local` | build de `qrng-client-api/` (código real). `QRNG_UPSTREAM=http://fixture-upstream:18091`, `QRNG_SOURCE_LABEL=staging-fixture-replay`, `QRNG_PROVENANCE=replay`. Cotas pequenas p/ testes. | `kapua-staging` | interna `:3010` |
+| `nist-staging` | `kapua-staging-nist:local` | versão **controlada** de `qrng-nist-api/nist_service.py` (correções A–H + política de upload do item 5). Assessment é um **script FAKE determinístico** — a suíte SP 800-90B real não está na imagem. DB/data/upload isolados (volumes `kapua-staging-nist-*`). `/health` reporta `environment=staging` + commit. Ver `physical-layer/NIST_STAGING.md`. | `kapua-staging` | interna `:18092` |
 | `web` | `kapua-staging-web:local` | build de produção do frontend (`npm run build`, `base=/qrng`) + nginx com `staging/nginx.staging-e2e.conf` espelhando os caminhos de produção. | `kapua-staging` | **publicada** `127.0.0.1:${STAGING_WEB_PORT:-18080}:80` |
 
 ## Variáveis (não sensíveis)
@@ -45,7 +46,10 @@ GET  /qrng/v1/health             saúde + upstream (token)
 GET  /qrng/api/random             endpoint público anônimo -> /v1/public/random
 GET  /qrng/api/health            -> fixture-upstream /health
 POST /qrng/v1/auth/register|login, /v1/tokens, /v1/random?format=..., /v1/raw ...
-GET  /qrng/nist/*                 503 NIST_STAGING_NOT_UP (serviço NIST de staging: fase seguinte)
+GET  /qrng/nist/health           identidade do serviço NIST staging (version+commit+environment)
+GET  /qrng/nist/status           estado da fila + captura live (não configurada)
+GET  /qrng/nist/jobs[/{id}]      histórico / job individual
+POST /qrng/nist/upload           .bin/.txt/.csv, streaming, limite 1 MiB no staging (128 MiB no código)
 ```
 
 ## Proveniência
@@ -61,7 +65,10 @@ resposta. Valores possíveis do contrato: `live | replay | fixture | historical
 
 SQLite em volume nomeado `kapua-staging-client-api-data` → `/data/staging.db`.
 **Separado do banco de produção** (`/data/qrng-tokens.db` no container de prod).
-`down.sh -v` zera.
+NIST staging: `kapua-staging-nist-data` → `/data/nist-staging.db` e
+`kapua-staging-nist-samples` → `/staging-data` — **separados** do
+`/home/dobslit/qrng-nist-api/nist.db` e `/home/dobslit/qrng_data_nist` de
+produção. `down.sh -v` zera todos.
 
 ## Health checks
 

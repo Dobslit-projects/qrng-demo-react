@@ -3,7 +3,7 @@
 QRNG NIST SP 800-90B Validation Service
 Runs on Recife VM (dobslit@192.168.0.224) at port 8002
 """
-import os, re, uuid, time, hashlib, json, struct, threading, logging, shutil
+import os, re, uuid, time, hashlib, json, struct, threading, logging, shutil, tempfile
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -15,6 +15,15 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from fastapi.middleware.cors import CORSMiddleware
 
+# ── Identidade da versão (item 5 da fase de estabilização) ──────────────────────
+# Injetados no build/deploy. O /health expõe os três para que staging e produção
+# nunca sejam confundidos e para que um teste possa afirmar "estou falando com o
+# commit X". Nunca inferidos — se não forem passados, ficam "unknown".
+SERVICE_VERSION    = os.getenv("NIST_SERVICE_VERSION",    "1.1.0-staging-candidate")
+SERVICE_COMMIT     = os.getenv("NIST_SERVICE_COMMIT",     "unknown")
+SERVICE_BUILD_DATE = os.getenv("NIST_SERVICE_BUILD_DATE", "unknown")
+SERVICE_ENV        = os.getenv("NIST_SERVICE_ENV",        "unknown")  # 'staging' | 'production' | ...
+
 # ── Config ──────────────────────────────────────────────────────────────────────
 
 NIST_ENABLED       = os.getenv("NIST_ENABLED",        "true").lower() == "true"
@@ -24,9 +33,16 @@ NIST_DATA_DIR      = os.getenv("NIST_DATA_DIR",       "/home/dobslit/qrng_data_n
 NIST_INTERVAL_SEC  = int(os.getenv("NIST_TEST_INTERVAL_SECONDS", "300"))
 NIST_TIMEOUT_SEC   = int(os.getenv("NIST_TEST_TIMEOUT_SECONDS",  "1800"))
 NIST_MAX_UPLOAD_MB = int(os.getenv("NIST_MAX_UPLOAD_MB", "200"))
-NIST_MIN_BYTES     = 1_000_000   # >= 1M samples required by NIST SP 800-90B
+NIST_MIN_BYTES     = int(os.getenv("NIST_MIN_BYTES", "1000000"))  # >= 1M samples required by NIST SP 800-90B; overridable only for staging
 NIST_UPLOAD_DIR    = os.path.join(NIST_DATA_DIR, "uploads")
 DB_PATH            = os.getenv("NIST_DB_PATH", "/home/dobslit/qrng-nist-api/nist.db")
+
+# ── Política de upload (item 5) ────────────────────────────────────────────────
+# Limite explícito de 128 MiB, streaming para arquivo temporário (o corpo NUNCA
+# é lido inteiro em memória), extensões restritas, limpeza segura do temporário.
+NIST_UPLOAD_MAX_BYTES = int(os.getenv("NIST_UPLOAD_MAX_BYTES", str(128 * 1024 * 1024)))
+NIST_UPLOAD_CHUNK     = int(os.getenv("NIST_UPLOAD_CHUNK_BYTES", str(1024 * 1024)))
+NIST_ALLOWED_UPLOAD_EXT = {".bin", ".txt", ".csv"}
 
 # Auditoria do pipeline QRNG (2026-08-25, item 2): sem um mecanismo de
 # captura ao vivo CONTROLADA (que grava amostras frescas do stream com
@@ -174,6 +190,52 @@ def _safe_name(name: str) -> str:
     name = os.path.basename(name)
     name = re.sub(r"[^\w\-_.]", "_", name)
     return name[:200] or "upload"
+
+def _safe_unlink(path: Optional[str]) -> None:
+    """Remove um temporário/parcial sem nunca levantar (limpeza best-effort)."""
+    if not path:
+        return
+    try:
+        os.unlink(path)
+    except OSError:
+        pass
+
+def _validate_upload_content(path: str, ext: str) -> tuple:
+    """Validação de conteúdo mínima e barata por extensão. Retorna (ok, motivo).
+    NÃO tenta validar entropia — só que o arquivo é plausivelmente do tipo
+    declarado, para rejeitar cedo lixo óbvio (ex.: HTML/― binário como .txt)."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(4096)
+    except OSError as e:
+        return False, f"não foi possível ler o arquivo salvo: {e}"
+    if not head:
+        return False, "arquivo vazio"
+    if ext == ".bin":
+        return True, "ok"  # qualquer byte é válido em amostra binária crua
+    # .txt / .csv: precisa ser texto decodificável e conter ao menos um dígito
+    try:
+        text = head.decode("utf-8")
+    except UnicodeDecodeError:
+        try:
+            text = head.decode("latin-1")
+        except UnicodeDecodeError:
+            return False, "conteúdo não decodificável como texto"
+    if "\x00" in text:
+        return False, "NUL byte em arquivo de texto"
+    if not any(c.isdigit() for c in text):
+        return False, "nenhum dígito numérico nos primeiros 4096 bytes"
+    return True, "ok"
+
+def _normalization_for_ext(ext: str) -> str:
+    # Confirmado lendo qrng_nist90b.sh (baseline item 5): .bin -> passthrough
+    # (símbolos de 8 bits), .txt/.csv de inteiros uint32 -> cada valor vira 4
+    # bytes little-endian antes da avaliação (ainda símbolos de 8 bits).
+    if ext == ".bin":
+        return "raw-passthrough"
+    if ext in (".txt", ".csv"):
+        return "byte-decomposition-le-uint32"
+    return "unknown"
 
 def _find_latest_data_file() -> Optional[str]:
     # Auditoria do pipeline QRNG (2026-08-25): "audit*" e "characterization_*"
@@ -529,8 +591,29 @@ if NIST_ENABLED:
 
 # ── FastAPI ─────────────────────────────────────────────────────────────────────
 
-app = FastAPI(title="QRNG NIST SP 800-90B Service", version="1.0.0")
+app = FastAPI(title="QRNG NIST SP 800-90B Service", version=SERVICE_VERSION)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
+
+
+@app.middleware("http")
+async def _request_id_and_version(request: Request, call_next):
+    """Todo response carrega X-Request-ID (ecoa o do cliente ou gera um) e a
+    identidade da versão do serviço — para rastrear cada requisição de upload e
+    nunca confundir staging com produção."""
+    rid = request.headers.get("x-request-id") or f"nist_{uuid.uuid4().hex[:16]}"
+    request.state.request_id = rid
+    try:
+        response = await call_next(request)
+    except Exception:
+        resp = JSONResponse(status_code=500, content={"error": "INTERNAL", "request_id": rid})
+        resp.headers["X-Request-ID"] = rid
+        resp.headers["X-NIST-Service-Version"] = SERVICE_VERSION
+        resp.headers["X-NIST-Service-Env"] = SERVICE_ENV
+        return resp
+    response.headers["X-Request-ID"] = rid
+    response.headers["X-NIST-Service-Version"] = SERVICE_VERSION
+    response.headers["X-NIST-Service-Env"] = SERVICE_ENV
+    return response
 
 
 # Confirmado no código-fonte de todo o pipeline físico (auditoria
@@ -600,7 +683,28 @@ def _row(row) -> dict:
 
 @app.get("/health")
 def health():
-    return {"status": "ok", "service": "qrng-nist-api", "enabled": NIST_ENABLED}
+    return {
+        "status": "ok",
+        "service": "qrng-nist-api",
+        "enabled": NIST_ENABLED,
+        "version": SERVICE_VERSION,
+        "commit": SERVICE_COMMIT,
+        "build_date": SERVICE_BUILD_DATE,
+        "environment": SERVICE_ENV,
+        "upload_policy": {
+            "max_bytes": NIST_UPLOAD_MAX_BYTES,
+            "allowed_extensions": sorted(NIST_ALLOWED_UPLOAD_EXT),
+            "streamed_to_temp_file": True,
+            "full_file_in_memory": False,
+        },
+        "paths": {
+            "db_path": DB_PATH,
+            "data_dir": NIST_DATA_DIR,
+            "upload_dir": NIST_UPLOAD_DIR,
+            "suite_dir": NIST_SUITE_DIR,
+            "script": NIST_SCRIPT,
+        },
+    }
 
 @app.get("/nist/status")
 def nist_status():
@@ -608,10 +712,18 @@ def nist_status():
     running = _db_one("SELECT id FROM nist_test_jobs WHERE status IN ('queued','running') LIMIT 1")
     return {
         "enabled":           NIST_ENABLED,
+        "service": {
+            "version":    SERVICE_VERSION,
+            "commit":     SERVICE_COMMIT,
+            "build_date": SERVICE_BUILD_DATE,
+            "environment": SERVICE_ENV,
+        },
         "suite_dir":         NIST_SUITE_DIR,
         "script":            NIST_SCRIPT,
         "data_dir":          NIST_DATA_DIR,
         "interval_seconds":  NIST_INTERVAL_SEC,
+        "upload_max_bytes":  NIST_UPLOAD_MAX_BYTES,
+        "allowed_upload_ext": sorted(NIST_ALLOWED_UPLOAD_EXT),
         "timeout_seconds":   NIST_TIMEOUT_SEC,
         "min_bytes":         NIST_MIN_BYTES,
         "queue_depth":       _job_q.qsize(),
@@ -688,8 +800,30 @@ async def nist_run(
     )
     return {"job_id": job_id, "status": "queued", "file": os.path.basename(file_path)}
 
+async def _stream_upload_to_file(upload: UploadFile, dst_path: str) -> tuple:
+    """Escreve o corpo do upload em `dst_path` em blocos de NIST_UPLOAD_CHUNK,
+    calculando SHA-256 no caminho. NUNCA materializa o arquivo inteiro em
+    memória. Para assim que ultrapassa NIST_UPLOAD_MAX_BYTES.
+    Retorna (bytes_gravados, sha256_hex_ou_None, excedeu_limite: bool)."""
+    h = hashlib.sha256()
+    total = 0
+    exceeded = False
+    with open(dst_path, "wb") as out:
+        while True:
+            chunk = await upload.read(NIST_UPLOAD_CHUNK)
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > NIST_UPLOAD_MAX_BYTES:
+                exceeded = True
+                break
+            h.update(chunk)
+            out.write(chunk)
+    return total, (None if exceeded else h.hexdigest()), exceeded
+
 @app.post("/nist/upload")
 async def nist_upload(
+    request:   Request,
     file:      UploadFile = File(...),
     test_type: str        = Form("both"),
     format:    str        = Form("auto"),
@@ -703,29 +837,69 @@ async def nist_upload(
     attested_captured_at:      Optional[str] = Form(None),
     attested_conditioned:      Optional[bool] = Form(None),
 ):
+    rid = getattr(request.state, "request_id", None) or f"nist_{uuid.uuid4().hex[:16]}"
+
+    def _err(status, code, **extra):
+        return JSONResponse(status_code=status,
+                            content={"error": code, "request_id": rid, **extra})
+
     if not NIST_ENABLED:
-        raise HTTPException(503, "NIST desabilitado")
+        return _err(503, "NIST_DISABLED")
 
     orig = file.filename or "upload"
     ext  = Path(orig).suffix.lower()
-    if ext not in [".bin", ".txt", ".csv"]:
-        raise HTTPException(400, f"Extensão não suportada: {ext}. Use .bin, .txt ou .csv")
+    if ext not in NIST_ALLOWED_UPLOAD_EXT:
+        return _err(400, "UNSUPPORTED_EXTENSION",
+                    extension=ext or "(nenhuma)",
+                    allowed=sorted(NIST_ALLOWED_UPLOAD_EXT))
 
-    content = await file.read()
-    if len(content) > NIST_MAX_UPLOAD_MB * 1024 * 1024:
-        raise HTTPException(413, f"Arquivo muito grande. Máximo: {NIST_MAX_UPLOAD_MB} MB")
+    if attested_transport_format and attested_transport_format not in ("uint32-le",):
+        return _err(400, "INVALID_ATTESTED_TRANSPORT_FORMAT",
+                    detail="use 'uint32-le' ou omita")
 
     job_id  = str(uuid.uuid4())
     today   = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     job_dir = os.path.join(NIST_UPLOAD_DIR, today, f"job_{job_id[:8]}")
     Path(job_dir).mkdir(parents=True, exist_ok=True)
+    safe_name = _safe_name(orig)
 
-    safe_name  = _safe_name(orig)
+    # streaming para um .part temporário; só vira o arquivo final se passar tudo
+    tmp_fd, tmp_path = tempfile.mkstemp(dir=job_dir, prefix="upload_", suffix=".part")
+    os.close(tmp_fd)
+    try:
+        total, sha_original, exceeded = await _stream_upload_to_file(file, tmp_path)
+    except Exception as e:  # noqa: BLE001
+        _safe_unlink(tmp_path)
+        log.error(f"[upload {rid}] erro de IO: {e}")
+        return _err(500, "UPLOAD_IO_ERROR", detail=str(e)[:200])
+
+    if exceeded:
+        _safe_unlink(tmp_path)
+        return _err(413, "UPLOAD_TOO_LARGE",
+                    limit_bytes=NIST_UPLOAD_MAX_BYTES,
+                    received_at_least_bytes=total)
+    if total == 0:
+        _safe_unlink(tmp_path)
+        return _err(400, "EMPTY_FILE")
+
+    ok, why = _validate_upload_content(tmp_path, ext)
+    if not ok:
+        _safe_unlink(tmp_path)
+        return _err(400, "INVALID_CONTENT", detail=why)
+
     saved_path = os.path.join(job_dir, safe_name)
-    with open(saved_path, "wb") as f: f.write(content)
+    try:
+        os.replace(tmp_path, saved_path)
+    except OSError as e:
+        _safe_unlink(tmp_path)
+        return _err(500, "UPLOAD_PERSIST_ERROR", detail=str(e)[:200])
 
-    if attested_transport_format and attested_transport_format not in ("uint32-le",):
-        raise HTTPException(400, "attested_transport_format inválido -- use 'uint32-le' ou omita.")
+    normalization = _normalization_for_ext(ext)
+    # tamanho "normalizado": só o .csv muda de tamanho (re-serializado como
+    # inteiros um-por-linha) e isso ocorre dentro de _run_job; aqui reportamos
+    # o tamanho original como normalizado para .bin/.txt e "desconhecido até o
+    # job" para .csv (nunca reprocessamos o arquivo inteiro no handler).
+    size_normalized = total if ext in (".bin", ".txt") else None
 
     _create_and_enqueue(
         "upload", saved_path, orig, test_type, format,
@@ -733,17 +907,34 @@ async def nist_upload(
         transport_format=attested_transport_format,
         source_word_width=4 if attested_transport_format == "uint32-le" else None,
         sample_conditioned=attested_conditioned,
-        captured_at=attested_captured_at,  # None -> cai no mtime do arquivo salvo (momento do upload)
-        job_id=job_id,  # mesmo id já usado no caminho do arquivo acima
+        captured_at=attested_captured_at,
+        job_id=job_id,
     )
 
     return {
-        "job_id":            job_id,
-        "status":            "queued",
-        "original_filename": orig,
-        "size_bytes":        len(content),
+        "job_id":                 job_id,
+        "request_id":             rid,
+        "status":                 "queued",
+        "provenance":             "user_upload",
+        "attested":               bool(attested_transport_format),
+        "original_filename":      orig,
+        "stored_filename":        safe_name,
+        "sha256_original":        sha_original,
+        "size_original_bytes":    total,
+        "size_normalized_bytes":  size_normalized,
+        "assessment_unit":        "byte",
+        "assessment_symbol_width_bits": 8,
+        "sample_endianness":      "little" if attested_transport_format == "uint32-le" else "unknown",
+        "sample_conditioned":     attested_conditioned,
+        "normalization_method":   normalization,
+        "upload_max_bytes":       NIST_UPLOAD_MAX_BYTES,
     }
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="127.0.0.1", port=8002, log_level="info")
+    uvicorn.run(
+        app,
+        host=os.getenv("NIST_BIND_ADDR", "127.0.0.1"),
+        port=int(os.getenv("NIST_PORT", os.getenv("PORT", "8002"))),
+        log_level="info",
+    )
