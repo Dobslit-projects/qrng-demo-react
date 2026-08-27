@@ -25,6 +25,12 @@ jobs:
       - name: Instalar dependências
         run: npm ci
 
+      - name: Lint (ESLint, ambiente Node da API)
+        run: npm run lint
+
+      - name: Lint é um gate efetivo (reprova erro real, aprova arquivo limpo)
+        run: node ../scripts/lint-gate.mjs .
+
       - name: Testes (unitários + integração + contrato OpenAPI)
         run: npm test
 
@@ -52,8 +58,11 @@ jobs:
       - name: Instalar dependências
         run: npm ci
 
-      - name: Lint
+      - name: Lint (ESLint — frontend + load-tests k6 + configs/e2e)
         run: npm run lint
+
+      - name: Lint é um gate efetivo (reprova erro real, aprova arquivo limpo)
+        run: node scripts/lint-gate.mjs src
 
       - name: Testes
         run: npm test

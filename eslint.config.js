@@ -5,16 +5,14 @@ import reactRefresh from 'eslint-plugin-react-refresh'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  // Fora do escopo deste lint (frontend Vite/React):
+  // Fora do escopo DESTE lint (frontend Vite/React):
   //  - dist/            : build output
-  //  - qrng-client-api/ : pacote Node/Express separado, com seu proprio gate
-  //                       (`node --test` + verificacao de drift do OpenAPI).
-  //                       Linta-lo com um flat config browser-only gerava ~120
-  //                       falsos `no-undef` (require/module/process/Buffer/
-  //                       describe...). Se ganhar lint proprio, sera aqui.
-  //  - load-tests/      : scripts k6, executados pelo binario `k6` com globais
-  //                       proprias (__ENV, http de "k6/http").
-  globalIgnores(['dist', 'qrng-client-api/**', 'load-tests/**']),
+  //  - qrng-client-api/ : pacote Node/Express separado, com eslint.config.js e
+  //                       `npm run lint` PROPRIOS (job "qrng-client-api" do CI).
+  //                       Nao e "ignorar silenciosamente": e lintado la, com
+  //                       ambiente/regras de Node. Um flat config browser-only
+  //                       aqui gerava ~120 falsos `no-undef`.
+  globalIgnores(['dist', 'qrng-client-api/**']),
 
   // Frontend React (browser).
   {
@@ -50,7 +48,7 @@ export default defineConfig([
 
   // Arquivos de configuracao e specs Playwright: rodam em Node, nao no browser.
   {
-    files: ['*.{js,mjs}', 'e2e/**/*.{js,mjs}'],
+    files: ['*.{js,mjs}', 'e2e/**/*.{js,mjs}', 'scripts/**/*.{js,mjs}'],
     extends: [js.configs.recommended],
     languageOptions: {
       ecmaVersion: 'latest',
@@ -58,7 +56,31 @@ export default defineConfig([
       globals: { ...globals.node },
     },
     rules: {
-      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^_' }],
+    },
+  },
+
+  // load-tests/: scripts k6. Rodam pelo binario `k6` (nao Node), com globais
+  // proprias (__ENV, __VU, __ITER, open) e modulos "k6/*". Lintados aqui --
+  // codigo ativo, nao ignorado -- so com o ambiente certo. (Se um dia houver
+  // um runner k6 no CI, pode virar job separado; hoje o gate e o lint.)
+  {
+    files: ['load-tests/**/*.{js,mjs}'],
+    extends: [js.configs.recommended],
+    languageOptions: {
+      ecmaVersion: 'latest',
+      sourceType: 'module',
+      globals: {
+        ...globals.es2021,
+        console: 'readonly',
+        __ENV: 'readonly',
+        __VU: 'readonly',
+        __ITER: 'readonly',
+        open: 'readonly',
+      },
+    },
+    rules: {
+      'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]', argsIgnorePattern: '^_' }],
     },
   },
 ])

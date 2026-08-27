@@ -39,9 +39,10 @@ export const options = {
     { duration: "30s",  target: 0   },
   ],
   thresholds: {
-    // http_req_failed exclui: k6 conta 429 como falha, mas 429 é rate-limit correto
-    "req_duration_ok":   ["p(95)<3000"],  // p95 < 3s nas respostas OK
-    "req_duration_ok":   ["p(99)<8000"],  // p99 < 8s
+    // http_req_failed exclui: k6 conta 429 como falha, mas 429 é rate-limit correto.
+    // As duas condições têm de ficar no MESMO array -- a chave repetida fazia o
+    // p95<3s ser silenciosamente descartado (só o p99<8s valia). Achado pelo lint.
+    "req_duration_ok":   ["p(95)<3000", "p(99)<8000"],
     "api_ok_rate":       ["rate>0.98"],   // 200 + 429 ≥ 98% das respostas
     "server_error_rate": ["rate<0.005"],  // 500/502 < 0,5%
   },
