@@ -83,6 +83,21 @@ components:
         source:
           type: string
           example: dobslit-qrng-ufpe-fpga
+          description: Rótulo da fonte (env QRNG_SOURCE_LABEL).
+        provenance:
+          type: string
+          enum:
+            - live
+            - replay
+            - fixture
+            - historical
+            - fallback
+            - unknown
+          example: live
+          description: >-
+            Proveniência dos bytes. 'live' = fonte física em tempo real (produção). Um ambiente de
+            staging que sirva fixtures/replay reporta 'replay'/'fixture' — nunca 'live'. Também no
+            header X-QRNG-Provenance quando format=raw.
         bytes:
           type: integer
           example: 32
@@ -112,6 +127,7 @@ components:
       required:
         - request_id
         - source
+        - provenance
         - bytes
         - format
         - random

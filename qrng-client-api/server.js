@@ -72,6 +72,15 @@ const QRNG_TIMEOUT_MS          = parseInt(process.env.QRNG_REQUEST_TIMEOUT_MS ||
 // Número de falhas consecutivas do poller para marcar upstream como DOWN
 const UPSTREAM_FAIL_THRESHOLD  = parseInt(process.env.UPSTREAM_FAIL_THRESHOLD || "2", 10);
 
+// Rótulo e proveniência da fonte, dirigidos por env (item 2 da fase de
+// staging). Os DEFAULTS reproduzem exatamente o comportamento anterior de
+// produção -- nenhuma implantação existente muda. Um staging que sirva
+// fixtures/replay DEVE sobrescrever QRNG_PROVENANCE (nunca "live" quando os
+// bytes não vêm da fonte física em tempo real) e QRNG_SOURCE_LABEL.
+const QRNG_SOURCE_LABEL = process.env.QRNG_SOURCE_LABEL || "dobslit-qrng-ufpe-fpga";
+const QRNG_PROVENANCE   = (process.env.QRNG_PROVENANCE || "live").toLowerCase();
+// valores esperados: live | replay | fixture | historical | fallback | unknown
+
 // ── Agente HTTP sem keep-alive para upstream ──────────────────────────────────
 // Evita ECONNRESET em sockets reaproveitados quando o SSH tunnel reinicia.
 // Cada request cria uma nova conexão TCP — overhead mínimo para esta carga.
@@ -1027,7 +1036,7 @@ app.get("/v1/health", attachRequestId, requireToken, checkTokenRate, async (req,
     const r    = await fetchWithTimeout(`${QRNG_UPSTREAM}/health`, QRNG_TIMEOUT_MS);
     const data = await r.json();
     logRequest(requestId, req.tokenRow.id, "/v1/health", 0, null, 200, ip, ua, Date.now() - t0);
-    res.json({ request_id: requestId, status: "ok", api: "dobslit-qrng-client-api", source: "ufpe-fpga", upstream: data });
+    res.json({ request_id: requestId, status: "ok", api: "dobslit-qrng-client-api", source: QRNG_SOURCE_LABEL, provenance: QRNG_PROVENANCE, upstream: data });
   } catch {
     logRequest(requestId, req.tokenRow.id, "/v1/health", 0, null, 503, ip, ua, Date.now() - t0);
     res.status(503).json({ request_id: requestId, status: "error", message: "QRNG upstream unavailable" });
@@ -1301,7 +1310,8 @@ async function randomHandler(req, res) {
       res.setHeader("Content-Length", buf.length);
       res.setHeader("Cache-Control", "no-store");
       res.setHeader("X-Request-Id", requestId);
-      res.setHeader("X-QRNG-Source", "dobslit-qrng-ufpe-fpga");
+      res.setHeader("X-QRNG-Source", QRNG_SOURCE_LABEL);
+      res.setHeader("X-QRNG-Provenance", QRNG_PROVENANCE);
       res.setHeader("X-QRNG-Conditioned", "false");
       return res.end(buf); // res.end (não res.send): zero transformação do Buffer
     }
@@ -1310,7 +1320,7 @@ async function randomHandler(req, res) {
                  : format === "base64" ? buf.toString("base64")
                  : Array.from(buf);
 
-    res.json({ request_id: requestId, source: "dobslit-qrng-ufpe-fpga", bytes, format, random, timestamp: new Date().toISOString() });
+    res.json({ request_id: requestId, source: QRNG_SOURCE_LABEL, provenance: QRNG_PROVENANCE, bytes, format, random, timestamp: new Date().toISOString() });
 
   } catch (err) {
     logRequest(requestId, req.tokenRow.id, "/v1/random", bytes, format, 503, ip, ua, Date.now() - t0);
@@ -1611,7 +1621,8 @@ async function publicRandomHandler(req, res) {
       res.status(200);
       res.setHeader("Content-Type", "application/octet-stream");
       res.setHeader("Content-Length", buf.length);
-      res.setHeader("X-QRNG-Source", "dobslit-qrng-ufpe-fpga");
+      res.setHeader("X-QRNG-Source", QRNG_SOURCE_LABEL);
+      res.setHeader("X-QRNG-Provenance", QRNG_PROVENANCE);
       res.setHeader("X-QRNG-Conditioned", "false");
       return res.end(buf); // corpo = EXATAMENTE N bytes, sem JSON/BOM/prefixo
     }
@@ -1620,7 +1631,7 @@ async function publicRandomHandler(req, res) {
                  : format === "base64" ? buf.toString("base64")
                  : Array.from(buf);
 
-    res.json({ request_id: requestId, source: "dobslit-qrng-ufpe-fpga", bytes, format, random, timestamp: new Date().toISOString() });
+    res.json({ request_id: requestId, source: QRNG_SOURCE_LABEL, provenance: QRNG_PROVENANCE, bytes, format, random, timestamp: new Date().toISOString() });
 
   } catch (err) {
     logRequest(requestId, null, "/v1/public/random", bytes, format, 503, ip, ua, Date.now() - t0);

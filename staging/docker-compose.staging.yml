@@ -1,0 +1,75 @@
+# STAGING E2E reproduzivel do Kapua QRNG (fase item 2).
+#
+# Isolado: rede bridge privada `kapua-staging`, so a porta do web e publicada.
+# NAO consome a conexao exclusiva da fonte de producao -- o upstream e o
+# `fixture-upstream` (replay deterministico, seed fixa). Toda resposta declara
+# provenance != "live".
+#
+# Subir:   docker compose -p kapua-staging -f staging/docker-compose.staging.yml up -d --build
+# Derrubar: docker compose -p kapua-staging -f staging/docker-compose.staging.yml down -v
+# (rodar da RAIZ do repositorio -- o build do web precisa do contexto inteiro)
+
+name: kapua-staging
+
+services:
+  fixture-upstream:
+    build:
+      context: ./staging/fixture-upstream
+    image: kapua-staging-fixture-upstream:local
+    environment:
+      FIXTURE_SEED: "20260827"
+      FIXTURE_POOL_BYTES: "8388608"
+      FIXTURE_PROVENANCE: "replay"
+    networks: [kapua-staging]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:18091/health',timeout=3).status==200 else 1)"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  qrng-client-api:
+    build:
+      context: ./qrng-client-api
+    image: kapua-staging-client-api:local
+    depends_on:
+      fixture-upstream:
+        condition: service_healthy
+    environment:
+      PORT: "3010"
+      QRNG_UPSTREAM: "http://fixture-upstream:18091"
+      QRNG_SOURCE_LABEL: "staging-fixture-replay"
+      QRNG_PROVENANCE: "replay"
+      JWT_SECRET: "staging-only-not-a-secret-e2e"
+      ADMIN_EMAIL: "admin@staging.invalid"
+      DB_PATH: "/data/staging.db"
+      MAX_JSON_BODY_BYTES: "8kb"
+      # limites pequenos p/ exercitar rate limit / cota em testes deterministicos
+      RATE_LIMIT_PER_IP_PER_MINUTE: "1000"
+      RATE_LIMIT_PER_TOKEN_PER_MINUTE: "20"
+      DAILY_QUOTA_REQUESTS: "500"
+      PUBLIC_MAX_BYTES_PER_REQUEST: "65536"
+      PUBLIC_RATE_LIMIT_PER_IP_PER_MINUTE: "15"
+      PUBLIC_DAILY_QUOTA_REQUESTS_PER_IP: "300"
+      ALLOW_LEGACY_TEXT_UPSTREAM: "false"
+      METRICS_TOKEN: "staging-metrics"
+    volumes:
+      - client-api-data:/data
+    networks: [kapua-staging]
+
+  web:
+    build:
+      context: .
+      dockerfile: staging/web.Dockerfile
+    image: kapua-staging-web:local
+    depends_on: [qrng-client-api, fixture-upstream]
+    ports:
+      - "127.0.0.1:${STAGING_WEB_PORT:-18080}:80"
+    networks: [kapua-staging]
+
+networks:
+  kapua-staging:
+    name: kapua-staging
+
+volumes:
+  client-api-data:
+    name: kapua-staging-client-api-data

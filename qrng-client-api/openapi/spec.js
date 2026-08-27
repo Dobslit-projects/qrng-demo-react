@@ -102,7 +102,13 @@ const definition = {
           "JSON, sem prefixo, sem BOM) — ou use a rota dedicada GET /raw (e /public/raw).",
         properties: {
           request_id: { type: "string", example: "req_a383397963db4222" },
-          source: { type: "string", example: "dobslit-qrng-ufpe-fpga" },
+          source: { type: "string", example: "dobslit-qrng-ufpe-fpga", description: "Rótulo da fonte (env QRNG_SOURCE_LABEL)." },
+          provenance: {
+            type: "string",
+            enum: ["live", "replay", "fixture", "historical", "fallback", "unknown"],
+            example: "live",
+            description: "Proveniência dos bytes. 'live' = fonte física em tempo real (produção). Um ambiente de staging que sirva fixtures/replay reporta 'replay'/'fixture' — nunca 'live'. Também no header X-QRNG-Provenance quando format=raw.",
+          },
           bytes: { type: "integer", example: 32, description: "Quantidade de bytes gerados." },
           format: { type: "string", enum: ["hex", "base64", "uint8"], example: "hex" },
           random: {
@@ -114,7 +120,7 @@ const definition = {
           },
           timestamp: { type: "string", format: "date-time" },
         },
-        required: ["request_id", "source", "bytes", "format", "random", "timestamp"],
+        required: ["request_id", "source", "provenance", "bytes", "format", "random", "timestamp"],
       },
       AuthResponse: {
         type: "object",
