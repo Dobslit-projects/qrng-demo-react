@@ -56,9 +56,10 @@ components:
     RandomResponse:
       type: object
       description: >-
-        Corpo retornado quando format=hex|base64|uint8. Para format=binary (ou omitido, dependendo
-        da rota — ver cada endpoint), o corpo é application/octet-stream com os bytes brutos, não
-        este JSON.
+        Corpo retornado quando format=hex|base64|uint8 OU quando o parâmetro format é omitido
+        (default=hex). Para format=raw o corpo é application/octet-stream com exatamente os N bytes
+        brutos (sem este JSON, sem prefixo, sem BOM) — ou use a rota dedicada GET /raw (e
+        /public/raw).
       properties:
         request_id:
           type: string

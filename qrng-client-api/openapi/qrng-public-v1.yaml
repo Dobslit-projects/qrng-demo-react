@@ -72,9 +72,10 @@ components:
     RandomResponse:
       type: object
       description: >-
-        Corpo retornado quando format=hex|base64|uint8. Para format=binary (ou omitido, dependendo
-        da rota — ver cada endpoint), o corpo é application/octet-stream com os bytes brutos, não
-        este JSON.
+        Corpo retornado quando format=hex|base64|uint8 OU quando o parâmetro format é omitido
+        (default=hex). Para format=raw o corpo é application/octet-stream com exatamente os N bytes
+        brutos (sem este JSON, sem prefixo, sem BOM) — ou use a rota dedicada GET /raw (e
+        /public/raw).
       properties:
         request_id:
           type: string
@@ -669,13 +670,36 @@ paths:
               - hex
               - base64
               - uint8
+              - raw
           description: >
-            hex (padrão): string hexadecimal de 2N caracteres. base64: string base64 dos N bytes.
-            uint8: array JSON de N inteiros em [0,255]. Sem este parâmetro, o corpo é
-            application/octet-stream com os N bytes brutos.
+            hex (default — inclusive quando o parâmetro é OMITIDO): JSON RandomResponse com `random`
+            = string hexadecimal de 2N caracteres. base64: JSON RandomResponse com `random` = string
+            base64 dos N bytes. uint8: JSON RandomResponse com `random` = array de N inteiros
+            [0,255]. raw: corpo application/octet-stream com EXATAMENTE os N bytes brutos — sem
+            JSON, sem texto, sem prefixo, sem BOM; request_id e proveniência vão nos headers
+            X-Request-Id / X-QRNG-Source / X-QRNG-Conditioned. COMPATIBILIDADE: omitir `format`
+            retorna JSON (hex), NÃO binário — o binário exige `format=raw` explícito, ou a rota
+            dedicada GET /raw.
       responses:
         '200':
-          description: Bytes gerados.
+          description: >
+            Bytes gerados. format=hex|base64|uint8 (ou omitido) → application/json (RandomResponse).
+            format=raw → application/octet-stream com N bytes exatos.
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+              description: Identificador da requisição (também no corpo quando a resposta é JSON).
+            X-QRNG-Source:
+              schema:
+                type: string
+              description: 'Proveniência da fonte (ex.: dobslit-qrng-ufpe-fpga). Presente em format=raw.'
+            X-QRNG-Conditioned:
+              schema:
+                type: string
+                enum:
+                  - 'false'
+              description: Sempre 'false' — bytes não condicionados. Presente em format=raw.
           content:
             application/json:
               schema:
@@ -720,6 +744,79 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         429_quota:
           description: (usa código 429) Cota diária de requisições ou bytes excedida.
+  /raw:
+    get:
+      tags:
+        - Random
+      summary: >-
+        Alias binário explícito de GET /random?format=raw — application/octet-stream com N bytes
+        exatos.
+      description: >
+        Idêntico a GET /random?format=raw. Rota própria para consumidores que só querem os bytes
+        crus sem lidar com o parâmetro format. NUNCA retorna JSON: o corpo são EXATAMENTE os N bytes
+        (Content-Length = N), sem prefixo, texto ou BOM. request_id e proveniência vão nos headers
+        X-Request-Id / X-QRNG-Source / X-QRNG-Conditioned.
+      security:
+        - bearerAuthToken: []
+      parameters:
+        - name: bytes
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 32
+          description: Quantidade de bytes. Limite = MAX_BYTES_PER_REQUEST (padrão 1 MiB).
+      responses:
+        '200':
+          description: N bytes brutos (application/octet-stream, Content-Length = N).
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+              description: Identificador da requisição.
+            X-QRNG-Source:
+              schema:
+                type: string
+              description: Proveniência da fonte.
+            X-QRNG-Conditioned:
+              schema:
+                type: string
+                enum:
+                  - 'false'
+              description: Sempre 'false'.
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '413':
+          description: bytes acima de MAX_BYTES_PER_REQUEST.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: bytes inválido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '502':
+          description: Upstream com erro ou formato inesperado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Upstream indisponível ou entropia insuficiente.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /public/random:
     get:
       tags:
@@ -754,14 +851,41 @@ paths:
               - hex
               - base64
               - uint8
-          description: hex (padrão), base64, ou uint8 (array JSON de inteiros 0-255).
+              - raw
+          description: >
+            hex (default, inclusive quando omitido), base64, uint8 (array JSON de inteiros 0-255) →
+            JSON RandomResponse. raw → application/octet-stream com EXATAMENTE os N bytes brutos
+            (sem JSON/texto/prefixo/BOM); request_id e proveniência nos headers X-Request-Id /
+            X-QRNG-Source / X-QRNG-Conditioned. Omitir `format` retorna JSON (hex), NÃO binário —
+            use `format=raw` ou GET /public/raw.
       responses:
         '200':
-          description: Bytes gerados.
+          description: >
+            Bytes gerados. hex|base64|uint8 (ou omitido) → application/json; raw →
+            application/octet-stream com N bytes exatos.
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+              description: Identificador da requisição (sempre presente).
+            X-QRNG-Source:
+              schema:
+                type: string
+              description: Proveniência (presente em format=raw).
+            X-QRNG-Conditioned:
+              schema:
+                type: string
+                enum:
+                  - 'false'
+              description: Sempre 'false' (presente em format=raw).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/RandomResponse'
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
         '413':
           description: bytes acima de PUBLIC_MAX_BYTES_PER_REQUEST.
           content:
@@ -788,6 +912,74 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '503':
           description: Upstream indisponível, timeout, ou entropia insuficiente no buffer.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /public/raw:
+    get:
+      tags:
+        - Random
+      summary: Alias binário explícito de GET /public/random?format=raw (anônimo, cota reduzida).
+      description: >
+        Idêntico a GET /public/random?format=raw. Corpo = EXATAMENTE os N bytes
+        (application/octet-stream, Content-Length = N), sem JSON/texto/prefixo/BOM. Mesmos limites
+        por IP do /public/random. request_id e proveniência nos headers X-Request-Id / X-QRNG-Source
+        / X-QRNG-Conditioned.
+      parameters:
+        - name: bytes
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            default: 32
+          description: Quantidade de bytes. Limite = PUBLIC_MAX_BYTES_PER_REQUEST (padrão 64 KiB).
+      responses:
+        '200':
+          description: N bytes brutos.
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+            X-QRNG-Source:
+              schema:
+                type: string
+            X-QRNG-Conditioned:
+              schema:
+                type: string
+                enum:
+                  - 'false'
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '413':
+          description: bytes acima de PUBLIC_MAX_BYTES_PER_REQUEST.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: bytes inválido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit por IP ou cota pública excedida.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '502':
+          description: Upstream com erro ou formato inesperado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Upstream indisponível ou entropia insuficiente.
           content:
             application/json:
               schema:

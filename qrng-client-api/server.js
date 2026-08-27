@@ -1152,15 +1152,32 @@ function interpretUpstreamResponse(contentType, rawBuffer, requestedBytes) {
  *         description: Quantidade de bytes a gerar. Limite por requisição = MAX_BYTES_PER_REQUEST (padrão 1 MiB).
  *       - name: format
  *         in: query
- *         schema: { type: string, enum: [hex, base64, uint8] }
+ *         schema: { type: string, enum: [hex, base64, uint8, raw] }
  *         description: >
- *           hex (padrão): string hexadecimal de 2N caracteres.
- *           base64: string base64 dos N bytes.
- *           uint8: array JSON de N inteiros em [0,255].
- *           Sem este parâmetro, o corpo é application/octet-stream com os N bytes brutos.
+ *           hex (default — inclusive quando o parâmetro é OMITIDO): JSON RandomResponse
+ *           com `random` = string hexadecimal de 2N caracteres.
+ *           base64: JSON RandomResponse com `random` = string base64 dos N bytes.
+ *           uint8: JSON RandomResponse com `random` = array de N inteiros [0,255].
+ *           raw: corpo application/octet-stream com EXATAMENTE os N bytes brutos —
+ *           sem JSON, sem texto, sem prefixo, sem BOM; request_id e proveniência vão
+ *           nos headers X-Request-Id / X-QRNG-Source / X-QRNG-Conditioned.
+ *           COMPATIBILIDADE: omitir `format` retorna JSON (hex), NÃO binário — o binário
+ *           exige `format=raw` explícito, ou a rota dedicada GET /raw.
  *     responses:
  *       200:
- *         description: Bytes gerados.
+ *         description: >
+ *           Bytes gerados. format=hex|base64|uint8 (ou omitido) → application/json
+ *           (RandomResponse). format=raw → application/octet-stream com N bytes exatos.
+ *         headers:
+ *           X-Request-Id:
+ *             schema: { type: string }
+ *             description: Identificador da requisição (também no corpo quando a resposta é JSON).
+ *           X-QRNG-Source:
+ *             schema: { type: string }
+ *             description: "Proveniência da fonte (ex.: dobslit-qrng-ufpe-fpga). Presente em format=raw."
+ *           X-QRNG-Conditioned:
+ *             schema: { type: string, enum: ['false'] }
+ *             description: "Sempre 'false' — bytes não condicionados. Presente em format=raw."
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/RandomResponse' }
@@ -1188,19 +1205,23 @@ function interpretUpstreamResponse(contentType, rawBuffer, requestedBytes) {
  *         description: Upstream indisponível, timeout, ou buffer com menos bytes que o pedido (INSUFFICIENT_ENTROPY).
  *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
  */
-app.get("/v1/random", attachRequestId, requireToken, checkTokenRate, parseBytes, checkQuota, async (req, res) => {
+const RANDOM_FORMATS = ["hex", "base64", "uint8", "raw"];
+
+// GET /raw é um alias explícito de GET /random?format=raw (mesma cadeia de
+// middleware). res.locals.forceRawFormat força o modo binário mesmo sem a query.
+async function randomHandler(req, res) {
   const bytes     = req.requestedBytes;
-  const format    = req.query.format || "hex";
+  const format    = res.locals.forceRawFormat ? "raw" : (req.query.format || "hex");
   const ip        = req.ip || req.socket.remoteAddress;
   const ua        = req.headers["user-agent"];
   const requestId = req.requestId;
   const t0        = Date.now();
 
-  if (!["hex", "base64", "uint8"].includes(format)) {
+  if (!RANDOM_FORMATS.includes(format)) {
     return res.status(422).json({
       request_id: requestId,
       error: "INVALID_FORMAT",
-      message: "Use format=hex, base64 ou uint8",
+      message: "Use format=hex, base64, uint8 ou raw",
     });
   }
 
@@ -1245,18 +1266,72 @@ app.get("/v1/random", attachRequestId, requireToken, checkTokenRate, parseBytes,
     }
     buf = buf.slice(0, bytes); // upBytes é sobre-provisionado; entrega exatamente o pedido
 
+    logRequest(requestId, req.tokenRow.id, "/v1/random", bytes, format, 200, ip, ua, Date.now() - t0);
+
+    if (format === "raw") {
+      // Corpo = EXATAMENTE os N bytes brutos, nada mais. request_id e
+      // proveniência só nos headers -- nunca dentro do corpo binário.
+      res.status(200);
+      res.setHeader("Content-Type", "application/octet-stream");
+      res.setHeader("Content-Length", buf.length);
+      res.setHeader("Cache-Control", "no-store");
+      res.setHeader("X-Request-Id", requestId);
+      res.setHeader("X-QRNG-Source", "dobslit-qrng-ufpe-fpga");
+      res.setHeader("X-QRNG-Conditioned", "false");
+      return res.end(buf); // res.end (não res.send): zero transformação do Buffer
+    }
+
     const random = format === "hex"    ? buf.toString("hex")
                  : format === "base64" ? buf.toString("base64")
                  : Array.from(buf);
 
-    logRequest(requestId, req.tokenRow.id, "/v1/random", bytes, format, 200, ip, ua, Date.now() - t0);
     res.json({ request_id: requestId, source: "dobslit-qrng-ufpe-fpga", bytes, format, random, timestamp: new Date().toISOString() });
 
   } catch (err) {
     logRequest(requestId, req.tokenRow.id, "/v1/random", bytes, format, 503, ip, ua, Date.now() - t0);
     res.status(503).json({ request_id: requestId, error: "QRNG_UNAVAILABLE", detail: err.message });
   }
-});
+}
+
+const randomChain = [attachRequestId, requireToken, checkTokenRate, parseBytes, checkQuota];
+app.get("/v1/random", ...randomChain, randomHandler);
+
+/**
+ * @openapi
+ * /raw:
+ *   get:
+ *     tags: [Random]
+ *     summary: Alias binário explícito de GET /random?format=raw — application/octet-stream com N bytes exatos.
+ *     description: >
+ *       Idêntico a GET /random?format=raw. Rota própria para consumidores que
+ *       só querem os bytes crus sem lidar com o parâmetro format. NUNCA retorna
+ *       JSON: o corpo são EXATAMENTE os N bytes (Content-Length = N), sem
+ *       prefixo, texto ou BOM. request_id e proveniência vão nos headers
+ *       X-Request-Id / X-QRNG-Source / X-QRNG-Conditioned.
+ *     security: [{ bearerAuthToken: [] }]
+ *     parameters:
+ *       - name: bytes
+ *         in: query
+ *         schema: { type: integer, minimum: 1, default: 32 }
+ *         description: Quantidade de bytes. Limite = MAX_BYTES_PER_REQUEST (padrão 1 MiB).
+ *     responses:
+ *       200:
+ *         description: N bytes brutos (application/octet-stream, Content-Length = N).
+ *         headers:
+ *           X-Request-Id: { schema: { type: string }, description: Identificador da requisição. }
+ *           X-QRNG-Source: { schema: { type: string }, description: Proveniência da fonte. }
+ *           X-QRNG-Conditioned: { schema: { type: string, enum: ['false'] }, description: Sempre 'false'. }
+ *         content:
+ *           application/octet-stream:
+ *             schema: { type: string, format: binary }
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       413: { description: bytes acima de MAX_BYTES_PER_REQUEST., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       422: { description: bytes inválido., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       429: { $ref: '#/components/responses/RateLimited' }
+ *       502: { description: Upstream com erro ou formato inesperado., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       503: { description: Upstream indisponível ou entropia insuficiente., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ */
+app.get("/v1/raw", ...randomChain, (req, res) => { res.locals.forceRawFormat = true; return randomHandler(req, res); });
 
 // ── GET /v1/public/random — endpoint público anônimo (item 6 da auditoria) ────
 //
@@ -1403,12 +1478,25 @@ function parsePublicBytes(req, res, next) {
  *         description: Quantidade de bytes a gerar. Limite por requisição = PUBLIC_MAX_BYTES_PER_REQUEST (padrão 64 KiB).
  *       - name: format
  *         in: query
- *         schema: { type: string, enum: [hex, base64, uint8] }
- *         description: hex (padrão), base64, ou uint8 (array JSON de inteiros 0-255).
+ *         schema: { type: string, enum: [hex, base64, uint8, raw] }
+ *         description: >
+ *           hex (default, inclusive quando omitido), base64, uint8 (array JSON de
+ *           inteiros 0-255) → JSON RandomResponse. raw → application/octet-stream com
+ *           EXATAMENTE os N bytes brutos (sem JSON/texto/prefixo/BOM); request_id e
+ *           proveniência nos headers X-Request-Id / X-QRNG-Source / X-QRNG-Conditioned.
+ *           Omitir `format` retorna JSON (hex), NÃO binário — use `format=raw` ou GET /public/raw.
  *     responses:
  *       200:
- *         description: Bytes gerados.
- *         content: { application/json: { schema: { $ref: '#/components/schemas/RandomResponse' } } }
+ *         description: >
+ *           Bytes gerados. hex|base64|uint8 (ou omitido) → application/json;
+ *           raw → application/octet-stream com N bytes exatos.
+ *         headers:
+ *           X-Request-Id: { schema: { type: string }, description: Identificador da requisição (sempre presente). }
+ *           X-QRNG-Source: { schema: { type: string }, description: "Proveniência (presente em format=raw)." }
+ *           X-QRNG-Conditioned: { schema: { type: string, enum: ['false'] }, description: "Sempre 'false' (presente em format=raw)." }
+ *         content:
+ *           application/json: { schema: { $ref: '#/components/schemas/RandomResponse' } }
+ *           application/octet-stream: { schema: { type: string, format: binary } }
  *       413:
  *         description: bytes acima de PUBLIC_MAX_BYTES_PER_REQUEST.
  *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
@@ -1425,9 +1513,9 @@ function parsePublicBytes(req, res, next) {
  *         description: Upstream indisponível, timeout, ou entropia insuficiente no buffer.
  *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
  */
-app.get("/v1/public/random", attachRequestId, publicIpRateLimiter, parsePublicBytes, checkPublicQuota, async (req, res) => {
+async function publicRandomHandler(req, res) {
   const bytes     = req.requestedBytes;
-  const format    = req.query.format || "hex";
+  const format    = res.locals.forceRawFormat ? "raw" : (req.query.format || "hex");
   const ip        = req.ip || req.socket.remoteAddress;
   const ua        = req.headers["user-agent"];
   const requestId = req.requestId;
@@ -1439,9 +1527,9 @@ app.get("/v1/public/random", attachRequestId, publicIpRateLimiter, parsePublicBy
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("X-Request-Id", requestId);
 
-  if (!["hex", "base64", "uint8"].includes(format)) {
+  if (!RANDOM_FORMATS.includes(format)) {
     recordPublicUsage(ip, 0);
-    return res.status(422).json({ request_id: requestId, error: "INVALID_FORMAT", message: "Use format=hex, base64 ou uint8" });
+    return res.status(422).json({ request_id: requestId, error: "INVALID_FORMAT", message: "Use format=hex, base64, uint8 ou raw" });
   }
 
   try {
@@ -1490,13 +1578,23 @@ app.get("/v1/public/random", attachRequestId, publicIpRateLimiter, parsePublicBy
     }
     buf = buf.slice(0, bytes);
 
+    logRequest(requestId, null, "/v1/public/random", bytes, format, 200, ip, ua, Date.now() - t0);
+    recordPublicUsage(ip, bytes);
+    metricsCounters.public_requests_total++;
+
+    if (format === "raw") {
+      res.status(200);
+      res.setHeader("Content-Type", "application/octet-stream");
+      res.setHeader("Content-Length", buf.length);
+      res.setHeader("X-QRNG-Source", "dobslit-qrng-ufpe-fpga");
+      res.setHeader("X-QRNG-Conditioned", "false");
+      return res.end(buf); // corpo = EXATAMENTE N bytes, sem JSON/BOM/prefixo
+    }
+
     const random = format === "hex"    ? buf.toString("hex")
                  : format === "base64" ? buf.toString("base64")
                  : Array.from(buf);
 
-    logRequest(requestId, null, "/v1/public/random", bytes, format, 200, ip, ua, Date.now() - t0);
-    recordPublicUsage(ip, bytes);
-    metricsCounters.public_requests_total++;
     res.json({ request_id: requestId, source: "dobslit-qrng-ufpe-fpga", bytes, format, random, timestamp: new Date().toISOString() });
 
   } catch (err) {
@@ -1504,7 +1602,43 @@ app.get("/v1/public/random", attachRequestId, publicIpRateLimiter, parsePublicBy
     recordPublicUsage(ip, bytes);
     res.status(503).json({ request_id: requestId, error: "QRNG_UNAVAILABLE", detail: err.message });
   }
-});
+}
+
+const publicRandomChain = [attachRequestId, publicIpRateLimiter, parsePublicBytes, checkPublicQuota];
+app.get("/v1/public/random", ...publicRandomChain, publicRandomHandler);
+
+/**
+ * @openapi
+ * /public/raw:
+ *   get:
+ *     tags: [Random]
+ *     summary: Alias binário explícito de GET /public/random?format=raw (anônimo, cota reduzida).
+ *     description: >
+ *       Idêntico a GET /public/random?format=raw. Corpo = EXATAMENTE os N bytes
+ *       (application/octet-stream, Content-Length = N), sem JSON/texto/prefixo/BOM.
+ *       Mesmos limites por IP do /public/random. request_id e proveniência nos
+ *       headers X-Request-Id / X-QRNG-Source / X-QRNG-Conditioned.
+ *     parameters:
+ *       - name: bytes
+ *         in: query
+ *         schema: { type: integer, minimum: 1, default: 32 }
+ *         description: Quantidade de bytes. Limite = PUBLIC_MAX_BYTES_PER_REQUEST (padrão 64 KiB).
+ *     responses:
+ *       200:
+ *         description: N bytes brutos.
+ *         headers:
+ *           X-Request-Id: { schema: { type: string } }
+ *           X-QRNG-Source: { schema: { type: string } }
+ *           X-QRNG-Conditioned: { schema: { type: string, enum: ['false'] } }
+ *         content:
+ *           application/octet-stream: { schema: { type: string, format: binary } }
+ *       413: { description: bytes acima de PUBLIC_MAX_BYTES_PER_REQUEST., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       422: { description: bytes inválido., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       429: { description: Rate limit por IP ou cota pública excedida., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       502: { description: Upstream com erro ou formato inesperado., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       503: { description: Upstream indisponível ou entropia insuficiente., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ */
+app.get("/v1/public/raw", ...publicRandomChain, (req, res) => { res.locals.forceRawFormat = true; return publicRandomHandler(req, res); });
 
 // ── Bulk jobs — stub (não implementado) ───────────────────────────────────────
 
