@@ -27,6 +27,7 @@ test.describe.serial("rate limit — endpoint público por IP", () => {
     expect(codes).toContain(429);
     expect(body429.error).toBe("RATE_LIMIT_EXCEEDED");
     expect(body429.request_id).toMatch(/^req_/);
+    expect(retryAfter).toBeTruthy(); // Retry-After presente no 429
     // após o 429, todas as próximas na mesma janela continuam 429 (não intermitente)
     const firstIdx = codes.indexOf(429);
     expect(codes.slice(firstIdx).every((c) => c === 429)).toBe(true);
