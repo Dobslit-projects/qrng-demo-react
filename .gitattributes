@@ -1,0 +1,3 @@
+# Scripts e infra de staging devem manter LF (rodam em Linux/containers).
+*.sh text eol=lf
+staging/** text eol=lf
