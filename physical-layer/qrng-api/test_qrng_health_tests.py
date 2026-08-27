@@ -81,10 +81,12 @@ class TestRCT(unittest.TestCase):
 
 class TestAPT(unittest.TestCase):
     def test_apt_abaixo_do_limite_nao_falha(self):
-        apt = APTState(lane=1, window=8)  # janela pequena para teste
-        apt.push(0x10)  # define referencia
-        for _ in range(apt.cutoff - 1):
+        apt = APTState(lane=1, window=512)
+        apt.push(0x10)  # define referencia -> B (count) = 1 (SP 800-90B 4.4.2)
+        # cutoff-2 matches => B = 1 + (cutoff-2) = cutoff-1, ainda abaixo do cutoff
+        for _ in range(apt.cutoff - 2):
             apt.push(0x10)
+        self.assertEqual(apt.count, apt.cutoff - 1)
         # nao levantou
 
     def test_apt_no_limite_falha(self):
@@ -97,7 +99,7 @@ class TestAPT(unittest.TestCase):
 
     def test_apt_acima_do_limite_falha_no_primeiro_ponto_de_corte(self):
         apt = APTState(lane=1, window=512)
-        apt.push(0x10)  # define a referencia, nao conta para o cutoff
+        apt.push(0x10)  # define a referencia -> B (count) = 1 (SP 800-90B 4.4.2)
         count = 0
         try:
             for _ in range(apt.cutoff + 10):
@@ -105,9 +107,10 @@ class TestAPT(unittest.TestCase):
                 count += 1
         except HealthTestFailure:
             pass
-        # a chamada numero `cutoff` (dentro do loop) e a que levanta --
-        # exatamente `cutoff - 1` chamadas do loop completam antes disso.
-        self.assertEqual(count, apt.cutoff - 1)
+        # B parte de 1 (a referencia conta). Apos k matches, B = 1 + k. O
+        # primeiro k com B >= cutoff e k = cutoff - 1, e a push desse k-esimo
+        # match levanta -- entao exatamente cutoff - 2 iteracoes completam antes.
+        self.assertEqual(count, apt.cutoff - 2)
 
     def test_janela_incompleta_no_fim_do_stream_nao_falha_artificialmente(self):
         # Uma janela que nunca chega a se completar (poucos valores) nao deve

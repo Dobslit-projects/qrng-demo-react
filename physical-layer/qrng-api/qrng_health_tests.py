@@ -133,7 +133,11 @@ class APTState:
     def push(self, value: int):
         if self.reference_value is None:
             self.reference_value = value
-            self.count = 0
+            # SP 800-90B 4.4.2: B = 1 -- a amostra de referencia JA conta como
+            # uma ocorrencia. Comecar em 0 aqui tornava o APT ~1 ocorrencia
+            # menos sensivel que a spec (dispararia so com cutoff matches
+            # depois da referencia, quando a spec dispara com cutoff-1).
+            self.count = 1
             self.seen_in_window = 0
             return
         self.seen_in_window += 1
