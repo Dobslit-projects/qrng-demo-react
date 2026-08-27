@@ -28,7 +28,29 @@ const app = express();
 // loopback.
 app.set("trust proxy", "loopback");
 
-app.use(express.json());
+// ── Limite explícito do corpo da requisição (item 3 da estabilização) ─────────
+//
+// Todo endpoint que lê `req.body` neste serviço recebe JSON pequeno:
+//   POST /v1/auth/register|login  -> { email, password }
+//   PATCH /v1/admin/tokens/:id/quota -> { quota_daily }
+//   POST /v1/tokens|/me/token/* -> corpo vazio
+// Maior request legítimo: register com e-mail no máximo da RFC 5321 (254
+// chars) + senha (o bcrypt só usa os primeiros 72 bytes; 256 chars é um teto
+// generoso) + overhead JSON  ≈  ~0,6 KiB.
+// Limite = 8 KiB  ≈  13× esse pior caso — folga para qualquer endpoint
+// JSON pequeno futuro, e ainda pequeno o bastante para limitar abuso.
+// Configurável por env; nenhum valor arbitrário sem documentação.
+//
+// NÃO há `express.urlencoded`, `express.raw`, `express.text` nem multipart
+// montados: nenhuma rota consome esses formatos. Um corpo form/multipart
+// simplesmente não é parseado (`req.body` fica vazio) e a rota devolve seu
+// 400 normal — não existe parser sem limite aqui.
+// Upload NIST (arquivos grandes de amostras) é outro serviço (FastAPI em
+// :18002, via nginx /qrng/nist/) e tem POLÍTICA DE LIMITE SEPARADA — ver
+// physical-layer/REQUEST_BODY_LIMITS.md.
+const JSON_BODY_LIMIT = process.env.MAX_JSON_BODY_BYTES || "8kb";
+
+app.use(express.json({ limit: JSON_BODY_LIMIT }));
 
 // ── Configuração ──────────────────────────────────────────────────────────────
 
@@ -457,11 +479,12 @@ async function fetchWithTimeout(url, ms) {
  *           application/json:
  *             schema: { $ref: '#/components/schemas/AuthResponse' }
  *       400:
- *         description: Campos ausentes ou senha muito curta (< 8 caracteres).
+ *         description: Campos ausentes, senha curta (< 8), ou JSON inválido (error=INVALID_JSON).
  *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
  *       409:
  *         description: E-mail já cadastrado.
  *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       413: { $ref: '#/components/responses/PayloadTooLarge' }
  */
 app.post("/v1/auth/register", async (req, res) => {
   const { email, password } = req.body || {};
@@ -503,6 +526,7 @@ app.post("/v1/auth/register", async (req, res) => {
  *       401:
  *         description: E-mail ou senha incorretos.
  *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       413: { $ref: '#/components/responses/PayloadTooLarge' }
  */
 app.post("/v1/auth/login", async (req, res) => {
   const { email, password } = req.body || {};
@@ -931,6 +955,7 @@ app.post("/v1/admin/tokens/:id/revoke", requireAuth, requireAdmin, (req, res) =>
  *       404:
  *         description: Token não encontrado.
  *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       413: { $ref: '#/components/responses/PayloadTooLarge' }
  */
 app.patch("/v1/admin/tokens/:id/quota", requireAuth, requireAdmin, (req, res) => {
   const quota  = parseInt(req.body.quota_daily, 10);
@@ -1041,7 +1066,7 @@ class UpstreamFormatError extends Error {
 
 // Só é chamado quando Content-Type: text/plain E ALLOW_LEGACY_TEXT_UPSTREAM=true.
 // Nunca faz parte do caminho normal nem é usado por sniffing de conteúdo.
-function parseLegacyTextUpstream(text, requestedBytes) {
+function parseLegacyTextUpstream(text, _requestedBytes) {
   if (/^[0-9,\s]+$/.test(text) && /[\s,]/.test(text)) {
     const values = text.split(/[\s,]+/).map(Number).filter((n) => Number.isInteger(n) && n >= 0 && n <= 255);
     if (values.length > 0) return Buffer.from(values);
@@ -1752,7 +1777,6 @@ app.get("/metrics", (req, res) => {
     FROM api_usage_logs WHERE endpoint = '/v1/random' GROUP BY status_code
   `).all();
 
-  const totalReqs   = byStatus.reduce((a, r) => a + r.n, 0);
   const totalBytes  = byStatus.find(r => r.status_code === 200)?.b || 0;
   const totalErrors = byStatus.filter(r => r.status_code >= 400).reduce((a, r) => a + r.n, 0);
 
@@ -1765,13 +1789,6 @@ app.get("/metrics", (req, res) => {
   `).all();
   const publicTotalBytes  = publicByStatus.find(r => r.status_code === 200)?.b || 0;
   const publicTotalErrors = publicByStatus.filter(r => r.status_code >= 400).reduce((a, r) => a + r.n, 0);
-
-  const p50 = db.prepare(`
-    SELECT AVG(duration_ms) as v FROM (
-      SELECT duration_ms FROM api_usage_logs WHERE status_code=200 AND duration_ms IS NOT NULL
-      ORDER BY duration_ms LIMIT (SELECT MAX(1, COUNT(*)/2) FROM api_usage_logs WHERE status_code=200)
-    )
-  `).get()?.v || 0;
 
   const activeTokens = db.prepare("SELECT COUNT(*) as n FROM api_tokens WHERE status='active'").get().n;
   const totalUsers   = db.prepare("SELECT COUNT(*) as n FROM users").get().n;
@@ -1901,6 +1918,47 @@ async function checkUpstream() {
     db.prepare("DELETE FROM upstream_health_log WHERE id NOT IN (SELECT id FROM upstream_health_log ORDER BY id DESC LIMIT 500)").run();
   }
 }
+
+// ── Handler de erro estruturado (item 3) ─────────────────────────────────────
+// Erros do parser de corpo (express.json/body-parser) acontecem ANTES de
+// qualquer middleware de rota, então precisam de um handler de erro global no
+// fim da cadeia. Garante:
+//   - 413 estruturado (JSON) quando o corpo excede JSON_BODY_LIMIT;
+//   - 400 estruturado quando o JSON é inválido / Content-Length não bate;
+//   - NUNCA HTML nem stack trace no corpo da resposta (o default do Express
+//     em modo dev vaza o stack) -- só { request_id, error, message }.
+// A assinatura de 4 args (err, req, res, next) é o que faz o Express tratar
+// isto como error handler; `next` é usado no caminho `!err`.
+app.use((err, req, res, next) => {
+  if (!err) return next();
+  const requestId = req.requestId || newRequestId();
+
+  if (err.type === "entity.too.large") {
+    return res.status(413).json({
+      request_id: requestId,
+      error: "REQUEST_BODY_TOO_LARGE",
+      message: `Request body excede o limite de ${JSON_BODY_LIMIT}. Este serviço só aceita corpos JSON pequenos (auth/admin).`,
+      limit: JSON_BODY_LIMIT,
+    });
+  }
+  if (err.type === "entity.parse.failed" || err instanceof SyntaxError) {
+    return res.status(400).json({
+      request_id: requestId,
+      error: "INVALID_JSON",
+      message: "O corpo da requisição não é JSON válido.",
+    });
+  }
+  if (err.type === "request.size.invalid" || err.type === "encoding.unsupported") {
+    return res.status(400).json({
+      request_id: requestId,
+      error: "INVALID_REQUEST_BODY",
+      message: "Corpo da requisição inválido (tamanho declarado ou codificação).",
+    });
+  }
+  // Qualquer outro erro não tratado: 500 genérico, sem stack no corpo.
+  console.error(`[qrng-client-api] unhandled error request_id=${requestId}:`, err && err.stack ? err.stack : err);
+  return res.status(500).json({ request_id: requestId, error: "INTERNAL_ERROR", message: "Erro interno." });
+});
 
 // ── Start ─────────────────────────────────────────────────────────────────────
 

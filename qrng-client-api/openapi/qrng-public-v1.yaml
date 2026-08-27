@@ -312,6 +312,14 @@ components:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
+    PayloadTooLarge:
+      description: >-
+        Corpo da requisição acima do limite de 8 KiB. Este serviço só aceita corpos JSON pequenos
+        (auth/admin); erro estruturado (error=REQUEST_BODY_TOO_LARGE), nunca HTML/stack.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
     UpstreamError:
       description: Upstream FPGA indisponível, com formato inesperado, ou timeout.
       content:
@@ -348,7 +356,7 @@ paths:
               schema:
                 $ref: '#/components/schemas/AuthResponse'
         '400':
-          description: Campos ausentes ou senha muito curta (< 8 caracteres).
+          description: Campos ausentes, senha curta (< 8), ou JSON inválido (error=INVALID_JSON).
           content:
             application/json:
               schema:
@@ -359,6 +367,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
   /auth/login:
     post:
       tags:
@@ -392,6 +402,8 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
   /auth/me:
     get:
       tags:

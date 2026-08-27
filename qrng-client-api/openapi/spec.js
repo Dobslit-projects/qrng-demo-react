@@ -235,6 +235,13 @@ const definition = {
         description: "Cota diária de requisições ou bytes excedida.",
         content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } },
       },
+      PayloadTooLarge: {
+        description:
+          "Corpo da requisição acima do limite de 8 KiB. Este serviço só " +
+          "aceita corpos JSON pequenos (auth/admin); erro estruturado " +
+          "(error=REQUEST_BODY_TOO_LARGE), nunca HTML/stack.",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } },
+      },
       UpstreamError: {
         description: "Upstream FPGA indisponível, com formato inesperado, ou timeout.",
         content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } },
