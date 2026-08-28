@@ -18,29 +18,15 @@
 #   libs   : -lbz2 -lpthread -ldivsufsort -ldivsufsort64 -ljsoncpp -lcrypto
 #            (+ -lmpfr -lgmp para ea_conditioning)
 #
+# Imagem de estágio ÚNICO: as ferramentas de build ficam na imagem (~200 MB a
+# mais) para evitar o casamento frágil de nomes de pacotes runtime entre
+# releases do Debian. É staging, não produção.
+#
 # Contexto de build: raiz do repositório.
 #   docker build -f staging/nist-staging-real/Dockerfile -t kapua-staging-nist-real:local .
-
-# ---- estágio 1: compila a suíte real ----
-FROM debian:bookworm-slim AS suite
-ARG SP90B_COMMIT=87c104d0ed4cbc96103e7b8b38d6f2c7e0a6b289
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ca-certificates g++ make \
-      libbz2-dev libdivsufsort-dev libjsoncpp-dev libssl-dev libmpfr-dev libgmp-dev \
-    && rm -rf /var/lib/apt/lists/*
-WORKDIR /opt/sp90b
-RUN git clone https://github.com/usnistgov/SP800-90B_EntropyAssessment.git . \
-    && git checkout "${SP90B_COMMIT}" \
-    && git rev-parse HEAD > /opt/sp90b/COMMIT.txt
-# build sem -march=native (reprodutível); registra os hashes resultantes
-RUN cd cpp \
-    && sed -i 's/ -march=native//' Makefile \
-    && make iid non_iid restart 2>&1 | tail -20 \
-    && sha256sum ea_iid ea_non_iid ea_restart > /opt/sp90b/BINARY_SHA256.txt \
-    && cat /opt/sp90b/BINARY_SHA256.txt
-
-# ---- estágio 2: serviço ----
 FROM python:3.12-slim
+
+ARG SP90B_COMMIT=87c104d0ed4cbc96103e7b8b38d6f2c7e0a6b289
 ARG NIST_SERVICE_COMMIT=unknown
 ARG NIST_SERVICE_BUILD_DATE=unknown
 ENV NIST_SERVICE_COMMIT=${NIST_SERVICE_COMMIT} \
@@ -51,13 +37,24 @@ ENV NIST_SERVICE_COMMIT=${NIST_SERVICE_COMMIT} \
     NIST_ASSESSMENT_ENGINE_VERSION=87c104d0 \
     PYTHONUNBUFFERED=1
 
-# libs de runtime da suíte + python-multipart
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      bash file libbz2-1.0 libdivsufsort3 libjsoncpp25 libssl3 libmpfr6 libgmp10 libgomp1 \
+      git ca-certificates bash file g++ make \
+      libbz2-dev libdivsufsort-dev libjsoncpp-dev libssl-dev libmpfr-dev libgmp-dev \
     && rm -rf /var/lib/apt/lists/* \
     && pip install --no-cache-dir fastapi==0.115.6 "uvicorn[standard]==0.34.0" python-multipart==0.0.20
 
-COPY --from=suite /opt/sp90b /opt/sp90b
+# ---- compila a suíte real do commit fixado ----
+WORKDIR /opt/sp90b
+RUN git clone https://github.com/usnistgov/SP800-90B_EntropyAssessment.git . \
+    && git checkout "${SP90B_COMMIT}" \
+    && git rev-parse HEAD > /opt/sp90b/COMMIT.txt \
+    && cd cpp \
+    && sed -i 's/ -march=native//' Makefile \
+    && make iid non_iid restart 2>&1 | tail -20 \
+    && test -x ./ea_iid && test -x ./ea_non_iid \
+    && sha256sum ea_iid ea_non_iid ea_restart > /opt/sp90b/BINARY_SHA256.txt \
+    && cat /opt/sp90b/COMMIT.txt /opt/sp90b/BINARY_SHA256.txt
+
 COPY qrng-nist-api/nist_service.py /app/nist_service.py
 RUN mkdir -p /data /staging-data
 
