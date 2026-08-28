@@ -334,8 +334,15 @@ app.use(rateLimit({
 
 // ── Geração antecipada de request_id ─────────────────────────────────────────
 
-function attachRequestId(req, _res, next) {
-  req.requestId = newRequestId();
+// Aceita o X-Request-Id do cliente para correlação ponta a ponta, SÓ se ele
+// tiver um formato seguro (evita injeção em logs). Caso contrário, gera um.
+const _SAFE_REQ_ID = /^[A-Za-z0-9_-]{8,64}$/;
+function attachRequestId(req, res, next) {
+  const inbound = req.headers["x-request-id"];
+  req.requestId = (typeof inbound === "string" && _SAFE_REQ_ID.test(inbound))
+    ? inbound : newRequestId();
+  // ecoa no header da resposta (mesmo em erros) para rastreio em qualquer camada
+  if (res && typeof res.setHeader === "function") res.setHeader("X-Request-Id", req.requestId);
   next();
 }
 
