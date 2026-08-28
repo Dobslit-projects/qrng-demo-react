@@ -6,6 +6,19 @@
 // /random é "replay" no staging e NUNCA "live" / live_verified=true.
 import { test, expect } from "@playwright/test";
 
+// Este spec roda por ÚLTIMO na suíte de staging. Specs anteriores dirigem o
+// fixture-upstream (`_ctl/mode=hang|offline|exhausted|stale`) e, mesmo
+// restaurando no próprio `finally`/`afterAll`, deixavam janelas em que o
+// fixture não estava `online` quando este spec começava — daí o timeout do
+// teste de π no CI (#48–#51). Aqui garantimos o estado conhecido antes de
+// cada teste, como downloads.spec.js / provenance.spec.js já fazem.
+const CTL = process.env.FIXTURE_CTL_URL || null;
+test.beforeEach(async ({ request }) => {
+  if (!CTL) return;
+  await request.post(`${CTL}/_ctl/online`).catch(() => {});
+  await request.post(`${CTL}/_ctl/reset`).catch(() => {});
+});
+
 async function nav(page, label) {
   await page.getByRole("button", { name: label, exact: true }).first().click();
 }
@@ -89,7 +102,9 @@ test.describe.serial("visualizações — proveniência rastreável (item 8)", (
     await page.addInitScript(INSTRUMENT);
     await page.goto("/qrng/", { waitUntil: "domcontentloaded" });
     await nav(page, "Aplicações");
-    await page.getByRole("button", { name: /Estimar π com .* pontos/ }).first().click();
+    const piBtn = page.getByRole("button", { name: /Estimar π com .* pontos/ });
+    await expect(piBtn).toBeVisible({ timeout: 15000 });
+    await piBtn.first().click();
     await expect(page.getByText(/Erro:\s*[\d.]+\s*%/)).toBeVisible({ timeout: 30000 });
     const { net } = await grab(page);
     const rnd = assertNeverLive(net);
