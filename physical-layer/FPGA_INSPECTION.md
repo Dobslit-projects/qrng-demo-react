@@ -3,26 +3,74 @@
 ## Estado
 
 ```text
-INSPEÇÃO READ-ONLY DA FPGA: NÃO EXECUTADA NESTA SESSÃO
+INSPEÇÃO READ-ONLY DA FPGA: NÃO EXECUTADA (2 rodadas) — BLOQUEADA POR TOOLING
 MOTIVO: a única forma de acesso ao host da FPGA (10.0.10.2) é um login SSH
-        interativo por SENHA, encadeado através de dois saltos
-        (Bongo 2.24.117.58 -> túnel reverso 127.0.0.1:22222 -> dobslit
-        192.168.0.42 -> 10.0.10.2). O classificador de segurança automático
-        do ambiente BLOQUEIA esse padrão (SSH dirigido por pty/senha para um
-        host de FPGA), independentemente de o comando ser somente-leitura.
-        Foi tentado uma vez com comandos exclusivamente de leitura
-        (`echo`, `uname -a`, `cat /etc/os-release | head`, `uptime`) e negado.
-        NÃO foi feita nenhuma tentativa de contornar o bloqueio.
-O QUE FOI CONFIRMADO (sem logar na FPGA):
-  - 10.0.10.2:22 está aberto e responde (nc -zv, a partir de dobslit);
-  - o pipeline de software a jusante (connector, FIFO, server_api.py) é
-    passthrough verbatim — hashes conferidos (ver NOISE_SOURCE_UNIT.md).
-EVIDÊNCIA / DESBLOQUEIO NECESSÁRIO:
-  (a) uma regra de permissão de Bash no ambiente que autorize SSH read-only
-      para 10.0.10.2 através da cadeia Bongo->dobslit; OU
-  (b) o operador executa, numa janela combinada, o roteiro read-only abaixo
-      diretamente na FPGA e entrega a saída (texto + hashes).
+        interativo por SENHA, encadeado por dois saltos (Bongo 2.24.117.58 ->
+        túnel reverso 127.0.0.1:22222 -> dobslit 192.168.0.42 -> 10.0.10.2).
+        O classificador de segurança do ambiente BLOQUEIA esse padrão mesmo
+        para comandos exclusivamente de leitura. Tentado 2x (rodadas de
+        2026-08-27 e 2026-08-28) com comandos read-only; negado. NENHUMA
+        tentativa de contornar o bloqueio.
+CONFIRMADO SEM LOGAR NA FPGA:
+  - 10.0.10.2:22 aberto e responde (nc -zv a partir de dobslit);
+  - pipeline de software a jusante (connector, FIFO, server_api.py) é
+    passthrough verbatim — hashes conferidos (NOISE_SOURCE_UNIT.md);
+  - o server_api.py real NÃO emite X-QRNG-Captured-At/-Capture-Id
+    (PROVENANCE_REAL_UPSTREAM.md).
+DESBLOQUEIO: (a) uma regra de permissão de Bash que autorize SSH read-only
+para 10.0.10.2 pela cadeia Bongo->dobslit; OU (b) o operador executa o
+handoff abaixo e devolve stdout/stderr.
 ```
+
+## HANDOFF PARA O OPERADOR (item 9)
+
+| item | valor |
+|---|---|
+| **Script read-only** | `physical-layer/fpga_readonly_inspect.sh` (neste repo) |
+| **SHA-256 do script** | `cc7a80083031ceaca341c9b5905a64307c356461975c660d8b5514601ea118d6` |
+| **Onde rodar** | como `root@10.0.10.2` (Red Pitaya) |
+| **O que o script faz** | só LÊ: identidade/SoC, bitstream+hashes, processo do servidor `:12345` (exe + sha256 + cmdline + environ sem segredos), `fifo.c`/RTL se presente, **leitura ÚNICA** dos registradores `0x43C00000..+0x1C` (NUNCA lê `0x43C11000`, o FIFO de dados), ADC/clock/`sampling_frequency` via IIO + `dmesg`, units systemd / `rc.local` / `crontab` |
+| **O que o script NÃO faz** | nenhuma escrita em registrador; nenhum restart de serviço; nenhuma alteração de arquivo; nenhum reload de bitstream; nenhum segundo consumidor; nenhum power-cycle |
+
+### Comandos exatos
+
+```sh
+# 1. transferir o script para a FPGA (ex.: a partir da dobslit):
+scp /caminho/para/fpga_readonly_inspect.sh root@10.0.10.2:/tmp/
+
+# 2. na FPGA, conferir o hash ANTES de rodar:
+ssh root@10.0.10.2
+sha256sum /tmp/fpga_readonly_inspect.sh
+#   deve imprimir: cc7a80083031ceaca341c9b5905a64307c356461975c660d8b5514601ea118d6
+#   se NÃO bater, PARE e reporte.
+
+# 3. rodar, salvando stdout e stderr SEPARADOS:
+sh /tmp/fpga_readonly_inspect.sh > /tmp/fpga_inspect.out 2> /tmp/fpga_inspect.err
+
+# 4. conferir que nada travou e ver o tamanho:
+echo "exit=$?"; wc -l /tmp/fpga_inspect.out /tmp/fpga_inspect.err
+
+# 5. DEVOLVER os dois arquivos (out + err) para quem pediu a inspeção
+#    (anexar ou colar; ~algumas dezenas de KB).
+```
+
+### Saída esperada (forma)
+
+Blocos `===== META =====`, `HARDWARE / SOC`, `BITSTREAM / FPGA FABRIC`,
+`SERVIDOR TCP :12345`, `FONTE fifo.c / RTL`, `REGISTRADORES AXI 0x43C00000`,
+`ADC / CLOCK / TAXA DE AQUISIÇÃO`, `INICIALIZAÇÃO / O QUE RESTARTA A FONTE`,
+`FIM`. Alguns comandos podem imprimir `(erro)` / `n/a` conforme o que existe
+na imagem da Red Pitaya — **isso é esperado**; o importante é: SHA-256 do
+binário do servidor `:12345`, conteúdo de `fifo.c` (se presente),
+`sampling_frequency` do ADC, e os `systemctl cat` dos units.
+
+### Onde a saída deve ser devolvida
+
+Colar/anexar o conteúdo de `/tmp/fpga_inspect.out` e `/tmp/fpga_inspect.err`
+na próxima mensagem, ou salvá-los em
+`physical-layer/fpga_inspect_out_<data>.txt` /
+`physical-layer/fpga_inspect_err_<data>.txt` no repo. A partir daí o item 6
+(unidade física) e o item 13 (taxa física) podem ser fechados.
 
 ## Roteiro read-only a executar (pelo operador ou sob permissão)
 
