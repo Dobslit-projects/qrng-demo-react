@@ -18,7 +18,26 @@
 
 ## 0. Atualização — rodada de 2026-08-28
 
-Escopo autorizado desta rodada executado sobre o HEAD `542dad4`:
+> **Rodada seguinte (mesmo dia, a partir de `84818ae`)** — 11 itens de
+> fechamento pré-merge. HEAD atual **`9989db4`+**. Nenhum merge/deploy.
+>
+> | # | entrega | commit(s) | estado |
+> |---|---|---|---|
+> | 1 | **escopo da equivalência NIST estreitado**: "a versão corrigida reproduziu exatamente o serviço produtivo PARA UMA amostra `.bin` raw de 1 MiB, com o mesmo SHA-256; `.txt`/`.csv`/conjunto completo pendentes". `h_min_iid` NÃO é crédito de entropia (`iid_passed=false`). | `1ca463a` | ✅ |
+> | 2 | **`limiting_estimator` desambiguado**: o job registrava T-Tuple 7.210061 (trilha original) mas `h_min_non_iid=6.951334` (trilha bitstring, `8×0.868917`, limitante = Compression bit-string). Parser reescrito; campos `h_original_non_iid`/`original_limiting_estimator`, `h_bitstring_non_iid`/`bitstring_limiting_estimator`, `bitstring_to_symbol_conversion`, `limiting_path`, `limiting_estimator` (corresponde a `h_min_non_iid`), `parse_incomplete`. `statistical_result_valid`→`assessment_execution_valid`. 6 fixtures. `NIST_STAGING_REAL.md §2-bis`. | `1ca463a` | ✅ |
+> | 3 | **claim atômico** (`_claim_job`: `UPDATE … WHERE id=? AND status IN ('queued','running')`) → execução única mesmo com re-enfileiramento. **Teste REAL na VM**: A `running` → `docker restart` → **A `failed`** ("job abandonado"); **B `queued` → `completed`** com resultado real (`h_min_non_iid=6.951334`, `limiting_path=bitstring`, `Compression`), 1 execução, histórico íntegro, `queue_depth=0`. | `a902a9a` | ✅ |
+> | 4 | **proveniência contra o `server_api.py` REAL** (`PROVENANCE_REAL_UPSTREAM.md`): instância paralela temporária, replay de 1 resposta real. O upstream real **não emite `X-QRNG-Captured-At`/`-Capture-Id`/`-Source-Status`** → por default `actual_origin=unknown`, `live_verified=false` em **todas** as respostas. Regras verificadas (não inventa `captured_at`; `served_at`≠`captured_at`; `fallback_used=true` impede `live`; config `live` não prova `live`; JSON=headers). Novo flag `LIVE_ALLOW_WITHOUT_CAPTURE_EVIDENCE` (default `false`). Matriz completa `online/degraded/exhausted/offline/timeout` × `/random`(hex/base64/uint8/raw)/`/health`. `provenance.test.js` 12→15. | `b0973af` | ✅ |
+> | 5 | **exponencial = decisão B** (não existe na UI → só teste de lib, `qrngHelper.test.js` 30→34, marcado "não aplicável ao E2E"). **Erros estruturados**: 404 catch-all JSON (antes "Cannot GET" HTML); rota `/v1/_test/boom` guardada por `ENABLE_TEST_ROUTES=1` → 500 `INTERNAL_ERROR` sem HTML/stack, `X-Request-Id` do cliente preservado (`attachRequestId` agora ecoa id seguro); fixture `/_ctl/mode=hang` → timeout → 503 `QRNG_UNAVAILABLE` estruturado. **Sonificação instrumentada** (AudioContext via `addInitScript`): contagem de osciladores, freq 20 Hz–20 kHz, duração <5 s, "suspended" tratado, cleanup. `features.spec.js` +4, `error-contract.test.js` novo. | `a902a9a`, `2a835bb` | ✅ |
+> | 6 | já satisfeito (rodadas anteriores) — nome gerado pelo servidor, `_safe_name` endurecido, `.txt`/`.csv` normalizados, 8 campos persistidos pós-worker, testes de `../`/sep Windows/absoluto/Unicode/nome longo/concorrente/negativo/>uint32/colunas/delimitador/texto. Symlink via upload HTTP = N/A. | — | ✅ |
+> | 7 | **inventário do conjunto completo** (`NIST_FULLSET_COMPARE.md`, read-only): 64 arquivos (49 `.bin`, 15 `.txt`, 0 `.csv`), 475 MB, 57 elegíveis, 7 pequenos. Estimativa **~18 h** wall (both, baseline-isolado × staging-real) + ~1,4 GB disco. Estratégia L0–L3. **Campanha NÃO executada — aguarda autorização** (condição de parada). Comparação NÃO em massa contra o `:8002` produtivo. | `9989db4` | 🟡 inventário pronto |
+> | 8 | inspeção read-only da FPGA — **ainda bloqueada** pelo classificador. Handoff ao operador em `FPGA_INSPECTION.md` (script + hash + comandos + saída esperada + arquivo de retorno). | — | ⛔ |
+> | 9 | plano da janela física — `PHYSICAL_WINDOW_PLAN.md` (A–F, portões). | `b3024d1` | ✅ (doc) |
+> | 10 | critérios de merge/deploy — abaixo (§Próximo ponto). | — | ✅ |
+> | 11 | veredito + ponto de autorização — mantido `OPERACIONAL, MAS AINDA EM VALIDAÇÃO DA FONTE`. | — | ✅ |
+
+---
+
+Escopo autorizado da rodada anterior executado sobre o HEAD `542dad4`:
 
 | item | entrega | commit(s) | estado |
 |---|---|---|---|
@@ -416,12 +435,18 @@ em produção muda.
      deploy real por systemd/rsync **deve incluir `qrng-client-api/lib/`** —
      sem isso o processo não sobe.
    - Produção fica `QRNG_PROVENANCE=live` explícito (agora = **modo/teto** da
-     instância; `actual_origin` de cada resposta é resolvido em tempo real e
-     só é `live` com evidência do caminho live).
-   - Opcional: `QRNG_CONFIGURED_SOURCE=fpga`, `LIVE_SAMPLE_MAX_AGE_MS`.
-   - Para `live_verified=true` e `sample_age_ms` reais, o `server_api.py` de
-     produção precisaria emitir `X-QRNG-Captured-At` / `X-QRNG-Capture-Id`
-     (não emite hoje → `captured_at=null`, `live_verified=false`, honesto).
+     instância; `actual_origin` de cada resposta é resolvido em tempo real).
+   - **`LIVE_ALLOW_WITHOUT_CAPTURE_EVIDENCE=1`** — necessário porque o
+     `server_api.py` real **não emite `X-QRNG-Captured-At`** (verificado, item 4
+     / `PROVENANCE_REAL_UPSTREAM.md`). Com o flag: `actual_origin="live"` +
+     `live_verified=false` quando o upstream está saudável e servindo bytes.
+     **Sem o flag** (default), produção reportaria `actual_origin="unknown"` em
+     `/random` — correto, porém conservador.
+   - `QRNG_CONFIGURED_SOURCE=fpga` (recomendado), `LIVE_SAMPLE_MAX_AGE_MS`
+     (opcional).
+   - Melhoria futura (fora desta rodada — mexe no caminho da FPGA): fazer o
+     `server_api.py` carimbar `X-QRNG-Captured-At`/`-Capture-Id` por resposta →
+     aí `live_verified=true` e `sample_age_ms` reais, e o flag acima pode sair.
 3. NIST: **não** neste deploy — segue o plano próprio (item 21 + §7-bis).
 4. RCT/APT: **não** entra no caminho live — segue desativado até itens 6/13/10.
 5. Health tests no caminho live: **não** — condição de parada.
@@ -478,6 +503,26 @@ em produção muda.
 - ❌ "restart campaign executada" / resultados de mil reinicializações.
 
 ---
+
+## Critérios para autorizar o merge/deploy do frontend/API (item 10)
+
+Recomendar o merge **somente** quando **todos**:
+
+| # | critério | estado (2026-08-28) |
+|---|---|---|
+| a | CI do novo HEAD verde | ✅ (ver §2 — confirmar o run do HEAD final) |
+| b | proveniência funciona com o upstream REAL | ✅ `PROVENANCE_REAL_UPSTREAM.md` (matriz completa; `actual_origin` nunca `live` sem evidência) |
+| c | `actual_origin` nunca `live` sem evidência | ✅ default estrito; `LIVE_ALLOW_WITHOUT_CAPTURE_EVIDENCE=1` documentado para o deploy |
+| d | `lib/provenance.js` DENTRO da imagem | ✅ `qrng-client-api/Dockerfile` faz `COPY lib`; **deploy por systemd deve incluir `lib/`** (§22) — a imagem imutável do item 8 resolve isso |
+| e | erro 500 e timeout testados | ✅ `error-contract.test.js` + `features.spec.js` (500/404/timeout estruturados, sem HTML/stack) |
+| f | distribuição exponencial classificada corretamente | ✅ decisão B (lib, não UI) — sem alegação de cobertura em navegador |
+| g | imagem imutável + rollback preparados | 🟡 **pendente — item 8**: construir imagens taggeadas por SHA `84818ae…`/HEAD, com digest, comandos de deploy/rollback, imagens anteriores, smoke tests |
+| h | NIST produtivo FORA deste deploy | ✅ nada de NIST no deploy do frontend/API |
+| i | funções criptográficas desabilitadas | ✅ inalterado |
+
+**Bloqueia hoje:** apenas **(g)** — os artefatos imutáveis de deploy (item 8
+desta rodada). O merge/deploy **não** deve ocorrer nesta rodada de qualquer
+forma (condição de parada).
 
 ## Próximo ponto exato de autorização
 
