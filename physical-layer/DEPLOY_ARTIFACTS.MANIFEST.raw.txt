@@ -1,0 +1,64 @@
+SHA=a2c3947c3279844bfee48fd072f9fbcd15a6616b  BUILD_DATE=2026-08-28T14:19:50Z
+--- qrng-client-api:a2c3947c3279844bfee48fd072f9fbcd15a6616b ---
+Id=sha256:0e9aaadfd62a3161dd8b8d0afafb433d102e4d3a46986b92d49c31aa92874f24
+Created=2026-08-28T14:13:52.188694038Z
+Size=180992544
+Architecture=amd64/linux
+Layers=12
+qrng-client-api:a2c3947c3279844bfee48fd072f9fbcd15a6616b save_sha256=c466c1a2fb6a765535e84f18f34c084b07f0823586109d434f138a7493bfe99c
+--- qrng-web:a2c3947c3279844bfee48fd072f9fbcd15a6616b ---
+Id=sha256:3cea813b149185dc084f28e002838b99179167b80d07fee7e6532f4ec43bffbf
+Created=2026-08-28T14:20:23.611501579Z
+Size=26427096
+Architecture=amd64/linux
+Layers=10
+qrng-web:a2c3947c3279844bfee48fd072f9fbcd15a6616b save_sha256=da4d380a74fac9b1bdd1b05dd650225929919a60308456e864d8bf49ca208837
+--- hashes NO REPO ---
+--- hashes DENTRO da imagem ---
+--- diff (deve ser vazio) ---
+2,4c2,4
+< 8f1ff0abacd7f5640922e876ae50b8b1db944dcdc3c956fc6e994a75294f9770 provenance.js
+< daff79424f9aac99506f209b78b80b086f128324ce214c4aba210e9022cdc42a qrng-public-v1.yaml
+< 104a114246c2f5b001ede59458b1e4ea473c90b13e875c8b04446524039662d2 qrng-internal-admin-v1.yaml
+---
+> 8f1ff0abacd7f5640922e876ae50b8b1db944dcdc3c956fc6e994a75294f9770 lib/provenance.js
+> daff79424f9aac99506f209b78b80b086f128324ce214c4aba210e9022cdc42a openapi/qrng-public-v1.yaml
+> 104a114246c2f5b001ede59458b1e4ea473c90b13e875c8b04446524039662d2 openapi/qrng-internal-admin-v1.yaml
+CONTENT_MATCH=0
+SBOM: syft indisponivel -> npm ls salvo em npm_tree_client_api.txt
+--- client-api /v1/health/self ---
+http=200
+--- client-api /v1/public/random (provenance) ---
+{"request_id":"req_582f8c4d4f8e7db8","source":"dobslit-qrng-ufpe-fpga","provenance":"unknown","provenance_detail":{"configured_source":"fpga","instance_mode":"live","actual_origin":"unknown","source_health":"unknown","buffer_health":"healthy","captured_at":null,"served_at":"2026-08-28T14:20:37.466Z","sample_age_ms":null,"capture_id":null,"fallback_used":false,"live_verified":false},"bytes":8,"format":"hex","random":"0000000000000000","timestamp":"2026-08-28T14:20:37.466Z"}--- web / (index) ---
+http=200 type=text/html
+--- versoes das imagens ATUAIS em producao (rollback target) ---
+qrng-web-1	qrng-web	2026-08-26 00:47:51 +0000 UTC
+qrng-client-api	qrng-demo-react-qrng-api	2026-08-26 00:46:06 +0000 UTC
+qrng-web(atual) Id=sha256:6a87c46734eba1f448e28506a92da96fdc7b7dbdae8154e5cae312d6922e1722 Created=2026-08-26T00:46:57.898014233Z
+qrng-client-api(atual) Id=sha256:10087183b583211d4aa73c2d531df170c06e7e86bc869bec347e57b9be7fbd55 Created=2026-08-26T00:44:01.032227343Z
+qrng-client-api:a2c3947c3279844bfee48fd072f9fbcd15a6616b   0e9aaadfd62a        701MB          181MB        
+qrng-web:a2c3947c3279844bfee48fd072f9fbcd15a6616b          3cea813b1491         94MB         26.4MB        
+
+## COMANDOS DE DEPLOY (executar SÓ sob autorização; nada aqui roda deploy)
+# 1. as imagens qrng-client-api:a2c3947c3279844bfee48fd072f9fbcd15a6616b e qrng-web:a2c3947c3279844bfee48fd072f9fbcd15a6616b já estão no docker local do Bongo.
+# 2. parar os containers atuais preservando o nome:
+#    docker rename qrng-client-api qrng-client-api-prev; docker rename qrng-web-1 qrng-web-1-prev
+# 3. subir os novos a partir da TAG IMUTÁVEL (nunca :latest):
+#    docker run -d --name qrng-client-api --network host --env-file /root/deploy/qrng/qrng-client-api.env \
+#      -e LIVE_ALLOW_WITHOUT_CAPTURE_EVIDENCE=1 -v qrng-client-api-data:/data qrng-client-api:a2c3947c3279844bfee48fd072f9fbcd15a6616b
+#    docker run -d --name qrng-web-1 -p 127.0.0.1:3001:80 -e PORT=80 qrng-web:a2c3947c3279844bfee48fd072f9fbcd15a6616b
+# 4. smoke: curl -f https://bongo.dobslit.com/qrng/v1/health/self ; curl -f https://bongo.dobslit.com/qrng/
+#    curl -s 'https://bongo.dobslit.com/qrng/api/random?bytes=8&format=hex' | jq .provenance_detail
+
+## ROLLBACK
+#    docker rm -f qrng-client-api qrng-web-1
+#    docker rename qrng-client-api-prev qrng-client-api; docker start qrng-client-api
+#    docker rename qrng-web-1-prev qrng-web-1; docker start qrng-web-1
+#  (imagens anteriores registradas acima em "rollback target")
+
+## HEALTH CHECKS pós-deploy (todos devem passar)
+#  - GET /qrng/v1/health/self -> 200 {status:"ok"}
+#  - GET /qrng/ -> 200 text/html
+#  - GET /qrng/v1/openapi.json -> 200, openapi 3.x, schema ProvenanceDetail presente
+#  - GET /qrng/api/random?bytes=8&format=hex -> 200, provenance_detail.actual_origin in {live,unknown}, nunca "replay"/"fixture" em prod
+#  - GET /qrng/v1/docs/ e /qrng/v1/redoc -> 200
