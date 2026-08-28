@@ -39,10 +39,11 @@ test.describe.serial("Aplicações — Monte Carlo π", () => {
     expect(piEst).toBeGreaterThan(2.5);
     expect(piEst).toBeLessThan(3.7);
 
-    const it = card.match(/([\d.]+)\s*dentro\s*\/\s*([\d.]+)\s*total/i);
+    const it = card.match(/(\d[\d.,\s]*?)\s*dentro[\s\S]{0,10}?(\d[\d.,\s]*?)\s*total/i);
     expect(it).toBeTruthy();
-    const inside = parseInt(it[1].replace(/\./g, ""), 10);
-    const total = parseInt(it[2].replace(/\./g, ""), 10);
+    const inside = parseInt(it[1].replace(/[.,\s]/g, ""), 10);
+    const total = parseInt(it[2].replace(/[.,\s]/g, ""), 10);
+    expect(Number.isFinite(inside) && Number.isFinite(total)).toBe(true);
     expect(inside).toBeGreaterThanOrEqual(0);
     expect(inside).toBeLessThanOrEqual(total);
     expect(Math.abs(4 * inside / total - piEst)).toBeLessThan(0.02);
