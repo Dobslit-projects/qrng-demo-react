@@ -296,6 +296,55 @@ describe("exponentialFromUniform — transformada inversa (X = -mean * ln(1 - U)
     expect(sampleMean).toBeGreaterThan(4.5);
     expect(sampleMean).toBeLessThan(5.5);
   });
+
+  // ── Item 5: cobertura explícita da distribuição exponencial ──────────────
+  it("identidade exata X = -μ·ln(1-U) para um vetor determinístico, μ=5", () => {
+    const MU = 5;
+    const uVec = [0, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.99, 0.999];
+    for (const u of uVec) {
+      expect(exponentialFromUniform(u, MU)).toBe(-MU * Math.log(1 - u));
+    }
+  });
+
+  it("nenhum U do transformador de bytes cai fora de [0,1) e ln(1-U) nunca é log(0)", () => {
+    // uint32ToFloat mapeia [0, 2^32-1] -> [0, 1). O máximo (0xFFFFFFFF) < 1,
+    // logo 1-U > 0 sempre e Math.log(1-U) é finito -- log(0) é impossível.
+    for (const n of [0, 1, 1234567, 0x7fffffff, 0xfffffffe, 0xffffffff]) {
+      const u = uint32ToFloat(n);
+      expect(u).toBeGreaterThanOrEqual(0);
+      expect(u).toBeLessThan(1);
+      expect(1 - u).toBeGreaterThan(0);
+      expect(Number.isFinite(exponentialFromUniform(u, 5))).toBe(true);
+    }
+  });
+
+  it("valores perto de 0 e perto de 1: comportamento correto da cauda", () => {
+    // U -> 0  =>  X -> 0
+    expect(exponentialFromUniform(uint32ToFloat(1), 5)).toBeGreaterThan(0);
+    expect(exponentialFromUniform(uint32ToFloat(1), 5)).toBeLessThan(1e-6);
+    // U -> quase 1  =>  X grande, mas finito e coerente com -5·ln(1-U)
+    const uHi = uint32ToFloat(0xffffffff);
+    const xHi = exponentialFromUniform(uHi, 5);
+    expect(xHi).toBe(-5 * Math.log(1 - uHi));
+    expect(xHi).toBeGreaterThan(50); // -5·ln(2.3e-10) ≈ 108
+    expect(Number.isFinite(xHi)).toBe(true);
+  });
+
+  it("média amostral com U real determinístico (PRNG seed fixa) fica em μ ± 10%", () => {
+    // 20000 U de um Mersenne-Twister-like determinístico (via seed fixa do
+    // gerador de teste local) -- valida a MATEMÁTICA, não a fonte física.
+    let s = 123456789 >>> 0;
+    const next = () => { // xorshift32 determinístico
+      s ^= s << 13; s >>>= 0; s ^= s >>> 17; s ^= s << 5; s >>>= 0;
+      return s / 4294967296;
+    };
+    const N = 20000;
+    let sum = 0;
+    for (let i = 0; i < N; i++) sum += exponentialFromUniform(next(), 5);
+    const mean = sum / N;
+    expect(mean).toBeGreaterThan(4.5);
+    expect(mean).toBeLessThan(5.5);
+  });
 });
 
 // ─── Modo binário real: fetchQrngRawBytes / fetchQrngRawBytesViaToken ──────
