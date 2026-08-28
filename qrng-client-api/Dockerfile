@@ -12,6 +12,7 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 
 COPY server.js ./
+COPY lib ./lib
 COPY openapi ./openapi
 COPY test ./test
 

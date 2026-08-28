@@ -81,12 +81,12 @@ test.describe("Teste NIST (staging = executor SINTÉTICO)", () => {
     test.setTimeout(45000);
     // cria um job via API e espera concluir
     const buf = Buffer.alloc(8192, 3);
-    const up = await request.post(`/qrng/nist/upload`, {
+    const up = await request.post(`/qrng/nist/nist/upload`, {
       multipart: { file: { name: "ui.bin", mimeType: "application/octet-stream", buffer: buf }, test_type: "both", format: "auto" },
     });
     const { job_id } = await up.json();
     for (let i = 0; i < 40; i++) {
-      const j = await (await request.get(`/qrng/nist/jobs/${job_id}`)).json();
+      const j = await (await request.get(`/qrng/nist/nist/jobs/${job_id}`)).json();
       if (["completed", "failed"].includes(j.status)) break;
       await new Promise((r) => setTimeout(r, 500));
     }

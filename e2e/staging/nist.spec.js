@@ -13,7 +13,10 @@ import { test, expect } from "@playwright/test";
 import crypto from "node:crypto";
 
 const sha256 = (b) => crypto.createHash("sha256").update(b).digest("hex");
-const NP = "/qrng/nist";
+// nginx do staging espelha producao: /qrng/nist/ -> :18092/ . O frontend chama
+// /qrng/nist/nist/<rota> (NIST_API + nistFetch("/nist/...")); /health fica na raiz.
+const NP = "/qrng/nist/nist";        // status, jobs, upload
+const NP_HEALTH = "/qrng/nist/health";
 
 // arquivo .bin de N bytes determinístico
 const binOf = (n, seed = 7) => {
@@ -52,7 +55,7 @@ async function waitJob(request, jobId, { timeout = 30000 } = {}) {
 
 test.describe.serial("NIST staging — identidade do serviço", () => {
   test("/health expõe version + commit + environment=staging (nunca 'production'/'live')", async ({ request }) => {
-    const r = await request.get(`${NP}/health`);
+    const r = await request.get(`${NP_HEALTH}`);
     expect(r.status()).toBe(200);
     const b = await r.json();
     expect(b.service).toBe("qrng-nist-api");
@@ -117,13 +120,13 @@ test.describe.serial("NIST staging — política de upload", () => {
   });
 
   test("no limite exato: aceito (limit bytes)", async ({ request }) => {
-    const limit = (await (await request.get(`${NP}/health`)).json()).upload_policy.max_bytes;
+    const limit = (await (await request.get(`${NP_HEALTH}`)).json()).upload_policy.max_bytes;
     const r = await uploadFile(request, { name: "exato.bin", mime: "application/octet-stream", buffer: binOf(limit) });
     expect(r.status()).toBe(200);
   });
 
   test("acima do limite: 413 UPLOAD_TOO_LARGE estruturado com limit_bytes + request_id", async ({ request }) => {
-    const limit = (await (await request.get(`${NP}/health`)).json()).upload_policy.max_bytes;
+    const limit = (await (await request.get(`${NP_HEALTH}`)).json()).upload_policy.max_bytes;
     const r = await uploadFile(request, {
       name: "grande.bin", mime: "application/octet-stream", buffer: binOf(limit + 65536),
     });
@@ -136,7 +139,7 @@ test.describe.serial("NIST staging — política de upload", () => {
   });
 
   test("um byte acima do limite: 413", async ({ request }) => {
-    const limit = (await (await request.get(`${NP}/health`)).json()).upload_policy.max_bytes;
+    const limit = (await (await request.get(`${NP_HEALTH}`)).json()).upload_policy.max_bytes;
     const r = await uploadFile(request, { name: "p1.bin", mime: "application/octet-stream", buffer: binOf(limit + 1) });
     expect(r.status()).toBe(413);
   });
@@ -214,7 +217,7 @@ test.describe.serial("NIST staging — lifecycle de job", () => {
     expect(job.status).toBe("failed");
     expect(job.error_message).toBeTruthy();
     // serviço continua de pé
-    expect((await request.get(`${NP}/health`)).status()).toBe(200);
+    expect((await request.get(`${NP_HEALTH}`)).status()).toBe(200);
   });
 
   test("fila + concorrência: 4 uploads simultâneos -> 4 job_ids distintos, todos listados", async ({ request }) => {
@@ -262,7 +265,7 @@ test.describe.serial("NIST staging — lifecycle de job", () => {
 
 test.describe.serial("NIST staging — executor SINTÉTICO identificado (item 4)", () => {
   test("/health e /nist/status marcam engine=fake, synthetic_result=true, statistical_result_valid=false", async ({ request }) => {
-    const h = await (await request.get(`${NP}/health`)).json();
+    const h = await (await request.get(`${NP_HEALTH}`)).json();
     expect(h.assessment_engine).toBe("fake");
     expect(h.assessment_engine_version).toBeTruthy();
     expect(h.synthetic_result).toBe(true);
@@ -290,7 +293,7 @@ test.describe.serial("NIST staging — executor SINTÉTICO identificado (item 4)
     expect(s.periodic_enabled).toBe(false);
     expect(s.next_periodic).toBeNull();
     expect(s.live_capture_configured).toBe(false);
-    const h = await (await request.get(`${NP}/health`)).json();
+    const h = await (await request.get(`${NP_HEALTH}`)).json();
     expect(h.periodic_enabled).toBe(false);
   });
 });
