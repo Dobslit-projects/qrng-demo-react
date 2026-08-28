@@ -6,14 +6,17 @@
 // /random é "replay" no staging e NUNCA "live" / live_verified=true.
 import { test, expect } from "@playwright/test";
 
-// Este spec roda por ÚLTIMO na suíte de staging. Specs anteriores dirigem o
-// fixture-upstream (`_ctl/mode=hang|offline|exhausted|stale`) e, mesmo
-// restaurando no próprio `finally`/`afterAll`, deixavam janelas em que o
-// fixture não estava `online` quando este spec começava — daí o timeout do
-// teste de π no CI (#48–#51). Aqui garantimos o estado conhecido antes de
-// cada teste, como downloads.spec.js / provenance.spec.js já fazem.
+// Este spec roda por ÚLTIMO na suíte de staging. Antes dele:
+//  - `ratelimit.spec.js` faz um burst que estoura o rate-limit público por IP
+//    (60/min) — a janela ainda não rolou quando este spec começa, então a viz
+//    de π pegava HTTP 429 `RATE_LIMIT_EXCEEDED` e nunca renderizava "Erro: %"
+//    (era o timeout de 30 s do CI #48–#53);
+//  - `provenance`/`features`/`ui` dirigem `_ctl/mode` do fixture-upstream.
+// `beforeEach` restaura o estado conhecido, como downloads/provenance já fazem.
 const CTL = process.env.FIXTURE_CTL_URL || null;
 test.beforeEach(async ({ request }) => {
+  // zera o contador de rate-limit público do IP (rota só-staging)
+  await request.post("/qrng/v1/_test/reset-rate-limit").catch(() => {});
   if (!CTL) return;
   await request.post(`${CTL}/_ctl/online`).catch(() => {});
   await request.post(`${CTL}/_ctl/reset`).catch(() => {});

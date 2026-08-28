@@ -1,6 +1,6 @@
 # Rodada 2026-08-28 — respostas verificáveis às 4 perguntas
 
-**Branch:** `stabilize/physical-layer-baseline-20260826` · **HEAD:** `5ccdc2a`+
+**Branch:** `stabilize/physical-layer-baseline-20260826` · **HEAD:** `cdff682`
 **main:** `f058f22` (inalterado) · `local = VM = origin`
 **Terminologia (obrigatória):** *Trilha IID* = testes de hipótese IID +
 min-entropia aplicável. *Trilha não-IID* = estimativas não-IID e a menor
@@ -17,8 +17,10 @@ source (essa permanece INCONCLUSIVA).
 Rodada anterior fechou em `2733968`. Esta rodada: `33de069` (item 4.1
 serialização), `b8e93c1` (item 8 + fix galaxy/mandala), `1f054ef` (itens 7/9
 docs), `2fc9ffc`/`94c1c36` (item 8/9 — `viz-provenance.spec.js` enxuto após
-CI #46/#47), `5ccdc2a`+ (este relatório: L0 completo incl. byte-lanes).
-Nenhum commit em `main`.
+CI #46/#47), `5ccdc2a`/`540feac`/`a5fd8d8` (L0 completo incl. byte-lanes),
+`cdff682` (**f1** endianness `uint32-le` no frontend + 14 vetores de regressão;
+**f2** headers `X-QRNG-*` em JSON + `viz-provenance` sem `res.clone()` — resolve
+CI #48–#51). Nenhum commit em `main`.
 
 ## 2. CI real do HEAD
 
@@ -337,7 +339,10 @@ consumidor — `PROVENANCE_REAL_UPSTREAM.md`): o upstream **não emite**
 
 Regras confirmadas: não inventa `captured_at`; `served_at` ≠ `captured_at`;
 sem evidência ⇒ `live_verified=false` e `actual_origin=unknown`; config `live`
-não prova origem `live`; JSON == headers (raw: `X-QRNG-Provenance: unknown`).
+não prova origem `live`; **JSON == headers** — a partir de `cdff682` os
+`X-QRNG-Provenance` / `-Live-Verified` / `-Fallback-Used` são emitidos também
+nas respostas JSON de `/v1/random` e `/v1/public/random` (antes só em `raw`),
+idênticos aos campos do corpo.
 **Origem live comprovada por resposta: NÃO** (nesta configuração / com este
 upstream).
 
@@ -393,19 +398,33 @@ Em staging, `actual_origin = replay`.
 nos testes unitários node:test do `qrng-client-api`. Upstream real
 (`server_api.py`) só no script de VM `run-prov-real.sh`.
 
-**Contagem no HEAD `94c1c36` (staging fresco na VM):**
-`97 passed` Playwright (1,1 min) — `api.spec` 25 + `downloads` 6 + `features`
-10 + `nist` 33 + `provenance` 9 + `ratelimit` 2 + `ui` 10 (incl. `viz-provenance`
-como parte da suíte; total = 97). Testes unitários: `qrng-client-api` **145**
-(node:test, incl. `serialization.test.js` 12 + `provenance.test.js` 15 +
-`error-contract.test.js` 3), `qrng-nist-api` **44** (python), frontend
-`qrngHelper.test.js` **44** (vitest). **Sem falhas.**
+**Suíte Playwright de staging: 97 testes** — `api.spec` 25 + `downloads` 6 +
+`features` 10 + `nist` 33 + `provenance` 9 + `ratelimit` 2 + `ui` 10 +
+`viz-provenance` 4 (na verdade `api.spec` 27 + … = 97 na contagem `--list`).
 
-Nota: a 1ª versão de `viz-provenance.spec.js` tinha uma asserção frágil
-(`request_id || content_length` — o navegador pode não expor `content-length`
-em raw; o nginx pode usar `chunked`) que passava na VM mas falhou no CI #46/#47.
-Reescrita mais enxuta e tolerante (`94c1c36`); a asserção DURA mantida: toda
-chamada `/random` = `replay`, nunca `live`.
+**Histórico de CI desta rodada (verificado na API do GitHub Actions):**
+- #46/#47 — falha só no Playwright por asserção frágil na 1ª `viz-provenance`
+  (`request_id || content_length`); reescrita em `94c1c36`.
+- #48–#51 (`94c1c36`…`a5fd8d8`) — **ainda falha só no Playwright**: 1 teste,
+  `viz-provenance.spec.js:87` (π), timeout de 30 s. A execução ad-hoc na VM
+  ("97 passed") **não reproduzia o CI**.
+- **Causa-raiz** (bissecção na VM com o fluxo idêntico ao CI): π **isolado**
+  passa; π **após o teste Dados, fixture fresco** passa; π **como último spec
+  da suíte completa** falha → algum spec anterior (`provenance`/`features`/`ui`
+  dirigem `_ctl/mode`) deixava o `fixture-upstream` fora de `online` quando
+  `viz-provenance` começava, e este spec — ao contrário de `downloads`/
+  `provenance` — não tinha `beforeEach` de reset.
+- **Correção (`5fd9b9d`):** `viz-provenance.spec.js` ganhou
+  `beforeEach → _ctl/online + _ctl/reset` (mesma disciplina dos outros specs) e
+  espera o botão de π ficar visível antes de clicar. Reexecução do fluxo CI
+  completo na VM após o fix: **§ abaixo**.
+- Testes unitários (VM, CI-equivalente, `94c1c36`/`5fd9b9d`): `qrng-client-api`
+  **145** node:test, `qrng-nist-api` **44** python, frontend `qrngHelper.test.js`
+  **58** vitest (44 + 14 vetores de endianness de `readUint32LE`) + `AppContext`
+  22. **Sem falhas.**
+
+**Reexecução do fluxo CI completo na VM em `5fd9b9d`:** *(preencher com o
+resultado — 97 passed / N failed)*.
 
 ## 19. Plano corrigido de deploy
 

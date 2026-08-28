@@ -1,8 +1,14 @@
-// Rate limit no STAGING atrás do nginx real do compose. Roda por ÚLTIMO
-// (nome > api/downloads) para não estourar a cota dos outros specs.
-// NOTA: um único IP de origem (o runner). Isolamento entre DOIS IPs reais é
-// tratado separadamente em physical-layer/RATE_LIMIT_MULTI_IP.md (item 4).
+// Rate limit no STAGING atrás do nginx real do compose. NOTA: um único IP de
+// origem (o runner). Isolamento entre DOIS IPs reais é tratado separadamente em
+// physical-layer/RATE_LIMIT_MULTI_IP.md (item 4).
+// Este spec ESTOURA de propósito o rate-limit público; o `afterAll` zera o
+// contador (rota só-staging) para não envenenar os specs que rodam depois
+// (`ui`, `viz-provenance`) — antes, a viz de π pegava 429 no CI.
 import { test, expect } from "@playwright/test";
+
+test.afterAll(async ({ request }) => {
+  await request.post("/qrng/v1/_test/reset-rate-limit").catch(() => {});
+});
 
 test.describe.serial("rate limit — endpoint público por IP", () => {
   test("headers RateLimit-* presentes numa resposta 200", async ({ request }) => {

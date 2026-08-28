@@ -2037,6 +2037,16 @@ if (process.env.ENABLE_TEST_ROUTES === "1") {
   app.get("/v1/_test/boom", attachRequestId, (_req, _res) => {
     throw new Error("boom (rota de teste ENABLE_TEST_ROUTES)");
   });
+  // Zera o contador de rate-limit público do IP chamador. Só staging/CI: deixa
+  // os specs sensíveis a rate-limit (ratelimit.spec.js) hermeticos, sem que o
+  // burst deles envenene os specs seguintes (viz-provenance rodava por último e
+  // pegava 429 na viz de π). NUNCA habilitada em produção.
+  app.post("/v1/_test/reset-rate-limit", attachRequestId, (req, res) => {
+    const ip = req.ip || req.socket.remoteAddress;
+    try { publicIpRateLimiter.resetKey(ip); } catch { /* store sem resetKey */ }
+    publicIpDailyUsage.delete(ip);
+    res.json({ request_id: req.requestId, reset: true, ip });
+  });
 }
 
 // ── 404 catch-all estruturado ───────────────────────────────────────────────
