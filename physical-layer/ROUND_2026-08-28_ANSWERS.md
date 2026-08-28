@@ -22,7 +22,7 @@ Nenhum commit em `main`.
 
 ## 2. CI real do HEAD
 
-- **run #45** (`2733396878d114aa76f48fa8d1c3e49afe0d77867`) —
+- **run #45** (`273396878d114aa76f48fa8d1c3e49afe0d77867`) —
   https://github.com/Dobslit-projects/qrng-demo-react/actions/runs/33180151062 —
   **completed / success**. 5 jobs, **todos os steps `success`** (só
   "Logs do staging em caso de falha" = `skipped`, esperado). **Sem
@@ -31,8 +31,22 @@ Nenhum commit em `main`.
   **só `STABILIZATION_REPORT.md`** (10+/9−). O `c80f043` foi o último commit
   de código; o `2733968` só editou o relatório. Logo o suite completo rodou
   sobre o mesmo código em #44 (`c80f043`) e #45 (`2733968`), ambos verdes.
-- O HEAD desta rodada (`1f054ef`) dispara um novo run — registrar o resultado
-  ao fechar. (`33de069`/`b8e93c1` adicionaram testes; `1f054ef` é doc.)
+- **Runs subsequentes desta rodada:** #46 (`b8e93c1`) e #47 (`1f054ef`)
+  **falharam apenas** no step "E2E Playwright (staging determinístico)" — todos
+  os demais jobs verdes — por uma asserção frágil na 1ª versão de
+  `viz-provenance.spec.js` (`request_id || content_length`; o navegador pode não
+  expor `content-length` em resposta raw, o nginx pode usar `chunked`). Corrigido
+  em `2fc9ffc`/`94c1c36` (spec reescrito, asserção DURA mantida).
+- **HEAD `94c1c36`** (último commit de **código** desta rodada): suíte completa
+  reexecutada em **staging fresco na VM** — `97 passed` Playwright + `145`
+  (`qrng-client-api` node:test) + `44` (`qrng-nist-api` python) + `44`
+  (`qrngHelper.test.js` vitest), **sem falhas** (item 18).
+- **`5ccdc2a` e `540feac`** (HEAD atual) alteram **somente**
+  `physical-layer/ROUND_2026-08-28_ANSWERS.md` — nenhum código, nenhum teste;
+  não podem mudar o resultado da suíte verde em `94c1c36`.
+- `gh`/token do GitHub Actions **não disponíveis nesta sessão** (e a gestão de
+  credenciais está fora de escopo) → o veredito de CI do HEAD documental não foi
+  lido da API; a base é a reexecução local/VM acima.
 
 ## 3. Inventário e hashes das amostras L0
 
