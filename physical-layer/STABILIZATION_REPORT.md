@@ -16,25 +16,52 @@
 
 ---
 
+## 0. Atualização — rodada de 2026-08-28
+
+Escopo autorizado desta rodada executado sobre o HEAD `542dad4`:
+
+| item | entrega | commit(s) | estado |
+|---|---|---|---|
+| 1 — CI do HEAD | run #36 (`542dad4`) registrado: completed/**success**, 5 jobs, todos os passos success | `6248f0a` | ✅ (§2, `CI_VERIFICATION.md`) |
+| 2 — correções do relatório | "escopo autorizado executado; unidade física / viés / restart / RCT-APT permanecem INCONCLUSIVOS/BLOQUEADOS"; NIST diff → "não identificou mudança intencional nos estimadores; equivalência pendente de comparação com a suíte real"; THROUGHPUT → "vazão observada na fronteira de software; sem relação comprovada com a taxa física" | `6248f0a` | ✅ |
+| 3 — proveniência por resposta | `qrng-client-api/lib/provenance.js` (função pura) + `provenance_detail{configured_source, instance_mode, actual_origin, source_health, buffer_health, captured_at, served_at, sample_age_ms, capture_id, fallback_used, live_verified}` em `/v1/random`, `/v1/public/random`, `/v1/health` e nos 502/503; headers `X-QRNG-*` no raw; `QRNG_PROVENANCE` vira teto da instância (nunca eleva); `fallback_used` prevalece; replay/fixture/historical nunca `live`; amostra velha/insuficiente derruba `live`; OpenAPI `ProvenanceDetail`; fixture `/_ctl/mode`; frontend `HardwareStatusBar` mostra "origem efetiva". **12 testes unitários** (9 cenários exigidos + bônus) + `e2e/staging/provenance.spec.js` | `9350732` | ✅ |
+| 4 — executor fake identificado | `assessment_engine`/`assessment_engine_version`/`synthetic_result`/`statistical_result_valid` em `/health`, `/nist/status`, job e histórico; sem `NIST_LIVE_CAPTURE_PATH` → **nenhum timer periódico**, `next_periodic=null`, `periodic_enabled=false`; UI: banner obrigatório "RESULTADO SINTÉTICO DE STAGING — NÃO É UM ASSESSMENT SP 800-90B", tag SINTÉTICO nos valores, "captura live indisponível". E2E em `nist.spec.js` + `ui.spec.js` | `9350732` | ✅ |
+| 5 — cobertura E2E | `e2e/staging/features.spec.js` (**4/4** na VM): Monte Carlo π (π̂ plausível, `π̂=4·inside/total`, `Erro%=|π̂-π|/π·100`, sem NaN), máximo de f(x)=sin(x)+cos(2x) (≤ ~1,7602), Análise PRNG×QRNG (64 bits/coluna, scatter+histograma, sem NaN), Sonificação (AudioContext suspenso tratado sem lançar). Exponencial: **+4 testes de lib** (`src/lib/qrngHelper.test.js`, 30→34) — identidade `X=-μ·ln(1-U)` μ=5, todo U∈[0,1), log(0) impossível, caudas, média μ±10% | `ffa41c9`, `41b2b18` | ✅ |
+| 6 — endurecimento de upload NIST | arquivo gravado com **nome gerado pelo servidor** (`sample<ext>`); nome do cliente nunca vira caminho (`_safe_name` endurecido: `../`, separadores Windows, absoluto, controle/NUL, comprimento); `.txt` E `.csv` **normalizados de verdade** (negativo, >uint32, delimitador, colunas inconsistentes, "texto com dígitos" → `first_parse_error` ou falha explícita); persistidos após o worker: `sha256_normalized`, `size_original/normalized_bytes`, `normalized_symbol_count`, `first_parse_error`, `endianness_rule`, `stored_filename`. **nist unit 23→37**; `nist.spec.js` +12 | `9350732` | ✅ |
+| 7 — NIST staging com a suíte REAL | `staging/nist-staging-real/` — imagem que compila `usnistgov/SP800-90B_EntropyAssessment` @ `87c104d0` (g++ `-std=c++11 -fopenmp -O2 -ffloat-store`, **sem** `-march=native`), roda a versão controlada em `:18093`, `assessment_engine=sp800-90b-reference`, `synthetic_result=false`, DB/data isolados, wrapper `qrng_nist90b.sh` byte-idêntico ao de produção (sha256 `aaec3c3e…`). `compare.py` roda o MESMO arquivo (cópia read-only de `run_new_01.bin`, 1 MiB) no produtivo `:18002` e no staging-real e faz o diff de ~28 campos. **Ver §7-bis.** | `7c44e23`, `b3024d1`, `41b2b18` | 🟡 comparação executada — ver §7-bis |
+| 8 — inspeção read-only da FPGA | **NÃO executada**: o classificador de segurança do ambiente bloqueia o SSH por senha encadeado para `10.0.10.2` mesmo para comandos read-only. `physical-layer/FPGA_INSPECTION.md`: roteiro read-only completo para o operador + proposta EXATA de instrumentação (ponto/método/duração/risco/rollback/consumidor único/prova do mesmo bloco) | `b3024d1` | ⛔ bloqueado por tooling |
+| 9 — plano da janela física | `physical-layer/PHYSICAL_WINDOW_PLAN.md`: ações A–F (tap install/remove, captura por fronteira, reset de processo, reset de FIFO, reset de FPGA, piloto de 3–5 power-cycles) — cada uma com impacto/duração/dados descartados/critério de sucesso/critério de aborto/recuperação/rollback/responsável; ordem com portões e pontos de parada | `b3024d1` | ✅ (documento) |
+
+Regressões de staging corrigidas nesta rodada: `qrng-client-api/Dockerfile`
+não copiava `lib/` → container caía no boot (13 falhas de E2E); `nginx`
+do NIST staging não espelhava o caminho de produção (`/qrng/nist/nist/...`).
+Ambas corrigidas em `326f38a`; backend permaneceu verde (client-api 127/127,
+nist 37/37). Validação completa na VM após as correções: **Playwright 85/85**.
+
 ## 1. Commits e branches
 
-28 commits em `f058f22..89a63fd`, todos em
-`stabilize/physical-layer-baseline-20260826`. `local = VM (/root/projects) =
-origin (github Dobslit-projects/qrng-demo-react)` no HEAD `89a63fd`.
-Fila desta fase: `f86c3d8` (item 1), `ecd75fa`+`c32ddd0` (item 2),
-`56ee289…22199f3`+`e7d7224` (item 3), `4ef76c6` (item 4), `0941bdc`+`89a63fd`
-(item 5), `fca2bc7` (item 6), `cc50fef` (itens 7 e 9), `ffc763c` (fix de lint
-que reprovava o CI). Nenhum commit em `main`.
+Rodada anterior: 28 commits em `f058f22..89a63fd`. Rodada de 2026-08-28:
+`6248f0a` (itens 1-2), `9350732` (itens 3-4-6), `326f38a` (fix staging),
+`7c44e23`+`b3024d1`+`41b2b18` (item 7 + itens 8-9 docs), `ffa41c9`+`41b2b18`
+(item 5). HEAD atual **`41b2b18`**. `local = VM (/root/projects) =
+origin (github Dobslit-projects/qrng-demo-react)`. **Nenhum commit em `main`**
+(`main` = `f058f22`).
 
 ## 2. GitHub Actions real
 
-Repo público → API do Actions consultável sem token. Última execução:
-**run #35** para `89a63fd` (em andamento no fecho deste relatório); **run #34**
-(`ffc763c`) = **success** em todos os 5 jobs:
-`Frontend (build + testes)`, `qrng-nist-api (testes Python)`,
-`qrng-client-api (testes + OpenAPI)`, `physical-layer (RCT/APT health tests)`,
-`E2E Playwright (staging determinístico)`. Run #32/#33 reprovaram só no passo
-**Lint** (`no-unused-vars` em `ratelimit.spec.js`), corrigido em `ffc763c`.
+Repo público → API do Actions consultável sem token.
+
+- **HEAD final da fase anterior — run #36 (`542dad4`)**: completed / **success**,
+  5 jobs, todos os passos success (`CI_VERIFICATION.md` §"HEAD FINAL DA FASE"):
+  Frontend (build+testes), qrng-client-api (testes + OpenAPI drift),
+  qrng-nist-api (testes Python), physical-layer (RCT/APT + os 2 harnesses
+  11/11 + 8/8), E2E Playwright (staging determinístico, bloqueante).
+- **Rodada de 2026-08-28**: runs #37 (`7c44e23`) e #38 (`b3024d1`) =
+  **success**. O HEAD `41b2b18` dispara o run #39 (registrar o resultado final
+  ao fechar).
+- Runs #32/#33 haviam reprovado só no passo **Lint** (`no-unused-vars` em
+  `ratelimit.spec.js`), corrigido em `ffc763c`.
+
 CI real **verificado** (não substituído por execução local).
 
 ## 3. Arquitetura do staging
@@ -333,9 +360,19 @@ em produção muda.
 1. `git checkout main && git merge --ff-only stabilize/physical-layer-baseline-20260826`
    (a branch é linear sobre `f058f22`).
 2. Frontend + API: rebuild e redeploy dos containers `qrng-client-api` e `web`
-   (mesma imagem já exercitada no staging; provenance passa a vir de env —
-   produção fica `QRNG_PROVENANCE=live` explícito).
-3. NIST: **não** neste deploy — segue o plano próprio (item 21).
+   (mesma imagem já exercitada no staging).
+   - **`qrng-client-api` agora requer `lib/` ao lado de `server.js`**
+     (`require("./lib/provenance")`). O container in-repo já faz `COPY lib`; o
+     deploy real por systemd/rsync **deve incluir `qrng-client-api/lib/`** —
+     sem isso o processo não sobe.
+   - Produção fica `QRNG_PROVENANCE=live` explícito (agora = **modo/teto** da
+     instância; `actual_origin` de cada resposta é resolvido em tempo real e
+     só é `live` com evidência do caminho live).
+   - Opcional: `QRNG_CONFIGURED_SOURCE=fpga`, `LIVE_SAMPLE_MAX_AGE_MS`.
+   - Para `live_verified=true` e `sample_age_ms` reais, o `server_api.py` de
+     produção precisaria emitir `X-QRNG-Captured-At` / `X-QRNG-Capture-Id`
+     (não emite hoje → `captured_at=null`, `live_verified=false`, honesto).
+3. NIST: **não** neste deploy — segue o plano próprio (item 21 + §7-bis).
 4. RCT/APT: **não** entra no caminho live — segue desativado até itens 6/13/10.
 5. Health tests no caminho live: **não** — condição de parada.
 6. Geração de chaves/seeds/nonces/tokens: **continua desabilitada**.
@@ -362,9 +399,16 @@ em produção muda.
   comprovada com a taxa física de amostragem).
 - Rate limit: **quotas independentes por IP**, demonstradas com **dois IPs
   reais distintos**; 429 estruturado; janela de 60 s.
-- Suítes de teste: **62/62** Playwright no staging; **23/23** unit NIST;
-  **11/11** instrumentação; **8/8** restart harness; RCT/APT vs Tabela 2 do
-  SP 800-90B com testes independentes. CI real **verde** em `ffc763c`.
+- Suítes de teste (rodada de 2026-08-28): **85/85** Playwright no staging;
+  **37/37** unit NIST; **127/127** unit client-api (incl. 12 de proveniência);
+  **34** de lib do frontend (incl. exponencial); **11/11** instrumentação;
+  **8/8** restart harness. CI real **verde** em #37/#38.
+- Cada resposta da API agora carrega uma **proveniência resolvida por
+  resposta** (`provenance_detail`), nunca elevada acima do que a instância
+  pode provar; `fallback_used` prevalece sobre a configuração.
+- O NIST de staging expõe explicitamente `assessment_engine`,
+  `synthetic_result` e o banner "RESULTADO SINTÉTICO DE STAGING" — nenhum
+  resultado do executor fake é apresentável como avaliação real.
 - Cada lane de byte, **isoladamente**, tem alta entropia marginal em capturas
   históricas.
 
