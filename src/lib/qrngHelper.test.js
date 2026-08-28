@@ -6,6 +6,8 @@ import {
   generateQrngSequence,
   bytesToHex,
   bytesToUint32Array,
+  readUint32LE,
+  uniformIntFromBytes,
   uint32ToFloat,
   exponentialFromUniform,
   fetchQrngBytes,
@@ -36,8 +38,12 @@ const hexToBytes = (h) => {
  * com o restante do adaptador canônico de bytes QRNG).
  */
 
+// Um uint32 `n` serializado como os 4 bytes do transporte (uint32-le), em hex.
+// Antes emitia big-endian (`n.toString(16)`), inconsistente com struct.pack("<I")
+// do server_api.py — corrigido junto com readUint32LE (R1).
 function hexOfU32(n) {
-  return n.toString(16).padStart(8, "0");
+  const b = [n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff, (n >>> 24) & 0xff];
+  return b.map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
 function mockFetchOnce(hex) {
@@ -226,9 +232,16 @@ describe("Monte Carlo — uint32ToFloat (U = uint32 / 2^32)", () => {
     expect(uint32ToFloat(u32)).toBe(0);
   });
 
-  it("fixture: 80 00 00 00 -> 0.5", () => {
-    const [u32] = bytesToUint32Array(new Uint8Array([0x80, 0x00, 0x00, 0x00]));
+  it("fixture: 00 00 00 80 -> 0.5 (uint32-le: MSB é o último byte)", () => {
+    const [u32] = bytesToUint32Array(new Uint8Array([0x00, 0x00, 0x00, 0x80]));
+    expect(u32).toBe(0x80000000);
     expect(uint32ToFloat(u32)).toBe(0.5);
+  });
+
+  it("fixture: 80 00 00 00 (uint32-le) -> 128 / 2^32 (byte baixo primeiro)", () => {
+    const [u32] = bytesToUint32Array(new Uint8Array([0x80, 0x00, 0x00, 0x00]));
+    expect(u32).toBe(0x00000080);
+    expect(uint32ToFloat(u32)).toBeCloseTo(128 / 4294967296, 15);
   });
 
   it("fixture: FF FF FF FF -> 0.9999999997671694 (nunca exatamente 1)", () => {
@@ -258,12 +271,16 @@ describe("Monte Carlo — uint32ToFloat (U = uint32 / 2^32)", () => {
     const bytes = new Uint8Array(64 * 4);
     for (let i = 0; i < 64; i++) {
       const n = Math.floor((i / 64) * 4294967296);
-      bytes[i * 4]     = (n >>> 24) & 0xff;
-      bytes[i * 4 + 1] = (n >>> 16) & 0xff;
-      bytes[i * 4 + 2] = (n >>> 8) & 0xff;
-      bytes[i * 4 + 3] = n & 0xff;
+      // escrita LITTLE-ENDIAN (byte baixo primeiro) para casar com readUint32LE
+      bytes[i * 4]     = n & 0xff;
+      bytes[i * 4 + 1] = (n >>> 8) & 0xff;
+      bytes[i * 4 + 2] = (n >>> 16) & 0xff;
+      bytes[i * 4 + 3] = (n >>> 24) & 0xff;
     }
-    const floats = bytesToUint32Array(bytes).map(uint32ToFloat);
+    const words = bytesToUint32Array(bytes);
+    // round-trip exato: os uint32 lidos são exatamente os n escritos
+    for (let i = 0; i < 64; i++) expect(words[i]).toBe(Math.floor((i / 64) * 4294967296));
+    const floats = words.map(uint32ToFloat);
     const min = Math.min(...floats);
     const max = Math.max(...floats);
     expect(min).toBeLessThan(0.05);
@@ -472,12 +489,77 @@ describe("integridade de serialização no frontend (item 4.1)", () => {
     const v = new Uint8Array([1, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 9, 9, 9]);
     const w = bytesToUint32Array(v);
     expect(w.length).toBe(2); // 11 bytes -> 2 words, resto (3 bytes) descartado
-    // NOTA: bytesToUint32Array atual monta como (b0<<24)|... -> BIG-ENDIAN.
-    // Documentar o que a função REALMENTE faz (contrato observado):
-    expect(w[0]).toBe(((1 << 24) >>> 0)); // 0x01000000 = big-endian de [1,0,0,0]
-    expect(w[1]).toBe(0xffffffff);
-    // e a normalização Monte Carlo nunca chega a 1
+    expect(w[0]).toBe(1);          // LE de [01,00,00,00]
+    expect(w[1]).toBe(0xffffffff); // simétrico
     for (const x of w) expect(uint32ToFloat(x)).toBeLessThan(1);
+  });
+
+  // ── Regressão de endianness (R1): bytesToUint32Array / readUint32LE devem
+  //    casar EXATAMENTE com o transporte uint32-le (server_api.py struct.pack("<I"),
+  //    /v1/uint32, stream_format "uint32-le") e com DataView.getUint32(i, true). ──
+  describe("endianness uint32-le — vetores de regressão (R1)", () => {
+    // { rótulo: [bytes little-endian, uint32 esperado] }
+    const LE_VECTORS = [
+      ["00 00 00 00", [0x00, 0x00, 0x00, 0x00], 0x00000000],
+      ["01 00 00 00", [0x01, 0x00, 0x00, 0x00], 0x00000001],
+      ["00 00 00 01", [0x00, 0x00, 0x00, 0x01], 0x01000000],
+      ["ff ff ff ff", [0xff, 0xff, 0xff, 0xff], 0xffffffff],
+      ["78 56 34 12", [0x78, 0x56, 0x34, 0x12], 0x12345678],
+      ["12 34 56 78", [0x12, 0x34, 0x56, 0x78], 0x78563412],
+      ["01 02 03 04", [0x01, 0x02, 0x03, 0x04], 0x04030201],
+      ["00 00 00 80", [0x00, 0x00, 0x00, 0x80], 0x80000000],
+      ["ef be ad de", [0xef, 0xbe, 0xad, 0xde], 0xdeadbeef],
+    ];
+
+    for (const [label, bytes, expected] of LE_VECTORS) {
+      it(`[${label}] -> 0x${expected.toString(16).padStart(8, "0")}`, () => {
+        const u8 = new Uint8Array(bytes);
+        // readUint32LE isolado
+        expect(readUint32LE(u8, 0)).toBe(expected >>> 0);
+        // via bytesToUint32Array
+        expect(bytesToUint32Array(u8)[0]).toBe(expected >>> 0);
+        // igual ao DataView little-endian (referência da plataforma)
+        const dv = new DataView(u8.buffer, u8.byteOffset, 4);
+        expect(readUint32LE(u8, 0)).toBe(dv.getUint32(0, true));
+        // e DIFERENTE do big-endian, exceto nos vetores simétricos
+        const be = ((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]) >>> 0;
+        if (be !== (expected >>> 0)) {
+          expect(readUint32LE(u8, 0)).not.toBe(be);
+        }
+      });
+    }
+
+    it("offset não-zero: readUint32LE lê a partir de i", () => {
+      const u8 = new Uint8Array([0xaa, 0xbb, 0x78, 0x56, 0x34, 0x12, 0xcc]);
+      expect(readUint32LE(u8, 2)).toBe(0x12345678);
+    });
+
+    it("stream multi-palavra: cada janela de 4 bytes é uint32-le independente", () => {
+      const u8 = new Uint8Array([
+        0x01, 0x00, 0x00, 0x00, // 1
+        0x00, 0x01, 0x00, 0x00, // 256
+        0x00, 0x00, 0x01, 0x00, // 65536
+        0x00, 0x00, 0x00, 0x01, // 16777216
+      ]);
+      expect(bytesToUint32Array(u8)).toEqual([1, 256, 65536, 16777216]);
+    });
+
+    it("round-trip: pack('<I') simulado -> readUint32LE recupera o valor", () => {
+      const packLE = (n) => new Uint8Array([n & 0xff, (n >>> 8) & 0xff, (n >>> 16) & 0xff, (n >>> 24) & 0xff]);
+      for (const n of [0, 1, 255, 256, 65535, 65536, 0x00abcdef, 0x7fffffff, 0x80000000, 0xfffffffe, 0xffffffff]) {
+        expect(readUint32LE(packLE(n), 0)).toBe(n >>> 0);
+      }
+    });
+
+    it("uniformIntFromBytes / uniformIntsFromBytes também consomem uint32-le", () => {
+      // 0x00000001 (LE) = 1 -> menor que qualquer limite -> range 1000: 1 % 1000 = 1
+      const one = new Uint8Array([0x01, 0x00, 0x00, 0x00]);
+      expect(uniformIntFromBytes(0, 999, one)).toBe(1);
+      expect(uniformIntsFromBytes(one, 0, 999, 1)).toEqual([1]);
+      // 0x00000002 e 0x00000003 em sequência
+      const seq = new Uint8Array([0x02, 0, 0, 0, 0x03, 0, 0, 0]);
+      expect(uniformIntsFromBytes(seq, 0, 999, 2)).toEqual([2, 3]);
+    });
   });
 
   it("nenhum valor Monte Carlo == 1 para uma varredura determinística", () => {

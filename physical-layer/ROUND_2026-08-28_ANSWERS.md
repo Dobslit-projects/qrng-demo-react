@@ -31,22 +31,43 @@ Nenhum commit em `main`.
   **só `STABILIZATION_REPORT.md`** (10+/9−). O `c80f043` foi o último commit
   de código; o `2733968` só editou o relatório. Logo o suite completo rodou
   sobre o mesmo código em #44 (`c80f043`) e #45 (`2733968`), ambos verdes.
-- **Runs subsequentes desta rodada:** #46 (`b8e93c1`) e #47 (`1f054ef`)
-  **falharam apenas** no step "E2E Playwright (staging determinístico)" — todos
-  os demais jobs verdes — por uma asserção frágil na 1ª versão de
-  `viz-provenance.spec.js` (`request_id || content_length`; o navegador pode não
-  expor `content-length` em resposta raw, o nginx pode usar `chunked`). Corrigido
-  em `2fc9ffc`/`94c1c36` (spec reescrito, asserção DURA mantida).
-- **HEAD `94c1c36`** (último commit de **código** desta rodada): suíte completa
-  reexecutada em **staging fresco na VM** — `97 passed` Playwright + `145`
-  (`qrng-client-api` node:test) + `44` (`qrng-nist-api` python) + `44`
-  (`qrngHelper.test.js` vitest), **sem falhas** (item 18).
-- **`5ccdc2a` e `540feac`** (HEAD atual) alteram **somente**
-  `physical-layer/ROUND_2026-08-28_ANSWERS.md` — nenhum código, nenhum teste;
-  não podem mudar o resultado da suíte verde em `94c1c36`.
-- `gh`/token do GitHub Actions **não disponíveis nesta sessão** (e a gestão de
-  credenciais está fora de escopo) → o veredito de CI do HEAD documental não foi
-  lido da API; a base é a reexecução local/VM acima.
+- **CI real desta rodada verificado pela API do GitHub Actions** (runs #48–#51,
+  branch `stabilize/physical-layer-baseline-20260826`):
+
+  | run | commit | conclusão | job que falhou |
+  |---|---|---|---|
+  | #48 | `94c1c36` | **failure** | E2E Playwright (staging determinístico) |
+  | #49 | `5ccdc2a` | **failure** | idem |
+  | #50 | `540feac` | **failure** | idem |
+  | #51 | `a5fd8d8` | **failure** | idem |
+
+  Nos 4 runs, **os outros 4 jobs passaram** (`qrng-client-api`, Frontend,
+  `qrng-nist-api`, `physical-layer`); só o step **"Playwright (e2e/staging) —
+  etapa BLOQUEANTE"** falhou (`exit code 1`). A alegação anterior de "97 passed
+  na VM" **não correspondia ao CI** — a execução na VM tinha diferença de
+  ambiente.
+- **Causa-raiz (reproduzida na VM com o fluxo idêntico ao CI** — checkout limpo,
+  `docker compose staging` + imagem `mcr.microsoft.com/playwright:v1.62.1`,
+  `E2E_STAGING_ONLY=1`): **1 teste** falha —
+  `viz-provenance.spec.js:87 "Aplicações (π): usa a API, actual_origin=replay"`
+  — `expect(getByText(/Erro:\s*[\d.]+\s*%/)).toBeVisible` estoura 30 s. O `π`
+  consome ~5 MB de hex; a instrumentação `INSTRUMENT` fazia
+  `await res.clone().json()` para respostas JSON — o `res.clone()` **teia o
+  stream grande e trava a leitura do corpo pelo app**, então a viz de π nunca
+  renderiza. `features.spec.js:33` (mesmo π, sem `INSTRUMENT`) passa. Demais 93
+  testes passam (94 passed, 1 failed, 2 did not run).
+- **Correção aplicada nesta rodada (`f2`):**
+  1. `qrng-client-api/server.js`: `setProvenanceHeaders(res, prov)` passa a ser
+     chamado **também nas respostas JSON** de `/v1/random` e `/v1/public/random`
+     (antes, só nas `raw`) → os `X-QRNG-Provenance` / `-Live-Verified` /
+     `-Fallback-Used` existem em todos os formatos. Paridade header↔corpo; ganho
+     real para consumidores (Jupyter inclusive) que não querem parsear o corpo.
+  2. `e2e/staging/viz-provenance.spec.js`: `INSTRUMENT` lê proveniência
+     **só dos headers** — nunca clona nem parseia o corpo. Remove o tee.
+  Reexecução do fluxo CI na VM após o fix: **registrada no item 18**.
+- Contagens de teste unitário (VM, CI-equivalente): `qrng-client-api` **145**
+  node:test, `qrng-nist-api` **44** python, frontend `qrngHelper.test.js`
+  **58** vitest (44 + 14 vetores de endianness) + `AppContext` 22.
 
 ## 3. Inventário e hashes das amostras L0
 
@@ -102,11 +123,13 @@ bytes k, k+4, k+8, … — o transporte é `uint32`). `stdout`/`stderr`/`exit`/
 `exit=0`, `dur ≈ 113–120 s` (ea_iid, 1 MiB); `dur ≈ 43 s` por byte-lane.
 **A hipótese IID falhou nas duas capturas independentes de 1 MiB (stream
 intercalado)**; em cap3, o stream intercalado de 10 MiB **não concluiu**
-(timeout) mas as **4 byte-lanes isoladas PASSARAM na Trilha IID**. Isso indica
-que a falha IID do stream intercalado é, ao menos em parte, **artefato da
-intercalação de 4 lanes com distribuições marginais distintas** (transporte
-`uint32-le`), não necessariamente comportamento não-IID intrínseco da fonte.
-De todo modo o crédito de entropia vem da **Trilha não-IID** (item 6).
+(timeout) mas as **4 byte-lanes isoladas PASSARAM na Trilha IID**. Uma leitura
+possível: a falha IID do stream intercalado é uma **hipótese compatível com
+diferenças entre as lanes** — o transporte é `uint32-le` e cada posição de byte
+pode ter distribuição marginal distinta, de modo que a concatenação das 4 lanes
+introduz estrutura detectável que não aparece lane a lane. Não é prova de
+comportamento não-IID intrínseco da fonte, nem o contrário. De todo modo o
+crédito de entropia vem da **Trilha não-IID** (item 6).
 
 ## 6. Estimativa não-IID por captura (Trilha não-IID)
 
@@ -157,8 +180,8 @@ AVALIAÇÃO POR BYTE-LANE (transporte uint32) = lane k = bytes k,k+4,... cada la
 STREAM INTERCALADO = a avaliação do arquivo inteiro (itens 5-7) é do stream
                      intercalado das 4 lanes; serve como ANÁLISE ADICIONAL, não
                      substitui as lanes. Nele a Trilha IID FALHA (cap1/cap2) ou
-                     fica INCONCLUSIVA (cap3, timeout) — coerente com intercalar
-                     lanes de distribuições distintas.
+                     fica INCONCLUSIVA (cap3, timeout) — hipótese compatível com
+                     diferenças entre as lanes (não é prova de não-IID da fonte).
 ```
 
 ## 9. Estado dos restart tests
@@ -188,7 +211,7 @@ REGIÃO 2 — FPGA/FIFO -> fifo.c -> TCP -> connector -> server_api.py : NÃO CO
 | `format=uint8` | array de N inteiros [0,255] → Buffer | **idêntico** |
 | 4 caminhos entre si | raw == hex == base64 == uint8 | **mesmo SHA-256** |
 | frontend `bytesToHex` / round-trip | `qrngHelper.test.js`: binário→Hex→binário e →uint8→binário | **SHA-256 preservado** |
-| frontend `bytesToUint32Array` | teste documenta o comportamento observado | **BIG-ENDIAN** — ver item 12 |
+| frontend `bytesToUint32Array` | `readUint32LE` + 14 vetores de regressão vs `DataView.getUint32(i,true)` | **LITTLE-ENDIAN** — corrigido nesta rodada (item 12) |
 | FPGA→`fifo.c`→TCP→connector→`server_api.py` | não instrumentado (janela controlada pendente; nenhum 2º consumidor aberto) | **NÃO COMPROVADO** |
 
 Casos de fronteira testados (região 1): 1, 3, 4, 7, 64, 256, 1000 bytes; não
@@ -219,27 +242,41 @@ As lanes **não alteram bytes** — são um recorte do mesmo binário; a extraç
 `open(src,'rb'); buf[k::4]`. A soma dos 4 comprimentos de lane = 10 485 760 =
 tamanho de `run_new_03.bin`.
 
-## 12. Primeiro offset divergente (serialização) e ACHADO de endianness
+## 12. Primeiro offset divergente (serialização) e endianness — ACHADO CORRIGIDO
 
 - **Serialização raw/hex/base64/uint8:** nenhuma divergência — os bytes são
   preservados byte a byte em todos os formatos e no round-trip.
-- **ACHADO (frontend):** `bytesToUint32Array` decodifica **BIG-ENDIAN**
-  (`(b0<<24)|(b1<<16)|(b2<<8)|b3`), inconsistente com o transporte declarado
-  `uint32-le` (`server_api.py` `struct.unpack("<I")`, `/v1/uint32`,
-  `stream_format: "uint32-le"`). **Os bytes NÃO são alterados** (round-trip
-  provado). O impacto:
-  - Monte Carlo (π) e o otimizador de `f(x)` usam `uint32 / 2^32` como uniforme
-    — qualquer permutação fixa de bytes uniformes → palavra uniforme, então a
-    **validade estatística não muda** (π continua estimado corretamente);
-  - MAS se um usuário comparar os `uint32` do frontend com `/v1/uint32` da API
-    (LE), eles diferem por byte-swap; e o frontend contradiz seu próprio
-    `uint32-le`.
-  - **Correção disponível** (`bytesToUint32Array` → `readUInt32LE`), **não
-    aplicada nesta rodada** — muda o pixel-output das viz de π/otimizador
-    (ainda válidas) e deve ir junto com o rebuild do frontend no deploy.
-    Registrado em RISCOS.
-- `uniformIntFromBytes`/`uniformIntsFromBytes` (geração de chave/int) também
-  montam BE — mas a geração operacional está **DESABILITADA**.
+- **ACHADO (frontend) — era BIG-ENDIAN, agora CORRIGIDO nesta rodada:**
+  `bytesToUint32Array` decodificava `(b0<<24)|(b1<<16)|(b2<<8)|b3` (big-endian),
+  inconsistente com o transporte declarado `uint32-le` (`server_api.py`
+  `struct.unpack("<I")`, `/v1/uint32`, `stream_format: "uint32-le"`). Os bytes
+  nunca foram alterados (round-trip provado) — era uma inconsistência de
+  interpretação, não de dados.
+- **Correção aplicada (`f1` — commit desta rodada):** novo helper
+  `readUint32LE(bytes, i)` = `(b0 | b1<<8 | b2<<16 | b3<<24) >>> 0`, equivalente
+  a `DataView.getUint32(i, true)`. Passou a ser usado em **todos** os pontos que
+  montavam uint32 no frontend:
+  - `src/lib/qrngHelper.js`: `bytesToUint32Array`, `uniformIntFromBytes`,
+    `uniformIntsFromBytes`, `fetchQrngRandIntViaToken`;
+  - `src/components/data/DataSection.jsx`: `pickInt`, `genMonteCarlo`
+    (faixa personalizada + prévia Monte Carlo);
+  - `src/components/kapua/KapuaSection.jsx`: exibição de 1 uint32.
+  `mtClone.js` (jogo preditor de MT19937) **não** foi tocado — extrai o byte
+  alto do seu próprio estado MT, não decodifica o transporte.
+- **Vetores de regressão adicionados** (`src/lib/qrngHelper.test.js`, +14
+  testes; suíte 44 → 58): `describe("endianness uint32-le — vetores de
+  regressão (R1)")` com 9 vetores `[bytes LE] → uint32` (incl. `01 00 00 00`→1,
+  `00 00 00 01`→`0x01000000`, `78 56 34 12`→`0x12345678`, `ef be ad de`→
+  `0xdeadbeef`), cada um checado contra `readUint32LE`, contra
+  `bytesToUint32Array` e contra `DataView.getUint32(i, true)`; offset não-zero;
+  stream multi-palavra `[1,256,65536,16777216]`; round-trip `pack('<I')` →
+  `readUint32LE` para 11 valores de borda; `uniformIntFromBytes`/
+  `uniformIntsFromBytes` também consomem `uint32-le`. Fixtures Monte Carlo
+  ajustadas (`00 00 00 80` → 0.5).
+- **Impacto:** muda o pixel-output das viz de π / otimizador `f(x)` / Monte
+  Carlo (permanecem estatisticamente válidas — permutação fixa de bytes
+  uniformes → palavra uniforme) e alinha o frontend a `/v1/uint32`. Frontend
+  reconstruído: `vitest` 80/80, `eslint` limpo, `vite build` OK.
 
 ## 13. Teste equivalente ao notebook Jupyter
 
@@ -316,8 +353,8 @@ upstream).
 | Histograma (Análise) | `/qrng/api/random` (coluna QRNG) | — | **USA DADOS DA API**; a coluna PRNG é `generatePRNGSequence` (LCG) — **PRNG PARA COMPARAÇÃO IDENTIFICADA** |
 | Scatter (Análise) | idem | — | idem |
 | Visualização de bits (Análise) | idem | — | idem |
-| π Monte Carlo (Aplicações) | `/qrng/api/random` | — | **USA DADOS DA API** (`bytesToUint32Array` BE — ver item 12) |
-| Máx f(x) (Aplicações) | `/qrng/api/random` | — | **USA DADOS DA API** (idem endianness) |
+| π Monte Carlo (Aplicações) | `/qrng/api/random` | — | **USA DADOS DA API** (`bytesToUint32Array` agora LE — item 12) |
+| Máx f(x) (Aplicações) | `/qrng/api/random` | — | **USA DADOS DA API** (uint32-le, item 12) |
 | PRNG × QRNG (Aplicações/Análise) | `/qrng/api/random` p/ QRNG | — | QRNG = API; PRNG = LCG **identificado** |
 | Sonificação (Interativas) | `/qrng/api/random` (`fetchQrngBytes`) | — | **USA DADOS DA API** — `byte → nota`; sem `Math.random` no mapeamento |
 | Faixa personalizada (Dados) | `/qrng/api/random` + `uniformIntsFromBytes` | uint8 | **USA DADOS DA API** (rejection sampling, sem viés de módulo) |
@@ -396,7 +433,7 @@ demonstrou: token sobrevive a restart e a rollback; banco vazio não substitui.
 
 | # | risco / bloqueio | severidade |
 |---|---|---|
-| R1 | **`bytesToUint32Array` big-endian** vs transporte `uint32-le` — bytes preservados, mas os `uint32` das viz de π/otimizador não batem com `/v1/uint32`. Fix disponível, não aplicado (muda output de viz). | média — inconsistência, não corrompe dados nem invalida Monte Carlo |
+| R1 | **`bytesToUint32Array` big-endian vs transporte `uint32-le`** — **CORRIGIDO nesta rodada** (`readUint32LE` em qrngHelper.js + DataSection.jsx + KapuaSection.jsx; 14 vetores de regressão; 80/80 vitest, lint, build OK). Bytes nunca foram alterados. Pendência residual: rebuild do frontend precisa ir no deploy para a UI passar a exibir os mesmos `uint32` de `/v1/uint32`. | resolvido — resta o deploy do frontend reconstruído |
 | R2 | Região **FPGA/FIFO → server_api.py NÃO COMPROVADA** — inspeção read-only da FPGA bloqueada pelo classificador (2 rodadas). Handoff ao operador em `FPGA_INSPECTION.md` (script `fpga_readonly_inspect.sh`, sha256 `cc7a8008…`). | bloqueio — impede itens 6/13 físicos |
 | R3 | **Restart tests e health tests não concluídos** → `SP 800-90B completo = NÃO`. A campanha completa (`NIST_FULLSET_COMPARE.md`) são ~18 h — aguarda autorização. | bloqueio para "conforme SP 800-90B" |
 | R4 | `LIVE_ALLOW_WITHOUT_CAPTURE_EVIDENCE=1` no deploy → `actual_origin="live"` com `live_verified=false` (sem prova de captura fresca). O honesto seria o `server_api.py` carimbar `captured_at` (mexe no caminho FPGA). | baixa — documentado; alternativa é `unknown` |
@@ -415,9 +452,10 @@ nonces/tokens criptográficos, condicionamento, alegação de conformidade SP
    intercalado** (arquivo `uint32` inteiro): **NÃO** — a permutação falha em
    cap1 e cap2 (1 MiB); em cap3 (10 MiB) o teste **não concluiu** (timeout,
    `exit=124`) → INCONCLUSIVO. **Por byte-lane** (transporte é `uint32`, a
-   avaliação primária): as **4 lanes de cap3 PASSARAM** na Trilha IID — o que
-   indica que a falha do stream intercalado é artefato de intercalar lanes de
-   distribuições distintas. Em qualquer recorte, o crédito vem da **Trilha
+   avaliação primária): as **4 lanes de cap3 PASSARAM** na Trilha IID — a falha
+   do stream intercalado é uma **hipótese compatível com diferenças entre as
+   lanes**, não uma prova de não-IID da fonte. Em qualquer recorte, o crédito
+   vem da **Trilha
    não-IID**: menor estimativa válida `6,878090` bits/símbolo de 8 bits (cap2,
    intercalado); por lane, mínimo `6,915310`; estimador limitante =
    **Compression** (trilha bitstring), exceto lanes 0/1 (trilha original,
@@ -426,10 +464,12 @@ nonces/tokens criptográficos, condicionamento, alegação de conformidade SP
 2. **Erro de serialização / conversão / framing / endianness / truncamento?**
    Os **bytes são preservados** integralmente na região `server_api.py → API →
    formatos → frontend` (raw = hex = base64 = uint8, mesmo SHA-256, round-trip
-   provado). **Um ACHADO de endianness:** o frontend `bytesToUint32Array`
-   decodifica big-endian, inconsistente com o transporte `uint32-le` — não
-   altera os bytes nem invalida o Monte Carlo, mas é uma inconsistência (R1).
-   A região FPGA/FIFO → `server_api.py` permanece **NÃO COMPROVADA**.
+   provado). **Havia um ACHADO de endianness** — o frontend `bytesToUint32Array`
+   decodificava big-endian, inconsistente com o transporte `uint32-le` (nunca
+   alterou os bytes nem invalidou o Monte Carlo) — **corrigido nesta rodada**
+   (`readUint32LE` em todos os pontos do frontend + 14 vetores de regressão;
+   80/80 vitest, lint, build OK). Resta apenas o rebuild do frontend ir no
+   deploy. A região FPGA/FIFO → `server_api.py` permanece **NÃO COMPROVADA**.
 3. **A API entrega ao notebook Jupyter os mesmos bytes da origem declarada?**
    A API é **funcional e autenticada**; os **bytes são preservados** entre
    raw/hex/base64/uint8 (mesmo SHA-256). Mas a **origem live NÃO está
@@ -444,9 +484,9 @@ nonces/tokens criptográficos, condicionamento, alegação de conformidade SP
 
 | Pergunta | Resposta | Evidência | Limitação |
 |---|---|---|---|
-| Dados passam na trilha IID? | **Stream intercalado: NÃO** (cap1/cap2 FAIL; cap3 INCONCLUSIVO/timeout). **Byte-lanes: SIM** (4/4 de cap3) | L0: permutação falha em cap1/cap2; `ea_iid` das 4 lanes de cap3 passa chi-square + LRS + permutação | 2 capturas de 1 MiB + cap3 10 MiB; falha do intercalado = artefato de intercalação |
+| Dados passam na trilha IID? | **Stream intercalado: NÃO** (cap1/cap2 FAIL; cap3 INCONCLUSIVO/timeout). **Byte-lanes: SIM** (4/4 de cap3) | L0: permutação falha em cap1/cap2; `ea_iid` das 4 lanes de cap3 passa chi-square + LRS + permutação | 2 capturas de 1 MiB + cap3 10 MiB; falha do intercalado = hipótese compatível com diferenças entre lanes |
 | Qual a estimativa não-IID? | **mín. `6,878090` bits / símbolo de 8 bits** (cap2 intercalado; por lane, mín. `6,915310`); limitante **Compression** (trilha bitstring) | `ea_non_iid` @ `87c104d0`; baseline `6.951334` reproduzido em cap1 | símbolo = byte, **não** amostra física da noise source |
-| Existe alteração por serialização? | **Bytes: NÃO.** Endianness do `uint32` no frontend: **inconsistência** (BE vs LE) | `serialization.test.js` + `qrngHelper.test.js` | R1 — fix não aplicado |
+| Existe alteração por serialização? | **Bytes: NÃO.** Endianness do `uint32` no frontend: **era BE, corrigido para LE** nesta rodada | `serialization.test.js` + `qrngHelper.test.js` (58, incl. 14 vetores de regressão de endianness) | R1 resolvido; falta o deploy do frontend reconstruído |
 | A API funciona com token em Jupyter? | **SIM** | canário: register→token→`GET /v1/random` 200; 401/403/429/503 estruturados | teste contra canário, não produção |
 | Os bytes recebidos são preservados? | **SIM** | raw==hex==base64==uint8, mesmo SHA-256; round-trip | região FPGA→server_api.py não coberta |
 | A origem live está comprovada? | **NÃO** | `server_api.py` real sem `X-QRNG-Captured-At` → `actual_origin=unknown`, `live_verified=false` | precisa de carimbo de captura no upstream |

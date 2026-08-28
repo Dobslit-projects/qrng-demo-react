@@ -21,24 +21,24 @@ const INSTRUMENT = () => {
   Math.random = () => { window.__mr++; return omr(); };
   const of = window.fetch.bind(window);
   window.fetch = async (input, init) => {
-    const url = typeof input === "string" ? input : input.url;
+    const url = typeof input === "string" ? input : (input && input.url) || String(input);
     const res = await of(input, init);
     try {
       if (/\/qrng\/(api|api-fpga|v1)\//.test(url)) {
-        const ct = res.headers.get("content-type") || "";
-        const rec = { url, status: res.status, ct };
-        if (ct.includes("application/json")) {
-          const j = await res.clone().json().catch(() => ({}));
-          rec.request_id = j.request_id;
-          rec.provenance = j.provenance;
-          rec.actual_origin = j.provenance_detail && j.provenance_detail.actual_origin;
-          rec.live_verified = j.provenance_detail && j.provenance_detail.live_verified;
-          rec.fallback_used = j.provenance_detail && j.provenance_detail.fallback_used;
-        } else {
-          rec.actual_origin = res.headers.get("x-qrng-provenance");
-          rec.live_verified = res.headers.get("x-qrng-live-verified");
-        }
-        window.__net.push(rec);
+        // Proveniência SEMPRE pelos headers (raw e JSON) — nunca clonamos nem
+        // parseamos o corpo: para respostas grandes (π consome MBs de hex)
+        // o `res.clone()` teia o stream e trava a leitura do app (era a causa
+        // do timeout de 30 s no CI). server.js agora carimba os X-QRNG-* em
+        // todas as respostas /random, JSON incluído.
+        window.__net.push({
+          url,
+          status: res.status,
+          ct: res.headers.get("content-type") || "",
+          request_id: res.headers.get("x-request-id"),
+          actual_origin: res.headers.get("x-qrng-provenance"),
+          live_verified: res.headers.get("x-qrng-live-verified"),
+          fallback_used: res.headers.get("x-qrng-fallback-used"),
+        });
       }
     } catch { /* noop */ }
     return res;

@@ -1,7 +1,7 @@
 import { useState, useContext } from "react";
 import { theme, formatBytes } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
-import { fetchQrngBytes, fetchQrngRawBytes, PRECOLLECTED_LIMIT } from "../../lib/qrngHelper";
+import { fetchQrngBytes, fetchQrngRawBytes, readUint32LE, PRECOLLECTED_LIMIT } from "../../lib/qrngHelper";
 import Btn from "../ui/Btn";
 
 const MONO = "'IBM Plex Mono', monospace";
@@ -25,12 +25,12 @@ function pickInt(bytes, offset, min, max) {
   const limit = Math.floor(4294967296 / range) * range;
   let i = offset;
   while (i + 3 < bytes.length) {
-    const n = ((bytes[i] << 24) | (bytes[i + 1] << 16) | (bytes[i + 2] << 8) | bytes[i + 3]) >>> 0;
+    const n = readUint32LE(bytes, i); // uint32-le, consistente com o transporte
     i += 4;
     if (n < limit) return { value: min + (n % range), nextOffset: i };
   }
   // Fallback (buffer subdimensionado — shouldn't happen com bytesNeeded() correto)
-  const n = ((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]) >>> 0;
+  const n = readUint32LE(bytes, 0);
   return { value: min + (n % range), nextOffset: offset + 4 };
 }
 
@@ -70,7 +70,7 @@ function genWithoutRepeats(bytes, min, max, count) {
 function genMonteCarlo(bytes, count) {
   const nums = [];
   for (let i = 0; i + 3 < bytes.length && nums.length < count; i += 4) {
-    const n = ((bytes[i] << 24) | (bytes[i + 1] << 16) | (bytes[i + 2] << 8) | bytes[i + 3]) >>> 0;
+    const n = readUint32LE(bytes, i); // uint32-le, consistente com o transporte
     nums.push(n / 4294967296);
   }
   return nums;

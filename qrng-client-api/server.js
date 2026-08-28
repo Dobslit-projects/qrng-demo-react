@@ -1407,6 +1407,10 @@ async function randomHandler(req, res) {
                  : format === "base64" ? buf.toString("base64")
                  : Array.from(buf);
 
+    // Proveniência também nos headers nas respostas JSON (paridade com raw):
+    // consumidores — inclusive instrumentação de teste — podem lê-la sem
+    // baixar/parsear o corpo. O corpo continua trazendo `provenance_detail`.
+    setProvenanceHeaders(res, prov);
     res.json({ request_id: requestId, source: QRNG_SOURCE_LABEL, provenance: prov.actual_origin, provenance_detail: prov, bytes, format, random, timestamp: new Date().toISOString() });
 
   } catch (err) {
@@ -1725,6 +1729,8 @@ async function publicRandomHandler(req, res) {
                  : format === "base64" ? buf.toString("base64")
                  : Array.from(buf);
 
+    // Paridade com raw: proveniência nos headers também nas respostas JSON.
+    setProvenanceHeaders(res, prov);
     res.json({ request_id: requestId, source: QRNG_SOURCE_LABEL, provenance: prov.actual_origin, provenance_detail: prov, bytes, format, random, timestamp: new Date().toISOString() });
 
   } catch (err) {

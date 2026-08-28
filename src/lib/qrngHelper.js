@@ -232,10 +232,22 @@ export function bytesToHex(bytes) {
   return Array.from(bytes).map(b => b.toString(16).padStart(2, "0")).join("");
 }
 
+/**
+ * Lê 4 bytes a partir de `i` como um uint32 LITTLE-ENDIAN
+ * (b0 + b1·2^8 + b2·2^16 + b3·2^24), consistente com o transporte declarado
+ * `uint32-le`: `server_api.py` faz `struct.unpack("<I")`, o endpoint
+ * `/v1/uint32` devolve `uint32-le` e `stream_format` é `"uint32-le"`.
+ * Equivale a `new DataView(buf).getUint32(i, true)` (o 2o argumento `true` =
+ * littleEndian).
+ */
+export function readUint32LE(bytes, i = 0) {
+  return ((bytes[i] | (bytes[i + 1] << 8) | (bytes[i + 2] << 16) | (bytes[i + 3] << 24)) >>> 0);
+}
+
 export function bytesToUint32Array(bytes) {
   const out = [];
   for (let i = 0; i + 3 < bytes.length; i += 4)
-    out.push(((bytes[i] << 24) | (bytes[i+1] << 16) | (bytes[i+2] << 8) | bytes[i+3]) >>> 0);
+    out.push(readUint32LE(bytes, i));
   return out;
 }
 
@@ -270,10 +282,10 @@ export function uniformIntFromBytes(min, max, bytes) {
   const range = max - min + 1;
   const limit = (Math.floor(4294967296 / range)) * range;
   for (let i = 0; i + 3 < bytes.length; i += 4) {
-    const n = ((bytes[i] << 24) | (bytes[i+1] << 16) | (bytes[i+2] << 8) | bytes[i+3]) >>> 0;
+    const n = readUint32LE(bytes, i);
     if (n < limit) return min + (n % range);
   }
-  return min + (((bytes[0] << 24) | (bytes[1] << 16) | (bytes[2] << 8) | bytes[3]) >>> 0) % range;
+  return min + (readUint32LE(bytes, 0) % range);
 }
 
 /**
@@ -289,7 +301,7 @@ export function uniformIntsFromBytes(bytes, min, max, count) {
   const limit = Math.floor(4294967296 / range) * range;
   const out = [];
   for (let i = 0; i + 3 < bytes.length && out.length < count; i += 4) {
-    const n = ((bytes[i] << 24) | (bytes[i+1] << 16) | (bytes[i+2] << 8) | bytes[i+3]) >>> 0;
+    const n = readUint32LE(bytes, i);
     if (n < limit) out.push(min + (n % range));
   }
   return out;
@@ -311,7 +323,7 @@ export async function fetchQrngRandIntViaToken(min, max) {
   for (let attempt = 0; attempt < 8; attempt++) {
     const { bytes } = await fetchQrngBytesViaToken(32); // 8 candidatos uint32
     for (let i = 0; i + 3 < bytes.length; i += 4) {
-      const n = ((bytes[i] << 24) | (bytes[i+1] << 16) | (bytes[i+2] << 8) | bytes[i+3]) >>> 0;
+      const n = readUint32LE(bytes, i);
       if (n < limit) {
         return { value: min + (n % range), latencyMs: Math.round(performance.now() - t0) };
       }
