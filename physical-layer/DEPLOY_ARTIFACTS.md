@@ -1,9 +1,14 @@
 # Artefatos imutáveis de deploy (fase item 8)
 
-**Nenhum deploy foi feito.** Este documento registra as imagens imutáveis
-construídas no Bongo VM, a verificação de conteúdo, os smoke tests e os
-comandos de deploy/rollback — para execução **somente sob autorização** e
-**fora desta rodada** (condição de parada).
+> **DEPLOY EXECUTADO em 2026-08-28 ~18:05 UTC sob autorização explícita do
+> usuário ("autorizo o deploy").** Registro da execução real na seção
+> **"DEPLOY EXECUTADO"** ao fim deste documento. O restante descreve o plano
+> como preparado; a execução seguiu-o com dois desvios documentados
+> (`LIVE_ALLOW_WITHOUT_CAPTURE_EVIDENCE` **não** setado; canário sem cópia da
+> paridade de formatos — já coberta por testes unitários/e2e).
+
+Este documento registra as imagens imutáveis construídas no Bongo VM, a
+verificação de conteúdo, os smoke tests e os comandos de deploy/rollback.
 
 ## Tag / identificação
 
@@ -172,6 +177,96 @@ e-mail → **banco vazio NÃO substituiu**. `persistencia_preservada: true`.
 - `qrng-client-api` sobe sem erro (confirma `lib/` na imagem — `CONTENT_MATCH` garante)
 
 ---
+
+## DEPLOY EXECUTADO — 2026-08-28
+
+**Autorização:** usuário, mensagem "autorizo o deploy" (após 4 tarefas + CI #54
+verde confirmado). **`main` fast-forward `f058f22` → `9e36a90`** e push para
+`origin/main`.
+
+### Imagens imutáveis (build no Bongo VM a partir de `main` @ `9e36a90`)
+
+| imagem | tag | Image Id | CONTENT_MATCH |
+|---|---|---|---|
+| `qrng-client-api` | `9e36a90` | `sha256:c0ebed0b91c1a853754d594ad784d270fa09806387383ed5f480a2bdc3a3fef0` | ✅ `server.js`/`lib/provenance.js`/`openapi/qrng-public-v1.yaml`/`package.json`/`package-lock.json` idênticos ao repo |
+| `qrng-web` | `9e36a90` | `sha256:35e30be7b97fb89012585c8d0de8153fca260c20b4fb943746ee80381c63a697` | bundle `assets/index-GEJGDRrN.js` (= `vite build` local) |
+
+Build via `qrng-client-api/Dockerfile` (repo, **inclui `COPY lib ./lib`**) e
+`./Dockerfile` (repo raiz, `nginx.conf` de produção).
+
+### Backup pré-deploy
+
+`/root/deploy/backups/pre-deploy-9e36a90.bak` — SQLite `.backup` do volume
+`qrng-demo-react_qrng-tokens-db`. sha256 `2876f3bb253a86328f8853c89d456fd672af1b88d63ecc82929d56fae8a41f51`,
+`integrity_check = ok`. **Row counts pré-deploy: `users=1`, `api_tokens=0`**,
+`api_usage_logs=154`, `daily_usage=154`.
+
+### Canário (`:13010`, volume próprio com cópia do DB, upstream REAL)
+
+health 200 · `upstream-health status=up` · register→JWT→token pessoal OK ·
+`/v1/random` autenticado 200 · **`actual_origin=unknown`, `live_verified=false`,
+header `X-QRNG-Provenance` == corpo** · `/v1/_test/boom` e
+`/v1/_test/reset-rate-limit` **ausentes (404)** — rotas de teste NÃO vazaram
+para a config de produção · rate-limit público → 429 estruturado · **token
+sobrevive a `docker restart` do canário**, `/v1/auth/me` mantém o e-mail ·
+`users`/`api_tokens` da cópia preservados. Canário removido após os testes.
+(A checagem de paridade hex==base64==uint8 no canário é inválida contra fonte
+real — 3 requisições ≠ mesmos bytes; a paridade de serialização está coberta
+por `serialization.test.js` + `api.spec.js`, verdes no CI #54.)
+
+### Troca controlada (passos 11–12)
+
+```
+docker stop qrng-client-api ; docker rename qrng-client-api qrng-client-api-prev-9e36a90
+docker run -d --name qrng-client-api --network host --restart unless-stopped \
+  --env-file /root/deploy/qrng/qrng-client-api.env -e DB_PATH=/data/qrng-tokens.db \
+  -v qrng-demo-react_qrng-tokens-db:/data \
+  -l com.docker.compose.project=qrng-demo-react -l com.docker.compose.service=qrng-api \
+  qrng-client-api:9e36a90
+docker stop qrng-web-1 ; docker rename qrng-web-1 qrng-web-1-prev-9e36a90
+docker run -d --name qrng-web-1 --network bridge --restart unless-stopped \
+  -p 127.0.0.1:3001:3001 -e PORT=3001 \
+  -l com.docker.compose.project=qrng -l com.docker.compose.service=web \
+  qrng-web:9e36a90
+```
+
+**DESVIO do plano:** `LIVE_ALLOW_WITHOUT_CAPTURE_EVIDENCE` **NÃO** foi setado
+(o rascunho previa `=1`). Motivo: o `server_api.py` real não carimba evidência
+de captura e a fonte segue "EM VALIDAÇÃO"; com a flag off, produção reporta
+honestamente `actual_origin=unknown` / `live_verified=false` em vez de alegar
+`live` sem prova. Reverter é um único `-e LIVE_ALLOW_WITHOUT_CAPTURE_EVIDENCE=1`
++ recriar o container, se/quando autorizado.
+
+### Verificação pós-troca (`https://bongo.dobslit.com`)
+
+| checagem | resultado |
+|---|---|
+| `/qrng/` (com `bongo_session`) | 200, `<title>Kapuã</title>`, bundle `index-GEJGDRrN.js` (451799 B) |
+| `/qrng/` (sem cookie) | 302 → login Bongo — **gate `$cookie_bongo_session` no nginx do host, pré-existente, não tocado** |
+| `/qrng/v1/health/self` | 200 |
+| `/qrng/v1/openapi.json` | 200, `openapi 3.0.3`, schema `ProvenanceDetail` presente |
+| `/qrng/api/random?bytes=8&format=hex` | 200 · `provenance=unknown` · `actual_origin=unknown` · `live_verified=false` · `fallback_used=false` · header `X-QRNG-Provenance` == corpo |
+| `/qrng/v1/docs/`, `/qrng/v1/redoc` | 200 / 200 |
+| `/qrng/nist/health` (NIST **não** trocado) | 200 |
+| burst rate-limit público | `RATE_LIMIT_EXCEEDED` estruturado + `request_id` |
+| row counts prod pós-troca | `users=1`, `api_tokens=0` — **inalterados** |
+| estabilidade +30 s | `RestartCount=0` ambos; health/random 200 |
+
+### Rollback (pronto, não usado)
+
+Imagens anteriores intactas: `qrng-demo-react-qrng-api:latest`
+(`sha256:10087183…`), `qrng-web:latest` (`sha256:6a87c467…`). Containers
+anteriores arquivados **parados**: `qrng-client-api-prev-9e36a90`,
+`qrng-web-1-prev-9e36a90`. Procedimento = passos 14–15 acima
+(re-`docker run` das imagens `10087183…` / `6a87c467…` no **mesmo volume**
+`qrng-demo-react_qrng-tokens-db`; validar `users`/`api_tokens` contra o backup).
+
+### NÃO alterado neste deploy
+
+Serviço NIST produtivo (`:18002`), broker `:18001`, `server_api.py`/FPGA/FIFO,
+nginx do host, geração de chaves/seeds/nonces/tokens (segue **DESABILITADA**),
+RCT/APT no caminho live, campanha NIST completa. Volume órfão
+`qrng_qrng-tokens-db` (R6) permanece — limpar em manutenção posterior.
 
 ### Manifesto bruto do build
 
