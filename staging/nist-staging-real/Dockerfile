@@ -55,6 +55,13 @@ RUN git clone https://github.com/usnistgov/SP800-90B_EntropyAssessment.git . \
     && sha256sum ea_iid ea_non_iid ea_restart > /opt/sp90b/BINARY_SHA256.txt \
     && cat /opt/sp90b/COMMIT.txt /opt/sp90b/BINARY_SHA256.txt
 
+# wrapper local da Dobslit (NÃO é do repo upstream) — cópia byte-a-byte do que
+# roda em produção: /home/dobslit/SP800-90B_EntropyAssessment/cpp/qrng_nist90b.sh
+# sha256 aaec3c3e8e8faa3e8169c77711c972b124bdecb0541ff283a5894b3ea60fc498
+COPY staging/nist-staging-real/qrng_nist90b.sh /opt/sp90b/cpp/qrng_nist90b.sh
+RUN chmod +x /opt/sp90b/cpp/qrng_nist90b.sh \
+    && sha256sum /opt/sp90b/cpp/qrng_nist90b.sh
+
 COPY qrng-nist-api/nist_service.py /app/nist_service.py
 RUN mkdir -p /data /staging-data
 
