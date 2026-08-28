@@ -2011,12 +2011,33 @@ async function checkUpstream() {
   }
 }
 
+// Rota de teste guardada por env (só staging/CI). Permite exercitar o handler
+// de erro 500 de forma determinística. NUNCA habilitada em produção.
+if (process.env.ENABLE_TEST_ROUTES === "1") {
+  app.get("/v1/_test/boom", attachRequestId, (_req, _res) => {
+    throw new Error("boom (rota de teste ENABLE_TEST_ROUTES)");
+  });
+}
+
+// ── 404 catch-all estruturado ───────────────────────────────────────────────
+// Sem isto, uma rota desconhecida cai no default do Express ("Cannot GET /x"
+// em HTML). Aqui devolve sempre { request_id, error, message } em JSON.
+app.use((req, res) => {
+  const requestId = req.requestId || newRequestId();
+  res.status(404).json({
+    request_id: requestId,
+    error: "NOT_FOUND",
+    message: `Rota não encontrada: ${req.method} ${req.path}`,
+  });
+});
+
 // ── Handler de erro estruturado (item 3) ─────────────────────────────────────
 // Erros do parser de corpo (express.json/body-parser) acontecem ANTES de
 // qualquer middleware de rota, então precisam de um handler de erro global no
 // fim da cadeia. Garante:
 //   - 413 estruturado (JSON) quando o corpo excede JSON_BODY_LIMIT;
 //   - 400 estruturado quando o JSON é inválido / Content-Length não bate;
+//   - 500 estruturado (INTERNAL_ERROR) para qualquer throw não tratado;
 //   - NUNCA HTML nem stack trace no corpo da resposta (o default do Express
 //     em modo dev vaza o stack) -- só { request_id, error, message }.
 // A assinatura de 4 args (err, req, res, next) é o que faz o Express tratar

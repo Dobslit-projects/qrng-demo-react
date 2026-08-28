@@ -112,13 +112,17 @@ def ctl_online():
 
 
 @app.post("/_ctl/mode")
-def ctl_mode(mode: str = Query(...), remaining: int = Query(0, ge=0)):
-    if mode not in ("online", "degraded", "stale", "exhausted", "offline"):
+def ctl_mode(mode: str = Query(...), remaining: int = Query(0, ge=0),
+             hang_seconds: float = Query(5.0, ge=0)):
+    if mode not in ("online", "degraded", "stale", "exhausted", "offline", "hang"):
         return JSONResponse(status_code=400, content={"error": "bad mode"})
     _state["mode"] = mode
     if mode == "exhausted":
         _state["exhaust_remaining"] = remaining or 4096
-    return {"mode": mode, "exhaust_remaining": _state["exhaust_remaining"]}
+    if mode == "hang":
+        _state["hang_seconds"] = hang_seconds
+    return {"mode": mode, "exhaust_remaining": _state["exhaust_remaining"],
+            "hang_seconds": _state.get("hang_seconds")}
 
 
 @app.post("/_ctl/reset")
@@ -180,6 +184,8 @@ def _serve_bytes(n: int) -> bytes:
 @app.get("/random")
 def get_random(bytes: int = Query(1024, ge=1, le=50 * 1024 * 1024),
                format: str = Query("binary")):
+    if _state["mode"] == "hang":
+        time.sleep(_state.get("hang_seconds", 5.0))  # força timeout no client-api
     if not _online():
         return _offline_503()
     data = _serve_bytes(bytes)

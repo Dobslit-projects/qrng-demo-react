@@ -538,6 +538,19 @@ class TestOrphanJobRecovery(unittest.TestCase):
         ns._db_conn.close()
         ns._db_conn = self._orig_conn
 
+    def test_claim_atomico_garante_execucao_unica(self):
+        # item 3: se o mesmo job_id for reivindicado 2x, só a 1a vence.
+        now = datetime.now(timezone.utc).isoformat()
+        ns._db_conn.execute(
+            "INSERT INTO nist_test_jobs (id, created_at, status, trigger_type) VALUES (?,?,?,?)",
+            ("j", now, "queued", "upload"))
+        ns._db_conn.commit()
+        self.assertTrue(ns._claim_job("j"))          # 1a: queued -> running
+        self.assertTrue(ns._claim_job("j"))          # running órfão ainda reivindicável (idempotente p/ recovery)
+        ns._db_conn.execute("UPDATE nist_test_jobs SET status='completed' WHERE id='j'")
+        ns._db_conn.commit()
+        self.assertFalse(ns._claim_job("j"))         # terminado -> NÃO reivindicável
+
     def test_recupera_jobs_orfaos_no_boot(self):
         now = datetime.now(timezone.utc).isoformat()
         for jid, st in [("r1", "running"), ("r2", "running"),

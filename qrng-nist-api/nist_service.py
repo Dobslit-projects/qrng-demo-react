@@ -175,6 +175,13 @@ def _db(sql, params=()):
         _db_conn.execute(sql, params)
         _db_conn.commit()
 
+def _db_exec_rowcount(sql, params=()):
+    """Executa e devolve rowcount (para claim atômico)."""
+    with _db_lock:
+        cur = _db_conn.execute(sql, params)
+        _db_conn.commit()
+        return cur.rowcount
+
 def _db_one(sql, params=()):
     with _db_lock:
         return _db_conn.execute(sql, params).fetchone()
@@ -187,11 +194,27 @@ def _db_all(sql, params=()):
 
 _job_q = queue_module.Queue()
 
+def _claim_job(job_id: str) -> bool:
+    """CLAIM ATÔMICO: transição queued|(running órfão) -> running numa única
+    UPDATE condicional. Se rowcount==0, outro worker/execução já pegou o job
+    (ou ele já terminou) -> NÃO executa. Garante execução única mesmo se o
+    mesmo job_id for enfileirado duas vezes (ex.: _recover_orphan_jobs + um
+    put() duplicado)."""
+    now = datetime.now(timezone.utc).isoformat()
+    n = _db_exec_rowcount(
+        "UPDATE nist_test_jobs SET status='running', started_at=COALESCE(started_at, ?) "
+        "WHERE id=? AND status IN ('queued','running')",
+        (now, job_id))
+    return n == 1
+
 def _worker():
     while True:
         job_id = _job_q.get()
         try:
-            _run_job(job_id)
+            if not _claim_job(job_id):
+                log.info(f"[worker] job {job_id} já reivindicado/terminado -- ignorando (execução única).")
+                continue
+            _run_job(job_id, already_claimed=True)
         except Exception as e:
             log.error(f"[worker] job {job_id} crashed: {e}")
             _db(
@@ -521,12 +544,15 @@ def _parse_output(stdout: str, test_type: str) -> dict:
 
 # ── Job runner ──────────────────────────────────────────────────────────────────
 
-def _run_job(job_id: str):
+def _run_job(job_id: str, already_claimed: bool = False):
     job = _db_one("SELECT * FROM nist_test_jobs WHERE id=?", (job_id,))
     if not job:
         return
 
-    _db("UPDATE nist_test_jobs SET status='running', started_at=? WHERE id=?", (_now(), job_id))
+    # claim atômico (idempotente): se não veio do _worker, tenta reivindicar aqui.
+    if not already_claimed and not _claim_job(job_id):
+        log.info(f"[job {job_id[:8]}] já reivindicado por outro executor -- não roda de novo.")
+        return
     t0 = time.time()
 
     try:

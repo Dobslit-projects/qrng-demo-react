@@ -54,6 +54,8 @@ services:
       PUBLIC_DAILY_QUOTA_REQUESTS_PER_IP: "300"
       ALLOW_LEGACY_TEXT_UPSTREAM: "false"
       METRICS_TOKEN: "staging-metrics"
+      QRNG_REQUEST_TIMEOUT_MS: "2000"   # timeout curto p/ o teste de timeout ser rápido
+      ENABLE_TEST_ROUTES: "1"           # SÓ staging: expõe /v1/_test/boom (500 determinístico)
     volumes:
       - client-api-data:/data
     networks: [kapua-staging]
