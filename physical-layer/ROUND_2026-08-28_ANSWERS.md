@@ -1,6 +1,6 @@
 # Rodada 2026-08-28 — respostas verificáveis às 4 perguntas
 
-**Branch:** `stabilize/physical-layer-baseline-20260826` · **HEAD:** `1f054ef`+
+**Branch:** `stabilize/physical-layer-baseline-20260826` · **HEAD:** `5ccdc2a`+
 **main:** `f058f22` (inalterado) · `local = VM = origin`
 **Terminologia (obrigatória):** *Trilha IID* = testes de hipótese IID +
 min-entropia aplicável. *Trilha não-IID* = estimativas não-IID e a menor
@@ -14,9 +14,11 @@ source (essa permanece INCONCLUSIVA).
 
 ## 1. Branch e commits avaliados
 
-Rodada anterior fechou em `2733968`. Esta rodada: `33de069` (item 4.1),
-`b8e93c1` (item 8 + fix galaxy/mandala), `1f054ef` (itens 7/9 docs). Nenhum
-commit em `main`.
+Rodada anterior fechou em `2733968`. Esta rodada: `33de069` (item 4.1
+serialização), `b8e93c1` (item 8 + fix galaxy/mandala), `1f054ef` (itens 7/9
+docs), `2fc9ffc`/`94c1c36` (item 8/9 — `viz-provenance.spec.js` enxuto após
+CI #46/#47), `5ccdc2a`+ (este relatório: L0 completo incl. byte-lanes).
+Nenhum commit em `main`.
 
 ## 2. CI real do HEAD
 
@@ -77,10 +79,20 @@ bytes k, k+4, k+8, … — o transporte é `uint32`). `stdout`/`stderr`/`exit`/
 | cap1 (`run_new_01.bin`, 1 MiB) | Passou | Passou | **FALHOU** | **FAIL** | 7.456189 — **não usar como crédito de entropia** |
 | cap2 (`run_new_02.bin`, 1 MiB) | Passou | Passou | **FALHOU** | **FAIL** | 7.459140 — não usar |
 | cap2-txt (== cap2) | Passou | Passou | **FALHOU** | **FAIL** | idêntico a cap2 |
-| cap3 (`run_new_03.bin`, 10 MiB) | *(ver item 11 — em execução)* | | | | |
+| cap3 **stream intercalado** (`run_new_03.bin`, 10 MiB) | — | — | **não concluído** | **INCONCLUSIVO** | `ea_iid` atingiu `timeout 1200 s` (`exit=124`), sem veredito de permutação — só a linha parcial `min(H_orig, 8·H_bit)=7.509149` |
+| cap3 **byte-lane 0** (bytes 0,4,8,…; 2 621 440 símbolos) | Passou | Passou | **Passou** | **PASS** | 7.481760 (não é crédito — ver não-IID) |
+| cap3 **byte-lane 1** | Passou | Passou | **Passou** | **PASS** | — |
+| cap3 **byte-lane 2** | Passou | Passou | **Passou** | **PASS** | — |
+| cap3 **byte-lane 3** | Passou | Passou | **Passou** | **PASS** | 7.481760 |
 
-`exit=0`, `dur ≈ 113–120 s` (ea_iid, 1 MiB). **A hipótese IID falhou nas duas
-capturas independentes** → o crédito de entropia vem da **Trilha não-IID**.
+`exit=0`, `dur ≈ 113–120 s` (ea_iid, 1 MiB); `dur ≈ 43 s` por byte-lane.
+**A hipótese IID falhou nas duas capturas independentes de 1 MiB (stream
+intercalado)**; em cap3, o stream intercalado de 10 MiB **não concluiu**
+(timeout) mas as **4 byte-lanes isoladas PASSARAM na Trilha IID**. Isso indica
+que a falha IID do stream intercalado é, ao menos em parte, **artefato da
+intercalação de 4 lanes com distribuições marginais distintas** (transporte
+`uint32-le`), não necessariamente comportamento não-IID intrínseco da fonte.
+De todo modo o crédito de entropia vem da **Trilha não-IID** (item 6).
 
 ## 6. Estimativa não-IID por captura (Trilha não-IID)
 
@@ -89,11 +101,22 @@ capturas independentes** → o crédito de entropia vem da **Trilha não-IID**.
 | cap1 | 7.210061 | T-Tuple Test Estimate | 0.868917 | **Compression Test Estimate (bit string)** | **6.951334** | **bitstring** |
 | cap2 | 7.179165 | T-Tuple Test Estimate | 0.859761 | **Compression Test Estimate (bit string)** | **6.878090** | **bitstring** |
 | cap2-txt | 7.179165 | T-Tuple | 0.859761 | Compression (bit string) | **6.878090** | bitstring |
-| cap3 | *(item 11 — em execução)* | | | | | |
+| cap3 stream intercalado (10 MiB) | 7.428630 | T-Tuple | 0.890185 | **Compression Test Estimate (bit string)** | **7.121482** | **bitstring** |
+| cap3 byte-lane 0 | 6.986780 | **Lag Prediction Test Estimate** | 0.887097 | Compression (bit string) | **6.986780** | **original** |
+| cap3 byte-lane 1 | 6.986771 | **MultiMCW Prediction Test Estimate** | 0.875745 | Compression (bit string) | **6.986771** | **original** |
+| cap3 byte-lane 2 | 7.282199 | T-Tuple | 0.864414 | **Compression Test Estimate (bit string)** | **6.915310** | **bitstring** |
+| cap3 byte-lane 3 | 7.296068 | T-Tuple | 0.875700 | **Compression Test Estimate (bit string)** | **7.005597** | **bitstring** |
+
+Nenhuma lane teve `undersize_warning` (2 621 440 símbolos > 1 000 000 mínimo).
 
 **Baseline reproduzido:** cap1 = `6.951334` bits/símbolo de 8 bits,
 limitante = **Compression** (trilha bitstring), exatamente como o esperado.
-cap2 (captura independente) confirma o padrão com número um pouco menor.
+cap2 (captura independente) confirma o padrão com número um pouco menor
+(`6.878090`). **Menor estimativa não-IID válida encontrada em todo o L0 =
+`6.878090`** (cap2, stream intercalado); por byte-lane o mínimo é `6.915310`
+(cap3 lane 2). Estimador limitante = **Compression** (trilha bitstring) em
+cap1/cap2/cap3-intercalado e nas lanes 2 e 3; nas lanes 0 e 1 (que passam IID)
+o limitante fica na trilha original (estimadores de predição).
 
 ## 7. Estimador limitante
 
@@ -114,10 +137,14 @@ SÍMBOLO DE ASSESSMENT = 8 bits (byte). É o que foi passado a ea_iid/ea_non_iid
 AMOSTRA FÍSICA DA NOISE SOURCE = INCONCLUSIVA (lado FPGA não inspecionado —
                         FPGA_INSPECTION.md). NÃO confundir com o símbolo acima.
 AVALIAÇÃO POR BYTE-LANE (transporte uint32) = lane k = bytes k,k+4,... cada lane
-                        avaliada como símbolos de 8 bits. Resultados: item 11.
+                        avaliada como símbolos de 8 bits. As 4 lanes de cap3
+                        PASSARAM na Trilha IID; não-IID entre 6.915 e 7.006
+                        bits/símbolo de 8 bits. Detalhe: itens 6 e 11.
 STREAM INTERCALADO = a avaliação do arquivo inteiro (itens 5-7) é do stream
                      intercalado das 4 lanes; serve como ANÁLISE ADICIONAL, não
-                     substitui as lanes.
+                     substitui as lanes. Nele a Trilha IID FALHA (cap1/cap2) ou
+                     fica INCONCLUSIVA (cap3, timeout) — coerente com intercalar
+                     lanes de distribuições distintas.
 ```
 
 ## 9. Estado dos restart tests
@@ -161,8 +188,22 @@ signed/unsigned, Monte Carlo `uint32/2^32` ∈ [0,1) **nunca == 1**.
 Para todos os payloads L0 e de fronteira: **`sha256(raw) == sha256(fromHex) ==
 sha256(fromBase64) == sha256(fromUint8)`**, `length` idêntico. **Primeiro offset
 divergente: NENHUM** (`serialization.test.js` — a comparação `deepEqual` /
-`sha256` passa em todos os vetores). Byte-lanes de `cap3`: *(em execução —
-preencher)*.
+`sha256` passa em todos os vetores).
+
+**Byte-lanes de `cap3`** (transporte `uint32`, lane k = bytes k,k+4,k+8,…,
+extraídas de `run_new_03.bin` na VM, cada uma 2 621 440 bytes):
+
+| lane | SHA-256 | Trilha IID | `h_min_non_iid` | trilha limitante | estimador limitante |
+|---|---|---|---|---|---|
+| lane 0 | `run_new_03.lane0.bin` (resultados em `/root/nist_L0/results/L0.cap3.lane0.*`) | **PASS** | 6.986780 | original | Lag Prediction |
+| lane 1 | `…lane1.bin` / `L0.cap3.lane1.*` | **PASS** | 6.986771 | original | MultiMCW Prediction |
+| lane 2 | `…lane2.bin` / `L0.cap3.lane2.*` | **PASS** | 6.915310 | bitstring | Compression |
+| lane 3 | `…lane3.bin` / `L0.cap3.lane3.*` | **PASS** | 7.005597 | bitstring | Compression |
+| intercalado (arquivo inteiro) | `5d30cfab…` (item 3) | **INCONCLUSIVO** (`ea_iid` timeout) | 7.121482 | bitstring | Compression |
+
+As lanes **não alteram bytes** — são um recorte do mesmo binário; a extração é
+`open(src,'rb'); buf[k::4]`. A soma dos 4 comprimentos de lane = 10 485 760 =
+tamanho de `run_new_03.bin`.
 
 ## 12. Primeiro offset divergente (serialização) e ACHADO de endianness
 
@@ -356,10 +397,18 @@ nonces/tokens criptográficos, condicionamento, alegação de conformidade SP
 
 ## 22. Respostas diretas às 4 perguntas
 
-1. **Os dados passam na Trilha IID?** **NÃO** — a hipótese IID falha (teste de
-   permutação) nas duas capturas independentes L0. Estimativa relevante vem da
-   **Trilha não-IID**: `h_min_non_iid ≈ 6,88–6,95` bits por símbolo de 8 bits,
-   estimador limitante = **Compression** (trilha bitstring).
+1. **Os dados passam na Trilha IID?** **Depende do recorte.** No **stream
+   intercalado** (arquivo `uint32` inteiro): **NÃO** — a permutação falha em
+   cap1 e cap2 (1 MiB); em cap3 (10 MiB) o teste **não concluiu** (timeout,
+   `exit=124`) → INCONCLUSIVO. **Por byte-lane** (transporte é `uint32`, a
+   avaliação primária): as **4 lanes de cap3 PASSARAM** na Trilha IID — o que
+   indica que a falha do stream intercalado é artefato de intercalar lanes de
+   distribuições distintas. Em qualquer recorte, o crédito vem da **Trilha
+   não-IID**: menor estimativa válida `6,878090` bits/símbolo de 8 bits (cap2,
+   intercalado); por lane, mínimo `6,915310`; estimador limitante =
+   **Compression** (trilha bitstring), exceto lanes 0/1 (trilha original,
+   estimadores de predição). **Restart tests: NÃO EXECUTADOS. SP 800-90B
+   completo: NÃO.**
 2. **Erro de serialização / conversão / framing / endianness / truncamento?**
    Os **bytes são preservados** integralmente na região `server_api.py → API →
    formatos → frontend` (raw = hex = base64 = uint8, mesmo SHA-256, round-trip
@@ -381,8 +430,8 @@ nonces/tokens criptográficos, condicionamento, alegação de conformidade SP
 
 | Pergunta | Resposta | Evidência | Limitação |
 |---|---|---|---|
-| Dados passam na trilha IID? | **NÃO** | L0: teste de permutação falha em cap1 e cap2 | 2 capturas de 1 MiB; cap3/lanes em execução |
-| Qual a estimativa não-IID? | **≈ 6,88–6,95 bits / símbolo de 8 bits** (limitante Compression, trilha bitstring) | `ea_non_iid` @ `87c104d0`; baseline `6.951334` reproduzido | símbolo = byte, **não** amostra física |
+| Dados passam na trilha IID? | **Stream intercalado: NÃO** (cap1/cap2 FAIL; cap3 INCONCLUSIVO/timeout). **Byte-lanes: SIM** (4/4 de cap3) | L0: permutação falha em cap1/cap2; `ea_iid` das 4 lanes de cap3 passa chi-square + LRS + permutação | 2 capturas de 1 MiB + cap3 10 MiB; falha do intercalado = artefato de intercalação |
+| Qual a estimativa não-IID? | **mín. `6,878090` bits / símbolo de 8 bits** (cap2 intercalado; por lane, mín. `6,915310`); limitante **Compression** (trilha bitstring) | `ea_non_iid` @ `87c104d0`; baseline `6.951334` reproduzido em cap1 | símbolo = byte, **não** amostra física da noise source |
 | Existe alteração por serialização? | **Bytes: NÃO.** Endianness do `uint32` no frontend: **inconsistência** (BE vs LE) | `serialization.test.js` + `qrngHelper.test.js` | R1 — fix não aplicado |
 | A API funciona com token em Jupyter? | **SIM** | canário: register→token→`GET /v1/random` 200; 401/403/429/503 estruturados | teste contra canário, não produção |
 | Os bytes recebidos são preservados? | **SIM** | raw==hex==base64==uint8, mesmo SHA-256; round-trip | região FPGA→server_api.py não coberta |
