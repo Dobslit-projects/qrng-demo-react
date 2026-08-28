@@ -24,6 +24,15 @@ SERVICE_COMMIT     = os.getenv("NIST_SERVICE_COMMIT",     "unknown")
 SERVICE_BUILD_DATE = os.getenv("NIST_SERVICE_BUILD_DATE", "unknown")
 SERVICE_ENV        = os.getenv("NIST_SERVICE_ENV",        "unknown")  # 'staging' | 'production' | ...
 
+# ── Motor de assessment (item 4) ──────────────────────────────────────────────
+# 'sp800-90b-reference' = suíte SP 800-90B real. 'fake' = executor sintético
+# determinístico do staging: NÃO produz um assessment estatístico válido, só
+# exercita fila/parsing/UI. Todo /health, /nist/status, job e histórico
+# carregam essa identificação e synthetic_result / statistical_result_valid.
+NIST_ASSESSMENT_ENGINE = os.getenv("NIST_ASSESSMENT_ENGINE", "sp800-90b-reference")
+NIST_ASSESSMENT_ENGINE_VERSION = os.getenv("NIST_ASSESSMENT_ENGINE_VERSION", "unknown")
+NIST_SYNTHETIC = NIST_ASSESSMENT_ENGINE == "fake"
+
 # ── Config ──────────────────────────────────────────────────────────────────────
 
 NIST_ENABLED       = os.getenv("NIST_ENABLED",        "true").lower() == "true"
@@ -136,6 +145,17 @@ for _col, _decl in [
     ("sample_endianness",        "TEXT"),
     ("sample_conditioned",       "INTEGER"),
     ("captured_at",              "TEXT"),
+    # item 4: identificação do motor de assessment por job (nunca inferida depois)
+    ("assessment_engine",        "TEXT"),
+    ("synthetic_result",         "INTEGER"),
+    # item 6: metadados de normalização registrados APÓS o worker
+    ("sha256_normalized",        "TEXT"),
+    ("size_original_bytes",      "INTEGER"),
+    ("size_normalized_bytes",    "INTEGER"),
+    ("normalized_symbol_count",  "INTEGER"),
+    ("first_parse_error",        "TEXT"),
+    ("endianness_rule",          "TEXT"),
+    ("stored_filename",          "TEXT"),
 ]:
     try:
         _db_conn.execute(f"ALTER TABLE nist_test_jobs ADD COLUMN {_col} {_decl}")
@@ -187,9 +207,17 @@ def _sha256(path: str) -> str:
     return h.hexdigest()
 
 def _safe_name(name: str) -> str:
-    name = os.path.basename(name)
-    name = re.sub(r"[^\w\-_.]", "_", name)
-    return name[:200] or "upload"
+    """Sanitiza um nome de arquivo para uso APENAS como METADADO (nunca como
+    caminho). Neutraliza separadores POSIX e Windows, caminho absoluto,
+    componentes '..', e limita o comprimento. Unicode de texto é preservado
+    (é só um rótulo)."""
+    name = (name or "").replace("\\", "/")
+    name = name.rsplit("/", 1)[-1]                 # descarta qualquer prefixo de diretório
+    name = name.lstrip(". ")                        # sem '..' / '.' / espaço à esquerda
+    name = re.sub(r"[\x00-\x1f\x7f]", "", name)     # sem controle/NUL
+    name = re.sub(r'[/\\:*?"<>|]', "_", name)       # sem metacaracteres de caminho
+    name = name[:180]
+    return name or "upload"
 
 def _safe_unlink(path: Optional[str]) -> None:
     """Remove um temporário/parcial sem nunca levantar (limpeza best-effort)."""
@@ -266,29 +294,73 @@ def _find_latest_data_file() -> Optional[str]:
         return None
     return str(max(candidates, key=lambda p: p.stat().st_mtime))
 
-# ── CSV converter ───────────────────────────────────────────────────────────────
+# ── Normalização de texto/CSV (item 6) ────────────────────────────────────────
+# .txt e .csv de inteiros uint32 -> um valor por linha. Erros de parsing
+# (negativo, > uint32, delimitador inválido, nº de colunas inconsistente,
+# texto com dígitos que não é amostra válida) são REGISTRADOS (first_parse_error)
+# e o job falha com mensagem explícita -- nunca "normalizado" silenciosamente
+# só pela extensão.
 
-def _csv_to_u32txt(src: str, dst: str) -> int:
+_TEXT_SEPARATORS = [",", ";", "\t", " ", "|"]
+
+def _normalize_text_ints(src: str, dst: str) -> tuple:
+    """Retorna (count, first_parse_error|None, endianness_rule).
+    Levanta ValueError se NADA de válido for extraído (com o primeiro erro no texto)."""
     with open(src, "r", errors="replace") as f:
-        content = f.read()
-    for sep in [",", ";", "\t", " "]:
-        content = content.replace(sep, "\n")
+        raw = f.read()
+    if "\x00" in raw:
+        raise ValueError("arquivo de texto contém NUL byte -- não é uma amostra de inteiros")
+
+    first_error = None
+    col_counts = set()
     vals = []
-    for line in content.splitlines():
+    for lineno, line in enumerate(raw.splitlines(), 1):
         t = line.strip()
         if not t:
             continue
-        try:
-            v = int(t)
-            if 0 <= v <= 4294967295:
-                vals.append(v)
-        except ValueError:
-            pass  # skip header/non-numeric
+        # detecta delimitador da linha
+        parts = None
+        for sep in _TEXT_SEPARATORS:
+            if sep in t:
+                parts = [p for p in t.split(sep) if p != ""]
+                break
+        if parts is None:
+            parts = [t]
+        col_counts.add(len(parts))
+        for tok in parts:
+            tok = tok.strip()
+            try:
+                v = int(tok)
+            except ValueError:
+                if first_error is None:
+                    first_error = f"linha {lineno}: token não-inteiro {tok!r}"
+                continue
+            if v < 0:
+                if first_error is None:
+                    first_error = f"linha {lineno}: inteiro negativo {v}"
+                continue
+            if v > 4294967295:
+                if first_error is None:
+                    first_error = f"linha {lineno}: inteiro acima de uint32 ({v})"
+                continue
+            vals.append(v)
+
+    if len(col_counts) > 1 and first_error is None:
+        first_error = f"número de colunas inconsistente entre linhas: {sorted(col_counts)}"
+
     if not vals:
-        raise ValueError("CSV: nenhum inteiro uint32 válido encontrado")
+        raise ValueError(f"nenhum inteiro uint32 válido encontrado" +
+                         (f" ({first_error})" if first_error else ""))
+
     with open(dst, "w") as f:
         f.write("\n".join(str(v) for v in vals) + "\n")
-    return len(vals)
+    # o script serializa cada uint32 em 4 bytes little-endian antes da avaliação
+    return len(vals), first_error, "uint32 -> 4 bytes little-endian (struct.pack('<I'))"
+
+def _csv_to_u32txt(src: str, dst: str) -> int:
+    """Compat: assinatura antiga usada pelo _run_job. Delega ao normalizador."""
+    count, _err, _rule = _normalize_text_ints(src, dst)
+    return count
 
 # ── Output parser ───────────────────────────────────────────────────────────────
 
@@ -369,23 +441,37 @@ def _run_job(job_id: str):
             )
 
         sha_orig = _sha256(input_path)
-        _db("UPDATE nist_test_jobs SET sha256_original=? WHERE id=?", (sha_orig, job_id))
+        _db("UPDATE nist_test_jobs SET sha256_original=?, size_original_bytes=? WHERE id=?",
+            (sha_orig, file_size, job_id))
 
-        # CSV pre-conversion (script doesn't handle CSV natively)
-        used_path    = input_path
-        fmt_detected = fmt_req
-        norm_path    = None
+        # item 6: .txt E .csv de inteiros são NORMALIZADOS (um valor por linha),
+        # com o primeiro erro de parsing registrado. .bin é passthrough.
+        used_path       = input_path
+        fmt_detected    = fmt_req
+        norm_path       = None
+        norm_symbols    = None
+        first_parse_err = None
+        endianness_rule = None
+        low = input_path.lower()
 
-        if input_path.lower().endswith(".csv"):
-            norm_path = input_path.replace(".csv", "_normalized.txt")
-            count = _csv_to_u32txt(input_path, norm_path)
-            log.info(f"[job {job_id[:8]}] CSV → {count} valores u32")
+        if low.endswith((".csv", ".txt")):
+            norm_path = re.sub(r"\.(csv|txt)$", "_normalized.txt", input_path, flags=re.I)
+            norm_symbols, first_parse_err, endianness_rule = _normalize_text_ints(input_path, norm_path)
+            log.info(f"[job {job_id[:8]}] texto → {norm_symbols} valores u32"
+                     f"{' (primeiro erro: ' + first_parse_err + ')' if first_parse_err else ''}")
             used_path    = norm_path
             fmt_detected = "u32txt"
         elif fmt_req == "auto":
-            fmt_detected = "raw" if input_path.lower().endswith(".bin") else "u32txt"
+            fmt_detected = "raw" if low.endswith(".bin") else "u32txt"
 
         sha_used = _sha256(used_path)
+        size_norm = os.path.getsize(used_path)
+        if norm_symbols is None:  # .bin: símbolos = bytes (8 bits/símbolo)
+            norm_symbols = size_norm
+        _db("""UPDATE nist_test_jobs SET
+                sha256_normalized=?, size_normalized_bytes=?, normalized_symbol_count=?,
+                first_parse_error=?, endianness_rule=? WHERE id=?""",
+            (sha_used, size_norm, norm_symbols, first_parse_err, endianness_rule, job_id))
 
         # Determinado aqui, no único ponto em que format_detected é
         # conhecido com certeza -- persistido imediatamente, nunca
@@ -528,12 +614,14 @@ def _create_and_enqueue(
     _db("""INSERT INTO nist_test_jobs
                (id, created_at, status, trigger_type, input_file_path, original_filename,
                 test_type, format_requested, sample_origin, transport_format,
-                source_word_width, sample_conditioned, captured_at)
-           VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                source_word_width, sample_conditioned, captured_at,
+                assessment_engine, synthetic_result)
+           VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
         (job_id, _now(), trigger, input_path, orig_name, test_type, fmt,
          sample_origin, transport_format, source_word_width,
          None if sample_conditioned is None else int(sample_conditioned),
-         captured_at))
+         captured_at,
+         NIST_ASSESSMENT_ENGINE, 1 if NIST_SYNTHETIC else 0))
     _job_q.put(job_id)
     return job_id
 
@@ -547,18 +635,9 @@ def _schedule_periodic():
     threading.Timer(NIST_INTERVAL_SEC, _run_periodic).start()
 
 def _run_periodic():
-    if not NIST_ENABLED:
-        return
-    if not NIST_LIVE_CAPTURE_PATH:
-        # Item 2 da auditoria: sem captura ao vivo controlada configurada,
-        # o scheduler NÃO procura genericamente pelo arquivo mais recente
-        # na árvore compartilhada (isso é o que causava o job periódico
-        # ficar preso reavaliando artefatos de auditoria manual antigos
-        # como se fossem saúde atual). Fica inerte até NIST_LIVE_CAPTURE_PATH
-        # ser configurado para um mecanismo real de captura -- não
-        # implementado aqui, é uma lacuna de infraestrutura separada.
-        log.info("[periodic] NIST_LIVE_CAPTURE_PATH não configurado -- sem amostra live recente, nenhum job criado.")
-        _schedule_periodic()
+    # Item 4: se a captura live não está configurada, NÃO reagenda. O scheduler
+    # simplesmente não roda -- next_periodic fica null e periodic_enabled=false.
+    if not (NIST_ENABLED and NIST_LIVE_CAPTURE_PATH):
         return
 
     if not os.path.exists(NIST_LIVE_CAPTURE_PATH):
@@ -586,7 +665,9 @@ def _run_periodic():
     )
     _schedule_periodic()
 
-if NIST_ENABLED:
+# Item 4: só arranca o agendador periódico se houver captura live controlada.
+# Sem ela, NENHUM timer é criado e next_periodic permanece None.
+if NIST_ENABLED and NIST_LIVE_CAPTURE_PATH:
     _schedule_periodic()
 
 # ── FastAPI ─────────────────────────────────────────────────────────────────────
@@ -662,6 +743,18 @@ def _row(row) -> dict:
     d["sample_endianness"]       = _meta_or_unknown(d.get("sample_endianness"))
     d["submitted_at"]            = d.get("created_at")  # alias semântico -- mesma coluna
 
+    # Item 4: identificação do motor de assessment DESTE job (persistida na
+    # submissão). Jobs sem a coluna (pré-migração) caem no motor atual do
+    # serviço, mas nunca são reclassificados como "válidos" retroativamente.
+    _engine = d.get("assessment_engine") or NIST_ASSESSMENT_ENGINE
+    _synth  = d.get("synthetic_result")
+    if _synth is None:
+        _synth = 1 if _engine == "fake" else 0
+    d["assessment_engine"]         = _engine
+    d["assessment_engine_version"] = NIST_ASSESSMENT_ENGINE_VERSION
+    d["synthetic_result"]          = bool(_synth)
+    d["statistical_result_valid"]  = not bool(_synth)
+
     # Idade da amostra: usa captured_at persistido (nunca mtime relido ao
     # vivo -- o arquivo pode ter sido removido/rotacionado desde o job).
     d["sample_captured_age_seconds"] = None
@@ -691,6 +784,12 @@ def health():
         "commit": SERVICE_COMMIT,
         "build_date": SERVICE_BUILD_DATE,
         "environment": SERVICE_ENV,
+        "assessment_engine": NIST_ASSESSMENT_ENGINE,
+        "assessment_engine_version": NIST_ASSESSMENT_ENGINE_VERSION,
+        "synthetic_result": NIST_SYNTHETIC,
+        "statistical_result_valid": not NIST_SYNTHETIC,
+        "periodic_enabled": bool(NIST_ENABLED and NIST_LIVE_CAPTURE_PATH),
+        "live_capture_configured": NIST_LIVE_CAPTURE_PATH is not None,
         "upload_policy": {
             "max_bytes": NIST_UPLOAD_MAX_BYTES,
             "allowed_extensions": sorted(NIST_ALLOWED_UPLOAD_EXT),
@@ -717,6 +816,10 @@ def nist_status():
             "commit":     SERVICE_COMMIT,
             "build_date": SERVICE_BUILD_DATE,
             "environment": SERVICE_ENV,
+            "assessment_engine": NIST_ASSESSMENT_ENGINE,
+            "assessment_engine_version": NIST_ASSESSMENT_ENGINE_VERSION,
+            "synthetic_result": NIST_SYNTHETIC,
+            "statistical_result_valid": not NIST_SYNTHETIC,
         },
         "suite_dir":         NIST_SUITE_DIR,
         "script":            NIST_SCRIPT,
@@ -728,6 +831,9 @@ def nist_status():
         "min_bytes":         NIST_MIN_BYTES,
         "queue_depth":       _job_q.qsize(),
         "has_active_job":    running is not None,
+        # Item 4: sem captura live controlada, NENHUMA execução periódica é
+        # agendada -> next_periodic é null e periodic_enabled=false.
+        "periodic_enabled":  bool(NIST_ENABLED and NIST_LIVE_CAPTURE_PATH),
         "next_periodic":     datetime.fromtimestamp(_next_periodic, tz=timezone.utc).isoformat()
                              if _next_periodic else None,
         # Item 2 da auditoria: expõe explicitamente que não há monitoramento
@@ -861,7 +967,14 @@ async def nist_upload(
     today   = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     job_dir = os.path.join(NIST_UPLOAD_DIR, today, f"job_{job_id[:8]}")
     Path(job_dir).mkdir(parents=True, exist_ok=True)
-    safe_name = _safe_name(orig)
+
+    # item 6: o arquivo é gravado com NOME GERADO PELO SERVIDOR (sample<ext>).
+    # O nome enviado pelo cliente NUNCA vira caminho -- só é guardado como
+    # metadado sanitizado (neutraliza ../, separadores Windows, caminho
+    # absoluto, Unicode e nomes gigantes). O diretório do job já é único.
+    sanitized_original = _safe_name(orig)          # metadado apenas
+    server_name = f"sample{ext}"                    # nome real no disco
+    saved_path = os.path.join(job_dir, server_name)
 
     # streaming para um .part temporário; só vira o arquivo final se passar tudo
     tmp_fd, tmp_path = tempfile.mkstemp(dir=job_dir, prefix="upload_", suffix=".part")
@@ -887,7 +1000,6 @@ async def nist_upload(
         _safe_unlink(tmp_path)
         return _err(400, "INVALID_CONTENT", detail=why)
 
-    saved_path = os.path.join(job_dir, safe_name)
     try:
         os.replace(tmp_path, saved_path)
     except OSError as e:
@@ -895,11 +1007,11 @@ async def nist_upload(
         return _err(500, "UPLOAD_PERSIST_ERROR", detail=str(e)[:200])
 
     normalization = _normalization_for_ext(ext)
-    # tamanho "normalizado": só o .csv muda de tamanho (re-serializado como
-    # inteiros um-por-linha) e isso ocorre dentro de _run_job; aqui reportamos
-    # o tamanho original como normalizado para .bin/.txt e "desconhecido até o
-    # job" para .csv (nunca reprocessamos o arquivo inteiro no handler).
-    size_normalized = total if ext in (".bin", ".txt") else None
+    # item 6: NÃO declara "normalizado" só pela extensão. O tamanho/contagem/
+    # sha256 normalizados e o primeiro erro de parsing são registrados APÓS o
+    # worker (ver _run_job); aqui size_normalized só é conhecido para .bin
+    # (passthrough), e fica null para .txt/.csv até o job rodar.
+    size_normalized = total if ext == ".bin" else None
 
     _create_and_enqueue(
         "upload", saved_path, orig, test_type, format,
@@ -910,6 +1022,7 @@ async def nist_upload(
         captured_at=attested_captured_at,
         job_id=job_id,
     )
+    _db("UPDATE nist_test_jobs SET stored_filename=? WHERE id=?", (server_name, job_id))
 
     return {
         "job_id":                 job_id,
@@ -918,10 +1031,13 @@ async def nist_upload(
         "provenance":             "user_upload",
         "attested":               bool(attested_transport_format),
         "original_filename":      orig,
-        "stored_filename":        safe_name,
+        "original_filename_sanitized": sanitized_original,
+        "stored_filename":        server_name,
+        "server_generated_name":  True,
         "sha256_original":        sha_original,
         "size_original_bytes":    total,
         "size_normalized_bytes":  size_normalized,
+        "normalized_pending":     ext in (".txt", ".csv"),
         "assessment_unit":        "byte",
         "assessment_symbol_width_bits": 8,
         "sample_endianness":      "little" if attested_transport_format == "uint32-le" else "unknown",

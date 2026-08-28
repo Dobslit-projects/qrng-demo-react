@@ -69,6 +69,23 @@ function sampleOriginLabel(origin) {
   return map[origin] || (origin ? String(origin) : "Desconhecida");
 }
 
+// Item 4: o serviço está rodando com executor SINTÉTICO (staging fake)?
+function isSyntheticEngine(status) {
+  const s = status?.service;
+  return !!(s && (s.synthetic_result === true || s.assessment_engine === "fake"));
+}
+
+// Marcador inline "SINTÉTICO" para valores fake.
+function SyntheticTag() {
+  return (
+    <span style={{
+      marginLeft: 6, padding: "1px 6px", borderRadius: 4, fontSize: 9, fontWeight: 700,
+      fontFamily: "'IBM Plex Mono', monospace", background: theme.danger + "20", color: theme.danger,
+      border: `1px solid ${theme.danger}45`,
+    }}>SINTÉTICO</span>
+  );
+}
+
 function Btn({ onClick, disabled, color, small, children }) {
   return (
     <button
@@ -386,11 +403,28 @@ export default function NISTSection() {
         </div>
       )}
 
+      {/* ── Item 4: executor SINTÉTICO (staging fake) — banner obrigatório ── */}
+      {isSyntheticEngine(status) && (
+        <div data-testid="nist-synthetic-banner" style={{ ...card,
+          background: theme.danger + "12", border: `2px solid ${theme.danger}55`,
+          color: theme.danger, fontSize: 12, fontWeight: 700, fontFamily: mono, lineHeight: 1.6 }}>
+          RESULTADO SINTÉTICO DE STAGING — NÃO É UM ASSESSMENT SP 800-90B
+          <div style={{ fontWeight: 400, fontSize: 11, marginTop: 6, color: theme.textDim }}>
+            Motor: <strong>{status?.service?.assessment_engine}</strong>
+            {status?.service?.assessment_engine_version ? ` (${status.service.assessment_engine_version})` : ""}.
+            {" "}Os campos IID / non-IID / min-H abaixo são <strong>valores sintéticos determinísticos</strong>
+            para testar parsing e interface — <strong>não</strong> representam avaliação estatística de entropia
+            e <strong>não</strong> constituem conformidade NIST.
+          </div>
+        </div>
+      )}
+
       {/* ── Status card ── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
         {[
           { label: "Integração",     value: status?.enabled ? "Habilitada" : "Desabilitada", color: status?.enabled ? theme.success : theme.danger },
-          { label: "Próx. automático", value: status?.next_periodic ? fmtTs(status.next_periodic) : "—", color: theme.quantum },
+          { label: "Motor",          value: status?.service?.assessment_engine || "—", color: isSyntheticEngine(status) ? theme.danger : theme.success },
+          { label: "Próx. automático", value: status?.periodic_enabled === false ? "desativado (sem captura live)" : (status?.next_periodic ? fmtTs(status.next_periodic) : "—"), color: theme.quantum },
           { label: "Intervalo",      value: status ? `${status.interval_seconds}s` : "—", color: theme.accent },
           { label: "Fila",           value: status != null ? `${status.queue_depth} job(s)` : "—", color: status?.queue_depth > 0 ? theme.warning : theme.textMuted },
         ].map(({ label, value, color }) => (
@@ -403,14 +437,15 @@ export default function NISTSection() {
 
       {/* ── Aviso: sem monitoramento periódico ao vivo configurado ── */}
       {status && status.live_capture_configured === false && (
-        <div style={{
+        <div data-testid="nist-live-capture-unavailable" style={{
           padding: "8px 12px", borderRadius: 8,
           background: theme.textMuted + "12", border: `1px solid ${theme.textMuted}30`,
           fontSize: 11, color: theme.textDim, fontFamily: mono,
         }}>
-          ℹ Sem amostra live recente — nenhum mecanismo de captura ao vivo controlada está configurado.
-          O job periódico não está reavaliando nenhum arquivo automaticamente. Resultados abaixo (se
-          houver) vêm de upload manual ou execução avulsa sobre um arquivo específico.
+          ℹ Captura live indisponível — nenhum mecanismo de captura ao vivo controlada está configurado.
+          Nenhuma execução periódica é agendada ({status.periodic_enabled === false ? "periodic_enabled=false" : "—"});
+          o job periódico não reavalia nenhum arquivo automaticamente. Resultados abaixo (se houver)
+          vêm de upload manual ou execução avulsa sobre um arquivo específico.
         </div>
       )}
 
@@ -448,11 +483,13 @@ export default function NISTSection() {
             <div>
               <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>IID</div>
               <PassBadge passed={status.last_job.iid_passed} />
+              {status.last_job.synthetic_result && <SyntheticTag />}
             </div>
             <div>
               <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>min-H non-IID</div>
               <span style={{ fontSize: 13, fontWeight: 700, fontFamily: mono, color: theme.quantum }}>
                 {fmtN(status.last_job.h_min_non_iid)} bits
+                {status.last_job.synthetic_result && <SyntheticTag />}
               </span>
             </div>
             <div>
@@ -592,7 +629,10 @@ export default function NISTSection() {
                       title={j.original_filename}>{j.original_filename || "—"}</td>
                     <td style={{ padding: "8px 10px", color: theme.textDim }}>{j.test_type || "—"}</td>
                     <td style={{ padding: "8px 10px" }}><StatusBadge status={j.status} /></td>
-                    <td style={{ padding: "8px 10px" }}><PassBadge passed={j.iid_passed} /></td>
+                    <td style={{ padding: "8px 10px" }}>
+                      <PassBadge passed={j.iid_passed} />
+                      {j.synthetic_result && <SyntheticTag />}
+                    </td>
                     <td style={{ padding: "8px 10px", fontWeight: 700, color: theme.quantum }}>
                       {j.h_min_non_iid != null ? j.h_min_non_iid.toFixed(4) : "—"}
                     </td>

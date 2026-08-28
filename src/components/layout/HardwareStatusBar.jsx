@@ -27,10 +27,33 @@ function LogoImg({ height }) {
   );
 }
 
+// Item 3: origem EFETIVA da última leitura, nunca a config estática da
+// instância. Prioridade: provenance_detail.actual_origin (contrato por
+// resposta do client-api) > provenance simples > derivada do health.
+function effectiveOrigin({ isFallback, isOnline, health }) {
+  if (isFallback) return { label: "fallback", color: theme.warning, verified: false };
+  const d = health?.provenance_detail;
+  if (d?.actual_origin) {
+    return {
+      label: d.actual_origin,
+      color: d.actual_origin === "live" ? theme.success
+           : d.actual_origin === "fallback" ? theme.warning
+           : theme.textMuted,
+      verified: !!d.live_verified,
+    };
+  }
+  const p = health?.provenance;
+  if (p) return { label: p, color: p === "live" ? theme.success : theme.textMuted, verified: false };
+  // sem contrato de proveniência disponível nesta rota de health
+  if (!isOnline) return { label: "indisponível", color: theme.danger, verified: false };
+  return { label: "desconhecida", color: theme.textMuted, verified: false };
+}
+
 export default function HardwareStatusBar() {
   const { health, latency, isOnline, qrngSource, precollectedRemaining, precollectedLimit } = useContext(AppContext);
   const isFallback = qrngSource === "pre-collected";
   const statusColor = isOnline ? theme.success : theme.danger;
+  const origin = effectiveOrigin({ isFallback, isOnline, health });
 
   return (
     <div
@@ -64,6 +87,14 @@ export default function HardwareStatusBar() {
         </span>
         <span style={{ color: theme.textMuted }}>
           {SOURCE_LABELS[qrngSource] || qrngSource}
+        </span>
+        <span style={{ color: theme.border }}>|</span>
+        <span style={{ color: theme.textMuted }} data-testid="effective-origin">
+          origem&nbsp;efetiva:{" "}
+          <strong style={{ color: origin.color }}>{origin.label}</strong>
+          {origin.label === "live" && !origin.verified && (
+            <span style={{ color: theme.warning }}>&nbsp;(não verificada)</span>
+          )}
         </span>
       </div>
 

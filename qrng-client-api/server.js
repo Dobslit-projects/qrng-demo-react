@@ -77,14 +77,65 @@ const QRNG_TIMEOUT_MS          = parseInt(process.env.QRNG_REQUEST_TIMEOUT_MS ||
 // Número de falhas consecutivas do poller para marcar upstream como DOWN
 const UPSTREAM_FAIL_THRESHOLD  = parseInt(process.env.UPSTREAM_FAIL_THRESHOLD || "2", 10);
 
-// Rótulo e proveniência da fonte, dirigidos por env (item 2 da fase de
-// staging). Os DEFAULTS reproduzem exatamente o comportamento anterior de
-// produção -- nenhuma implantação existente muda. Um staging que sirva
-// fixtures/replay DEVE sobrescrever QRNG_PROVENANCE (nunca "live" quando os
-// bytes não vêm da fonte física em tempo real) e QRNG_SOURCE_LABEL.
+// Rótulo da fonte, dirigido por env (item 2 da fase de staging). O DEFAULT
+// reproduz o comportamento anterior de produção.
 const QRNG_SOURCE_LABEL = process.env.QRNG_SOURCE_LABEL || "dobslit-qrng-ufpe-fpga";
-const QRNG_PROVENANCE   = (process.env.QRNG_PROVENANCE || "live").toLowerCase();
-// valores esperados: live | replay | fixture | historical | fallback | unknown
+
+// ── Proveniência por RESPOSTA (item 3 da fase) ───────────────────────────────
+// QRNG_PROVENANCE deixa de "carimbar" toda resposta. Agora define apenas a
+// CAPACIDADE/modo da instância (teto): uma instância "replay"/"fixture"/
+// "historical" NUNCA pode rotular uma resposta como "live", e uma instância
+// "live" só rotula "live" quando HÁ evidência do caminho live NAQUELA resposta
+// (upstream saudável, buffer saudável, amostra recente). O default "live"
+// preserva produção, mas produção também passa a precisar da evidência.
+const QRNG_CONFIGURED_SOURCE = process.env.QRNG_CONFIGURED_SOURCE || "fpga";
+const QRNG_INSTANCE_MODE     = (process.env.QRNG_PROVENANCE || "live").toLowerCase();
+// modos: live | replay | fixture | historical   (fallback/unknown são só resultados)
+const LIVE_SAMPLE_MAX_AGE_MS = parseInt(process.env.LIVE_SAMPLE_MAX_AGE_MS || "300000", 10); // 5 min
+
+const { resolveProvenance: _resolveProvenance } = require("./lib/provenance");
+
+function upstreamHealthLabel() {
+  // healthy | degraded | failed | unknown -- do poller de fundo (checkUpstream)
+  if (!upstreamState || upstreamState.status === "unknown") return "unknown";
+  if (upstreamState.status === "up") return consecutiveFailures > 0 ? "degraded" : "healthy";
+  return "failed"; // "down"
+}
+
+/**
+ * Wrapper: injeta o estado da instância (modo, fonte configurada, saúde do
+ * poller, idade máxima) na função pura de ./lib/provenance.
+ * @param {object} o  ver lib/provenance.resolveProvenance (sem os campos de instância)
+ */
+function resolveProvenance(o) {
+  return _resolveProvenance({
+    ...o,
+    instanceMode: QRNG_INSTANCE_MODE,
+    configuredSource: QRNG_CONFIGURED_SOURCE,
+    pollerSourceHealth: upstreamHealthLabel(),
+    maxSampleAgeMs: LIVE_SAMPLE_MAX_AGE_MS,
+  });
+}
+
+/** Escreve a proveniência nos headers de uma resposta binária (raw). */
+function setProvenanceHeaders(res, prov) {
+  res.setHeader("X-QRNG-Provenance", prov.actual_origin);
+  res.setHeader("X-QRNG-Live-Verified", String(prov.live_verified));
+  res.setHeader("X-QRNG-Fallback-Used", String(prov.fallback_used));
+  res.setHeader("X-QRNG-Source-Health", prov.source_health);
+  res.setHeader("X-QRNG-Buffer-Health", prov.buffer_health);
+  res.setHeader("X-QRNG-Served-At", prov.served_at);
+  if (prov.captured_at) res.setHeader("X-QRNG-Captured-At", prov.captured_at);
+  if (prov.capture_id)  res.setHeader("X-QRNG-Capture-Id", prov.capture_id);
+  if (prov.sample_age_ms !== null) res.setHeader("X-QRNG-Sample-Age-Ms", String(prov.sample_age_ms));
+}
+
+/** Objeto plano de headers do upstream em minúsculas (node-fetch Headers). */
+function lowerHeaders(h) {
+  const o = {};
+  if (h && typeof h.forEach === "function") h.forEach((v, k) => { o[k.toLowerCase()] = v; });
+  return o;
+}
 
 // ── Agente HTTP sem keep-alive para upstream ──────────────────────────────────
 // Evita ECONNRESET em sockets reaproveitados quando o SSH tunnel reinicia.
@@ -1040,11 +1091,22 @@ app.get("/v1/health", attachRequestId, requireToken, checkTokenRate, async (req,
   try {
     const r    = await fetchWithTimeout(`${QRNG_UPSTREAM}/health`, QRNG_TIMEOUT_MS);
     const data = await r.json();
+    const upHdr = lowerHeaders(r.headers);
+    // /health não entrega bytes de amostra -> não há evidência de caminho live
+    // NESTA resposta; a proveniência aqui reflete a CAPACIDADE + saúde atual,
+    // com actual_origin nunca "live" (só /random pode provar live).
+    const srcStatus = (data && data.source_status) || upHdr["x-qrng-source-status"];
+    const prov = resolveProvenance({
+      servedFromUpstream: false,
+      upstreamReachable: true,
+      upstreamHeaders: { ...upHdr, ...(srcStatus ? { "x-qrng-source-status": String(srcStatus) } : {}) },
+    });
     logRequest(requestId, req.tokenRow.id, "/v1/health", 0, null, 200, ip, ua, Date.now() - t0);
-    res.json({ request_id: requestId, status: "ok", api: "dobslit-qrng-client-api", source: QRNG_SOURCE_LABEL, provenance: QRNG_PROVENANCE, upstream: data });
+    res.json({ request_id: requestId, status: "ok", api: "dobslit-qrng-client-api", source: QRNG_SOURCE_LABEL, provenance: prov.actual_origin, provenance_detail: prov, upstream: data });
   } catch {
     logRequest(requestId, req.tokenRow.id, "/v1/health", 0, null, 503, ip, ua, Date.now() - t0);
-    res.status(503).json({ request_id: requestId, status: "error", message: "QRNG upstream unavailable" });
+    const prov = resolveProvenance({ servedFromUpstream: false });
+    res.status(503).json({ request_id: requestId, status: "error", message: "QRNG upstream unavailable", provenance: prov.actual_origin, provenance_detail: prov });
   }
 });
 
@@ -1270,7 +1332,8 @@ async function randomHandler(req, res) {
 
     if (!r.ok) {
       logRequest(requestId, req.tokenRow.id, "/v1/random", bytes, format, 502, ip, ua, Date.now() - t0);
-      return res.status(502).json({ request_id: requestId, error: "UPSTREAM_ERROR", status: r.status });
+      const prov = resolveProvenance({ servedFromUpstream: false, upstreamHeaders: lowerHeaders(r.headers) });
+      return res.status(502).json({ request_id: requestId, error: "UPSTREAM_ERROR", status: r.status, provenance: prov.actual_origin, provenance_detail: prov });
     }
 
     const contentType        = r.headers.get("content-type");
@@ -1299,13 +1362,18 @@ async function randomHandler(req, res) {
       throw err;
     }
 
+    const upHdr = lowerHeaders(r.headers);
+
     if (buf.length < bytes) {
       logRequest(requestId, req.tokenRow.id, "/v1/random", bytes, format, 503, ip, ua, Date.now() - t0);
-      return res.status(503).json({ request_id: requestId, error: "INSUFFICIENT_ENTROPY", available: buf.length, requested: bytes });
+      const prov = resolveProvenance({ servedFromUpstream: false, upstreamHeaders: upHdr, insufficientEntropy: true });
+      return res.status(503).json({ request_id: requestId, error: "INSUFFICIENT_ENTROPY", available: buf.length, requested: bytes, provenance: prov.actual_origin, provenance_detail: prov });
     }
     buf = buf.slice(0, bytes); // upBytes é sobre-provisionado; entrega exatamente o pedido
 
     logRequest(requestId, req.tokenRow.id, "/v1/random", bytes, format, 200, ip, ua, Date.now() - t0);
+
+    const prov = resolveProvenance({ servedFromUpstream: true, upstreamHeaders: upHdr });
 
     if (format === "raw") {
       // Corpo = EXATAMENTE os N bytes brutos, nada mais. request_id e
@@ -1316,8 +1384,8 @@ async function randomHandler(req, res) {
       res.setHeader("Cache-Control", "no-store");
       res.setHeader("X-Request-Id", requestId);
       res.setHeader("X-QRNG-Source", QRNG_SOURCE_LABEL);
-      res.setHeader("X-QRNG-Provenance", QRNG_PROVENANCE);
       res.setHeader("X-QRNG-Conditioned", "false");
+      setProvenanceHeaders(res, prov);
       return res.end(buf); // res.end (não res.send): zero transformação do Buffer
     }
 
@@ -1325,11 +1393,12 @@ async function randomHandler(req, res) {
                  : format === "base64" ? buf.toString("base64")
                  : Array.from(buf);
 
-    res.json({ request_id: requestId, source: QRNG_SOURCE_LABEL, provenance: QRNG_PROVENANCE, bytes, format, random, timestamp: new Date().toISOString() });
+    res.json({ request_id: requestId, source: QRNG_SOURCE_LABEL, provenance: prov.actual_origin, provenance_detail: prov, bytes, format, random, timestamp: new Date().toISOString() });
 
   } catch (err) {
     logRequest(requestId, req.tokenRow.id, "/v1/random", bytes, format, 503, ip, ua, Date.now() - t0);
-    res.status(503).json({ request_id: requestId, error: "QRNG_UNAVAILABLE", detail: err.message });
+    const prov = resolveProvenance({ servedFromUpstream: false });
+    res.status(503).json({ request_id: requestId, error: "QRNG_UNAVAILABLE", detail: err.message, provenance: prov.actual_origin, provenance_detail: prov });
   }
 }
 
@@ -1582,7 +1651,8 @@ async function publicRandomHandler(req, res) {
       // IP via publicIpDailyUsage acima, não por essa tabela).
       logRequest(requestId, null, "/v1/public/random", bytes, format, 502, ip, ua, Date.now() - t0);
       recordPublicUsage(ip, bytes);
-      return res.status(502).json({ request_id: requestId, error: "UPSTREAM_ERROR", status: r.status });
+      const prov = resolveProvenance({ servedFromUpstream: false, upstreamHeaders: lowerHeaders(r.headers) });
+      return res.status(502).json({ request_id: requestId, error: "UPSTREAM_ERROR", status: r.status, provenance: prov.actual_origin, provenance_detail: prov });
     }
 
     const contentType         = r.headers.get("content-type");
@@ -1611,10 +1681,13 @@ async function publicRandomHandler(req, res) {
       throw err;
     }
 
+    const upHdr = lowerHeaders(r.headers);
+
     if (buf.length < bytes) {
       logRequest(requestId, null, "/v1/public/random", bytes, format, 503, ip, ua, Date.now() - t0);
       recordPublicUsage(ip, bytes);
-      return res.status(503).json({ request_id: requestId, error: "INSUFFICIENT_ENTROPY", available: buf.length, requested: bytes });
+      const prov = resolveProvenance({ servedFromUpstream: false, upstreamHeaders: upHdr, insufficientEntropy: true });
+      return res.status(503).json({ request_id: requestId, error: "INSUFFICIENT_ENTROPY", available: buf.length, requested: bytes, provenance: prov.actual_origin, provenance_detail: prov });
     }
     buf = buf.slice(0, bytes);
 
@@ -1622,13 +1695,15 @@ async function publicRandomHandler(req, res) {
     recordPublicUsage(ip, bytes);
     metricsCounters.public_requests_total++;
 
+    const prov = resolveProvenance({ servedFromUpstream: true, upstreamHeaders: upHdr });
+
     if (format === "raw") {
       res.status(200);
       res.setHeader("Content-Type", "application/octet-stream");
       res.setHeader("Content-Length", buf.length);
       res.setHeader("X-QRNG-Source", QRNG_SOURCE_LABEL);
-      res.setHeader("X-QRNG-Provenance", QRNG_PROVENANCE);
       res.setHeader("X-QRNG-Conditioned", "false");
+      setProvenanceHeaders(res, prov);
       return res.end(buf); // corpo = EXATAMENTE N bytes, sem JSON/BOM/prefixo
     }
 
@@ -1636,12 +1711,13 @@ async function publicRandomHandler(req, res) {
                  : format === "base64" ? buf.toString("base64")
                  : Array.from(buf);
 
-    res.json({ request_id: requestId, source: QRNG_SOURCE_LABEL, provenance: QRNG_PROVENANCE, bytes, format, random, timestamp: new Date().toISOString() });
+    res.json({ request_id: requestId, source: QRNG_SOURCE_LABEL, provenance: prov.actual_origin, provenance_detail: prov, bytes, format, random, timestamp: new Date().toISOString() });
 
   } catch (err) {
     logRequest(requestId, null, "/v1/public/random", bytes, format, 503, ip, ua, Date.now() - t0);
     recordPublicUsage(ip, bytes);
-    res.status(503).json({ request_id: requestId, error: "QRNG_UNAVAILABLE", detail: err.message });
+    const prov = resolveProvenance({ servedFromUpstream: false });
+    res.status(503).json({ request_id: requestId, error: "QRNG_UNAVAILABLE", detail: err.message, provenance: prov.actual_origin, provenance_detail: prov });
   }
 }
 

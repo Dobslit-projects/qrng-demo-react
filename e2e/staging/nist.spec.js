@@ -260,6 +260,120 @@ test.describe.serial("NIST staging — lifecycle de job", () => {
   });
 });
 
+test.describe.serial("NIST staging — executor SINTÉTICO identificado (item 4)", () => {
+  test("/health e /nist/status marcam engine=fake, synthetic_result=true, statistical_result_valid=false", async ({ request }) => {
+    const h = await (await request.get(`${NP}/health`)).json();
+    expect(h.assessment_engine).toBe("fake");
+    expect(h.assessment_engine_version).toBeTruthy();
+    expect(h.synthetic_result).toBe(true);
+    expect(h.statistical_result_valid).toBe(false);
+    const s = await (await request.get(`${NP}/status`)).json();
+    expect(s.service.assessment_engine).toBe("fake");
+    expect(s.service.synthetic_result).toBe(true);
+    expect(s.service.statistical_result_valid).toBe(false);
+  });
+
+  test("job e histórico preservam a identificação synthetic", async ({ request }) => {
+    const up = await uploadFile(request, { name: "syn.bin", mime: "application/octet-stream", buffer: binOf(8192) });
+    const { job_id } = await up.json();
+    const job = await waitJob(request, job_id);
+    expect(job.status).toBe("completed");
+    expect(job.assessment_engine).toBe("fake");
+    expect(job.synthetic_result).toBe(true);
+    expect(job.statistical_result_valid).toBe(false);
+    const list = await (await request.get(`${NP}/jobs?limit=50`)).json();
+    for (const j of list.jobs) expect(j.synthetic_result).toBe(true); // todos os jobs deste serviço
+  });
+
+  test("sem captura live: periodic_enabled=false e next_periodic=null (nenhuma execução agendada)", async ({ request }) => {
+    const s = await (await request.get(`${NP}/status`)).json();
+    expect(s.periodic_enabled).toBe(false);
+    expect(s.next_periodic).toBeNull();
+    expect(s.live_capture_configured).toBe(false);
+    const h = await (await request.get(`${NP}/health`)).json();
+    expect(h.periodic_enabled).toBe(false);
+  });
+});
+
+test.describe.serial("NIST staging — endurecimento de upload (item 6)", () => {
+  const bin = () => binOf(4096);
+
+  for (const [nome, fname] of [
+    ["path traversal posix", "../../etc/passwd.bin"],
+    ["separadores windows", "..\\..\\windows\\system32\\evil.bin"],
+    ["caminho absoluto", "/etc/shadow.bin"],
+    ["unicode", "amostra-ção-éè.bin"],
+    ["nome gigante", "x".repeat(400) + ".bin"],
+  ]) {
+    test(`filename malicioso aceito mas armazenado com nome do servidor: ${nome}`, async ({ request }) => {
+      const r = await uploadFile(request, { name: fname, mime: "application/octet-stream", buffer: bin() });
+      expect(r.status()).toBe(200);
+      const b = await r.json();
+      expect(b.server_generated_name).toBe(true);
+      expect(b.stored_filename).toBe("sample.bin");             // nome do servidor, não o do usuário
+      expect(b.stored_filename).not.toContain("/");
+      expect(b.stored_filename).not.toContain("\\");
+      expect(b.stored_filename).not.toContain("..");
+      // o nome original vira metadado sanitizado
+      expect(b.original_filename_sanitized).not.toContain("/");
+      expect(b.original_filename_sanitized).not.toContain("\\");
+    });
+  }
+
+  test("duas requisições concorrentes com o mesmo nome -> job_ids e diretórios distintos", async ({ request }) => {
+    const [a, b] = await Promise.all([
+      uploadFile(request, { name: "dup.bin", mime: "application/octet-stream", buffer: binOf(4096, 1) }),
+      uploadFile(request, { name: "dup.bin", mime: "application/octet-stream", buffer: binOf(4096, 2) }),
+    ]);
+    const ja = await a.json(), jb = await b.json();
+    expect(ja.job_id).not.toBe(jb.job_id);
+    expect(ja.stored_filename).toBe("sample.bin");
+    expect(jb.stored_filename).toBe("sample.bin");
+  });
+
+  test(".txt de inteiros: normalização registrada APÓS o worker (não pela extensão)", async ({ request }) => {
+    const txt = Buffer.from(Array.from({ length: 500 }, (_, i) => i).join("\n") + "\n");
+    const up = await uploadFile(request, { name: "ints.txt", mime: "text/plain", buffer: txt });
+    const b = await up.json();
+    expect(b.normalized_pending).toBe(true);        // .txt não é declarado normalizado no handler
+    expect(b.size_normalized_bytes).toBeNull();
+    const job = await waitJob(request, b.job_id);
+    expect(job.status).toBe("completed");
+    expect(job.sha256_normalized).toMatch(/^[0-9a-f]{64}$/);
+    expect(job.normalized_symbol_count).toBeGreaterThan(0);
+    expect(job.endianness_rule).toContain("little-endian");
+    expect(job.first_parse_error).toBeFalsy();
+  });
+
+  test(".csv com inteiro negativo: job registra first_parse_error", async ({ request }) => {
+    const csv = Buffer.from("1,2,3\n4,-5,6\n" + Array.from({ length: 400 }, (_, i) => i).join(",") + "\n");
+    const up = await uploadFile(request, { name: "neg.csv", mime: "text/csv", buffer: csv });
+    const job = await waitJob(request, (await up.json()).job_id);
+    expect(["completed", "failed"]).toContain(job.status);
+    expect(job.first_parse_error || "").toMatch(/negativo/i);
+  });
+
+  test(".csv com inteiro acima de uint32: first_parse_error", async ({ request }) => {
+    const csv = Buffer.from(`1\n2\n${2 ** 32}\n` + Array.from({ length: 400 }, (_, i) => i).join("\n") + "\n");
+    const job = await waitJob(request, (await (await uploadFile(request, { name: "ovf.csv", mime: "text/csv", buffer: csv })).json()).job_id);
+    expect(job.first_parse_error || "").toMatch(/uint32/i);
+  });
+
+  test(".txt sem nenhum inteiro válido (texto com dígitos): job falha com erro explícito", async ({ request }) => {
+    // 300+ linhas de texto não-inteiro para passar do NIST_MIN_BYTES
+    const txt = Buffer.from(Array.from({ length: 400 }, () => "versao 1.2.3 build abc").join("\n") + "\n");
+    const job = await waitJob(request, (await (await uploadFile(request, { name: "bad.txt", mime: "text/plain", buffer: txt })).json()).job_id);
+    expect(job.status).toBe("failed");
+    expect(job.error_message || "").toMatch(/inteiro|parse|válido/i);
+  });
+
+  test(".csv com nº de colunas inconsistente: first_parse_error menciona colunas", async ({ request }) => {
+    const csv = Buffer.from("1,2,3\n4,5\n" + Array.from({ length: 400 }, (_, i) => `${i},${i + 1},${i + 2}`).join("\n") + "\n");
+    const job = await waitJob(request, (await (await uploadFile(request, { name: "cols.csv", mime: "text/csv", buffer: csv })).json()).job_id);
+    expect(job.first_parse_error || "").toMatch(/colunas/i);
+  });
+});
+
 // ── Limitações de infraestrutura (não simular como aprovado) ──────────────────
 test.describe("NIST staging — cenários bloqueados por infraestrutura", () => {
   test.fixme(true, "upload interrompido no meio: exige cortar a conexão TCP no cliente HTTP — APIRequestContext não expõe isso. Verificado indiretamente: _stream_upload_to_file faz cleanup do .part em qualquer exceção (teste unitário test_safe_unlink / try/except no handler).");

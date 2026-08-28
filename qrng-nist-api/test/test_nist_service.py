@@ -69,6 +69,11 @@ def fresh_db():
         ("source_word_width", "INTEGER"), ("assessment_symbol_width", "INTEGER"),
         ("normalization_method", "TEXT"), ("sample_endianness", "TEXT"),
         ("sample_conditioned", "INTEGER"), ("captured_at", "TEXT"),
+        ("assessment_engine", "TEXT"), ("synthetic_result", "INTEGER"),
+        ("sha256_normalized", "TEXT"), ("size_original_bytes", "INTEGER"),
+        ("size_normalized_bytes", "INTEGER"), ("normalized_symbol_count", "INTEGER"),
+        ("first_parse_error", "TEXT"), ("endianness_rule", "TEXT"),
+        ("stored_filename", "TEXT"),
     ]:
         try:
             conn.execute(f"ALTER TABLE nist_test_jobs ADD COLUMN {col} {decl}")
@@ -375,6 +380,115 @@ class TestServiceIdentity(unittest.TestCase):
         self.assertFalse(h["upload_policy"]["full_file_in_memory"])
         self.assertTrue(h["upload_policy"]["streamed_to_temp_file"])
         self.assertEqual(sorted(h["upload_policy"]["allowed_extensions"]), [".bin", ".csv", ".txt"])
+
+
+class TestAssessmentEngineIdentity(unittest.TestCase):
+    """Item 4: identificação do motor de assessment em health/status/row."""
+
+    def test_health_expoe_engine_e_synthetic(self):
+        h = ns.health()
+        self.assertIn("assessment_engine", h)
+        self.assertIn("assessment_engine_version", h)
+        self.assertIn("synthetic_result", h)
+        self.assertIn("statistical_result_valid", h)
+        # coerência: synthetic <=> engine == "fake" <=> NOT statistical_result_valid
+        self.assertEqual(h["synthetic_result"], h["assessment_engine"] == "fake")
+        self.assertEqual(h["statistical_result_valid"], not h["synthetic_result"])
+
+    def test_row_marca_synthetic_quando_engine_fake(self):
+        row = ns._row({
+            "id": "x", "estimators_json": None,
+            "iid_passed": None, "chi_square_passed": None, "lrs_passed": None,
+            "permutation_passed": None, "input_file_path": None,
+            "sample_origin": "user_upload", "transport_format": None,
+            "source_word_width": None, "assessment_symbol_width": None,
+            "normalization_method": None, "sample_endianness": None,
+            "sample_conditioned": None, "captured_at": None, "created_at": None,
+            "assessment_engine": "fake", "synthetic_result": 1,
+        })
+        self.assertEqual(row["assessment_engine"], "fake")
+        self.assertTrue(row["synthetic_result"])
+        self.assertFalse(row["statistical_result_valid"])
+
+    def test_periodico_desligado_sem_live_capture(self):
+        # NIST_LIVE_CAPTURE_PATH é None nos testes -> nenhum timer, next_periodic None
+        self.assertIsNone(ns.NIST_LIVE_CAPTURE_PATH)
+        self.assertIsNone(ns._next_periodic)
+        # _run_periodic não reagenda nem cria job
+        before = ns._next_periodic
+        ns._run_periodic()
+        self.assertEqual(ns._next_periodic, before)
+
+
+class TestSafeNameHardening(unittest.TestCase):
+    """Item 6: _safe_name é só metadado -- neutraliza travessia de caminho."""
+
+    def test_path_traversal_posix(self):
+        self.assertNotIn("/", ns._safe_name("../../etc/passwd"))
+        self.assertEqual(ns._safe_name("../../etc/passwd"), "passwd")
+
+    def test_separadores_windows_e_absoluto(self):
+        self.assertNotIn("\\", ns._safe_name(r"..\..\windows\system32\x.bin"))
+        self.assertNotIn("/", ns._safe_name("/etc/shadow"))
+        self.assertNotIn(":", ns._safe_name("C:\\Users\\x\\a.bin"))
+
+    def test_nome_gigante_e_controle(self):
+        big = "a" * 5000 + ".bin"
+        self.assertLessEqual(len(ns._safe_name(big)), 180)
+        self.assertEqual(ns._safe_name("x\x00\x01y.bin"), "xy.bin")
+
+    def test_unicode_preservado_como_rotulo(self):
+        self.assertIn("amostra", ns._safe_name("amostra-ção.bin"))
+
+    def test_vazio_ou_so_pontos(self):
+        self.assertEqual(ns._safe_name(".."), "upload")
+        self.assertEqual(ns._safe_name(""), "upload")
+
+
+class TestTextNormalization(unittest.TestCase):
+    """Item 6: .txt/.csv normalizados de verdade, com primeiro erro registrado."""
+
+    def setUp(self):
+        self.d = tempfile.mkdtemp(prefix="norm_")
+
+    def tearDown(self):
+        shutil.rmtree(self.d, ignore_errors=True)
+
+    def _run(self, text):
+        src = os.path.join(self.d, "in.txt")
+        dst = os.path.join(self.d, "out.txt")
+        with open(src, "w") as f:
+            f.write(text)
+        return ns._normalize_text_ints(src, dst), dst
+
+    def test_inteiros_validos(self):
+        (count, err, rule), dst = self._run("1,2,3\n4,5,6\n")
+        self.assertEqual(count, 6)
+        self.assertIsNone(err)
+        self.assertIn("little-endian", rule)
+
+    def test_negativo_registra_primeiro_erro(self):
+        (count, err, _), _ = self._run("1 2 -3 4\n")
+        self.assertEqual(count, 3)
+        self.assertIn("negativo", err)
+
+    def test_acima_de_uint32(self):
+        (count, err, _), _ = self._run(f"1\n2\n{2**32}\n")
+        self.assertEqual(count, 2)
+        self.assertIn("uint32", err)
+
+    def test_colunas_inconsistentes(self):
+        (count, err, _), _ = self._run("1,2,3\n4,5\n6,7,8\n")
+        self.assertGreater(count, 0)
+        self.assertIn("colunas", err)
+
+    def test_texto_com_digitos_mas_sem_inteiro_valido(self):
+        with self.assertRaises(ValueError):
+            self._run("versao 1.2.3 build abc\n")  # tokens não-inteiros
+
+    def test_nul_em_texto(self):
+        with self.assertRaises(ValueError):
+            self._run("1,2\x00,3\n")
 
 
 if __name__ == "__main__":

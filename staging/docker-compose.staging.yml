@@ -80,6 +80,8 @@ services:
       # só para o teste "acima do limite" rodar rápido no CI.
       NIST_UPLOAD_MAX_BYTES: "1048576"
       NIST_SERVICE_ENV: "staging"
+      NIST_ASSESSMENT_ENGINE: "fake"        # executor sintético -- synthetic_result=true
+      NIST_ASSESSMENT_ENGINE_VERSION: "staging-fake-1"
     volumes:
       - nist-staging-data:/data
       - nist-staging-samples:/staging-data

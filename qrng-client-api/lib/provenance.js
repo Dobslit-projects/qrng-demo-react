@@ -1,0 +1,101 @@
+"use strict";
+// Contrato de proveniência POR RESPOSTA (item 3 da fase de estabilização).
+//
+// QRNG_PROVENANCE (env) deixa de "carimbar" toda resposta como live. Passa a
+// definir só a CAPACIDADE/modo da instância (teto). Cada resposta recebe uma
+// origem EFETIVA resolvida a partir do estado real: saúde do upstream, saúde
+// do buffer, idade da amostra, uso de fallback.
+//
+// Regras invioláveis:
+//   - actual_origin = "live" só com evidência do caminho live nesta resposta;
+//   - fallback_used=true  => actual_origin sempre "fallback" (prevalece sobre a config);
+//   - instância replay/fixture/historical NUNCA reporta "live";
+//   - buffer antigo (sample_age_ms > maxAgeMs) não continua "live";
+//   - fonte indisponível + buffer ainda servindo => estado explícito, não "live";
+//   - live_verified só true com captured_at confirmando a captura.
+
+const MODES = ["live", "replay", "fixture", "historical"];
+const NON_LIVE_MODES = ["replay", "fixture", "historical"];
+
+/**
+ * @param {object} o
+ * @param {string}  o.instanceMode         live | replay | fixture | historical
+ * @param {string}  o.configuredSource     ex.: "fpga"
+ * @param {string}  o.pollerSourceHealth   healthy | degraded | failed | unknown (poller de fundo)
+ * @param {boolean} o.servedFromUpstream   esta resposta entregou bytes do upstream
+ * @param {boolean} [o.upstreamReachable]  upstream respondeu (ex.: /health) sem servir bytes
+ * @param {boolean} [o.fallbackUsed]       um caminho de fallback forneceu os bytes
+ * @param {boolean} [o.insufficientEntropy] buffer sem bytes suficientes
+ * @param {object}  [o.upstreamHeaders]    headers do upstream (chaves minúsculas)
+ * @param {number}  [o.maxSampleAgeMs]     idade máxima p/ "live" (default 300000)
+ * @param {number}  [o.now]                Date.now() injetável p/ teste
+ */
+function resolveProvenance(o) {
+  const now = o.now || Date.now();
+  const uh = o.upstreamHeaders || {};
+  const mode = MODES.includes(o.instanceMode) ? o.instanceMode : "unknown";
+  const fallbackUsed = !!o.fallbackUsed;
+  const reachable = !!o.servedFromUpstream || !!o.upstreamReachable;
+  const maxAgeMs = Number.isFinite(o.maxSampleAgeMs) ? o.maxSampleAgeMs : 300000;
+
+  let sourceHealth = ["healthy", "degraded", "failed", "unknown"].includes(o.pollerSourceHealth)
+    ? o.pollerSourceHealth : "unknown";
+  const hdrStatus = String(uh["x-qrng-source-status"] || "").toLowerCase();
+  if (hdrStatus === "offline" || hdrStatus === "failed") sourceHealth = "failed";
+  else if (hdrStatus === "degraded" && sourceHealth === "healthy") sourceHealth = "degraded";
+  else if ((hdrStatus === "online" || hdrStatus === "healthy") && sourceHealth === "unknown") sourceHealth = "healthy";
+
+  const capturedAt = uh["x-qrng-captured-at"] || null;
+  const captureId = uh["x-qrng-capture-id"] || null;
+  let sampleAgeMs = null;
+  if (capturedAt) {
+    const t = Date.parse(capturedAt);
+    if (!Number.isNaN(t)) sampleAgeMs = now - t;
+  }
+
+  let bufferHealth = "unknown";
+  if (o.insufficientEntropy) bufferHealth = "degraded";
+  else if (uh["x-qrng-buffer-discontinuous"] === "true") bufferHealth = "discontinuous";
+  else if (o.servedFromUpstream) bufferHealth = "healthy";
+
+  let actualOrigin = "unknown";
+  let liveVerified = false;
+
+  if (fallbackUsed) {
+    actualOrigin = "fallback";
+  } else if (NON_LIVE_MODES.includes(mode)) {
+    actualOrigin = reachable ? mode : "unknown";
+  } else if (mode === "live") {
+    const ageOk = sampleAgeMs === null || sampleAgeMs <= maxAgeMs;
+    if (o.servedFromUpstream && sourceHealth === "healthy" && bufferHealth === "healthy" && ageOk) {
+      actualOrigin = "live";
+      liveVerified = capturedAt !== null;
+    } else if (!o.servedFromUpstream && o.upstreamReachable && sourceHealth === "healthy" && ageOk) {
+      actualOrigin = "live"; // resposta de STATUS (/health) numa instância live saudável
+      liveVerified = false;
+    } else {
+      actualOrigin = "unknown";
+    }
+  }
+
+  // regras duras finais (redundantes de propósito)
+  if (fallbackUsed) { actualOrigin = "fallback"; liveVerified = false; }
+  if (NON_LIVE_MODES.includes(mode) && actualOrigin === "live") actualOrigin = mode;
+  if (actualOrigin !== "live") liveVerified = false;
+
+  return {
+    configured_source: o.configuredSource || "unknown",
+    instance_mode: mode,
+    actual_origin: actualOrigin,
+    source_health: sourceHealth,
+    buffer_health: bufferHealth,
+    captured_at: capturedAt,
+    served_at: new Date(now).toISOString(),
+    sample_age_ms: sampleAgeMs,
+    capture_id: captureId,
+    fallback_used: fallbackUsed,
+    live_verified: liveVerified,
+  };
+}
+
+module.exports = { resolveProvenance, MODES, NON_LIVE_MODES };

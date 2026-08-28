@@ -119,12 +119,16 @@ function decodeQrngJsonResponse(json, t0) {
   const hex = json.random || json.hex || "";
   const bytes = new Uint8Array(hex.length / 2);
   for (let i = 0; i < bytes.length; i++) bytes[i] = parseInt(hex.substr(i * 2, 2), 16);
+  const detail = json.provenance_detail ?? null;
   return {
     bytes, hex,
     source:    json.source    ?? json.generator ?? null,
     requestId: json.request_id ?? json.id       ?? null,
     timestamp: json.timestamp  ?? new Date().toISOString(),
     latencyMs: Math.round(performance.now() - t0),
+    // Item 3: origem EFETIVA desta resposta (não a config da instância).
+    provenance:       detail?.actual_origin ?? json.provenance ?? null,
+    provenanceDetail: detail,
   };
 }
 

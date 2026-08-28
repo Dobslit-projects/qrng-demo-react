@@ -95,9 +95,12 @@ components:
             - unknown
           example: live
           description: >-
-            Proveniência dos bytes. 'live' = fonte física em tempo real (produção). Um ambiente de
-            staging que sirva fixtures/replay reporta 'replay'/'fixture' — nunca 'live'. Também no
-            header X-QRNG-Provenance quando format=raw.
+            Proveniência EFETIVA desta resposta (== provenance_detail.actual_origin). Resolvida por
+            resposta: 'live' só com evidência do caminho live (upstream saudável, buffer saudável,
+            amostra recente). Uma instância de replay/fixture/histórico nunca reporta 'live'. Também
+            no header X-QRNG-Provenance quando format=raw.
+        provenance_detail:
+          $ref: '#/components/schemas/ProvenanceDetail'
         bytes:
           type: integer
           example: 32
@@ -128,10 +131,89 @@ components:
         - request_id
         - source
         - provenance
+        - provenance_detail
         - bytes
         - format
         - random
         - timestamp
+    ProvenanceDetail:
+      type: object
+      description: >-
+        Contrato de proveniência POR RESPOSTA (item 3). Determina a origem efetiva de cada resposta
+        em vez de carimbar tudo pela configuração da instância. Em respostas binárias (format=raw)
+        os mesmos campos vão em headers X-QRNG-Provenance / X-QRNG-Live-Verified /
+        X-QRNG-Fallback-Used / X-QRNG-Source-Health / X-QRNG-Buffer-Health / X-QRNG-Captured-At /
+        X-QRNG-Capture-Id / X-QRNG-Sample-Age-Ms / X-QRNG-Served-At.
+      properties:
+        configured_source:
+          type: string
+          example: fpga
+          description: Fonte configurada da instância (env QRNG_CONFIGURED_SOURCE).
+        instance_mode:
+          type: string
+          enum:
+            - live
+            - replay
+            - fixture
+            - historical
+          description: 'Modo/capacidade da instância — teto: nunca eleva uma resposta acima do que pode provar.'
+        actual_origin:
+          type: string
+          enum:
+            - live
+            - fallback
+            - replay
+            - fixture
+            - historical
+            - unknown
+          description: >-
+            Origem EFETIVA. 'live' só com evidência do caminho live. fallback/replay/historical
+            nunca viram 'live'.
+        source_health:
+          type: string
+          enum:
+            - healthy
+            - degraded
+            - failed
+            - unknown
+        buffer_health:
+          type: string
+          enum:
+            - healthy
+            - degraded
+            - discontinuous
+            - unknown
+        captured_at:
+          type: string
+          format: date-time
+          nullable: true
+        served_at:
+          type: string
+          format: date-time
+        sample_age_ms:
+          type: integer
+          nullable: true
+        capture_id:
+          type: string
+          nullable: true
+        fallback_used:
+          type: boolean
+          description: >-
+            Prevalece sobre a configuração da instância — se true, actual_origin é sempre
+            'fallback'.
+        live_verified:
+          type: boolean
+          description: >-
+            true só quando há evidência de captura (captured_at) confirmando o caminho live nesta
+            resposta.
+      required:
+        - configured_source
+        - actual_origin
+        - source_health
+        - buffer_health
+        - served_at
+        - fallback_used
+        - live_verified
     AuthResponse:
       type: object
       properties:

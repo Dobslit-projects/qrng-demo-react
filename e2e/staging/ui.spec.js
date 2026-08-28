@@ -59,14 +59,42 @@ test.describe("geração de chave/seed bloqueada (UI)", () => {
   });
 });
 
-test.describe("NIST indisponível (staging)", () => {
-  test("aba Teste NIST lida com o serviço 503 sem quebrar a página", async ({ page }) => {
+test.describe("Teste NIST (staging = executor SINTÉTICO)", () => {
+  test("aba Teste NIST carrega sem pageerror e mostra o banner SINTÉTICO + captura live indisponível", async ({ page }) => {
     const errors = [];
     page.on("pageerror", (e) => errors.push(e.message));
     await page.goto("/qrng/", { waitUntil: "domcontentloaded" });
     await nav(page, "Teste NIST");
-    await page.waitForTimeout(2500);
+    // banner obrigatório do item 4 — nunca só um selo verde "PASS"
+    await expect(page.getByTestId("nist-synthetic-banner")).toBeVisible({ timeout: 15000 });
+    await expect(page.getByTestId("nist-synthetic-banner"))
+      .toContainText(/RESULTADO SINTÉTICO DE STAGING — NÃO É UM ASSESSMENT SP 800-90B/);
+    // sem alegação de conformidade
+    await expect(page.locator("body")).not.toContainText(/conformidade NIST atestada|aprovado no SP 800-90B/i);
+    // captura live indisponível
+    await expect(page.getByTestId("nist-live-capture-unavailable")).toBeVisible();
+    await expect(page.getByTestId("nist-live-capture-unavailable")).toContainText(/live indispon/i);
     expect(errors).toEqual([]);
+  });
+
+  test("um job sintético aparece no histórico marcado como SINTÉTICO, não como resultado real", async ({ page, request }) => {
+    test.setTimeout(45000);
+    // cria um job via API e espera concluir
+    const buf = Buffer.alloc(8192, 3);
+    const up = await request.post(`/qrng/nist/upload`, {
+      multipart: { file: { name: "ui.bin", mimeType: "application/octet-stream", buffer: buf }, test_type: "both", format: "auto" },
+    });
+    const { job_id } = await up.json();
+    for (let i = 0; i < 40; i++) {
+      const j = await (await request.get(`/qrng/nist/jobs/${job_id}`)).json();
+      if (["completed", "failed"].includes(j.status)) break;
+      await new Promise((r) => setTimeout(r, 500));
+    }
+    await page.goto("/qrng/", { waitUntil: "domcontentloaded" });
+    await nav(page, "Teste NIST");
+    await expect(page.getByText("Histórico de jobs")).toBeVisible({ timeout: 15000 });
+    // pelo menos um marcador "SINTÉTICO" visível na tabela/summary
+    await expect(page.getByText("SINTÉTICO", { exact: true }).first()).toBeVisible({ timeout: 15000 });
   });
 });
 
