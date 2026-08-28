@@ -5,8 +5,11 @@ const PERTURB_INTERVAL = 360; // frames (~6s at 60fps) — longer between pertur
 function createStars(count, bytes) {
   const stars = [];
   for (let i = 0; i < count; i++) {
-    const b1 = bytes[i % bytes.length] || Math.floor(Math.random() * 256);
-    const b2 = bytes[(i + count) % bytes.length] || Math.floor(Math.random() * 256);
+    // Item 8: NÃO usar `bytes[i] || rand` -- isso trocava silenciosamente todo
+    // byte de valor 0 (saída QRNG legítima, ~0,4%) por Math.random(). Só cai
+    // para Math.random() se REALMENTE não houver bytes.
+    const b1 = bytes.length ? bytes[i % bytes.length] : Math.floor(Math.random() * 256);
+    const b2 = bytes.length ? bytes[(i + count) % bytes.length] : Math.floor(Math.random() * 256);
 
     // Spread stars across full canvas with mild center bias
     const rawR = b1 / 255;

@@ -74,9 +74,11 @@ export function update(state, bytes) {
 
   if (state.frame % BURST_EVERY === 0) {
     for (let i = 0; i < POINTS_PER_BURST; i++) {
-      const bIdx = (i * 2) % bytes.length;
-      const angleByte = bytes[bIdx] || Math.floor(Math.random() * 256);
-      const radiusByte = bytes[bIdx + 1] || Math.floor(Math.random() * 256);
+      // Item 8: `bytes[idx] || rand` trocava byte 0 (QRNG legítimo) por
+      // Math.random(). Preserva zeros; só usa rand se não houver bytes.
+      const bIdx = bytes.length ? (i * 2) % bytes.length : 0;
+      const angleByte  = bytes.length ? (bytes[bIdx] ?? 0)     : Math.floor(Math.random() * 256);
+      const radiusByte = bytes.length ? (bytes[bIdx + 1] ?? 0) : Math.floor(Math.random() * 256);
 
       const sectorAngle = (angleByte / 255) * (Math.PI * 2 / SYMMETRY);
       const rawR = radiusByte / 255;
