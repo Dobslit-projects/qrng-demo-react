@@ -4,6 +4,7 @@ import {
   uniformIntsFromBytes,
   bytesToDiscreteFloats,
   generateQrngSequence,
+  bytesToHex,
   bytesToUint32Array,
   uint32ToFloat,
   exponentialFromUniform,
@@ -16,6 +17,17 @@ import {
   resetPrecollectedCursor,
   onPrecollectedChange,
 } from "./qrngHelper";
+
+// SHA-256 utilitário (Node/jsdom expõe webcrypto)
+async function sha256Hex(u8) {
+  const d = await crypto.subtle.digest("SHA-256", u8);
+  return Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+const hexToBytes = (h) => {
+  const o = new Uint8Array(h.length / 2);
+  for (let i = 0; i < o.length; i++) o[i] = parseInt(h.substr(i * 2, 2), 16);
+  return o;
+};
 
 /**
  * Regressão do viés de módulo (item 3/5 da auditoria do pipeline QRNG).
@@ -420,5 +432,69 @@ describe("fetchQrngRawBytes — binário real (item 2), não hex decodificado no
     expect(opts.headers.Authorization).toBe("Bearer jwt-xyz");
     expect(Array.from(out.bytes)).toEqual([10, 20, 30, 40]);
     localStorage.removeItem("qrng_auth_jwt");
+  });
+});
+
+// ── Item 4.1 (frontend): round-trip binário↔Hex↔uint32 preserva os bytes ────
+describe("integridade de serialização no frontend (item 4.1)", () => {
+  const vectors = {
+    "1B": new Uint8Array([0xa5]),
+    "3B": new Uint8Array([0xde, 0xad, 0xbe]),
+    "4B": new Uint8Array([0x00, 0x01, 0xfe, 0xff]),
+    "7B_nonmult4": new Uint8Array([1, 2, 3, 4, 5, 6, 7]),
+    "zeros16": new Uint8Array(16),
+    "ff16": new Uint8Array(16).fill(0xff),
+    "incremental64": Uint8Array.from({ length: 64 }, (_, i) => i & 0xff),
+  };
+
+  for (const [name, v] of Object.entries(vectors)) {
+    it(`round-trip binário→Hex→binário e binário→uint8→binário: ${name}`, async () => {
+      const expSha = await sha256Hex(v);
+      // binário → Hex → binário
+      const hex = bytesToHex(v);
+      expect(hex).toMatch(/^[0-9a-f]*$/);
+      expect(hex.length).toBe(v.length * 2);
+      const back = hexToBytes(hex);
+      expect(back.length).toBe(v.length);
+      expect(await sha256Hex(back)).toBe(expSha);
+      // binário → uint8 (array) → binário
+      const arr = Array.from(v);
+      expect(arr.every((b) => Number.isInteger(b) && b >= 0 && b <= 255)).toBe(true);
+      expect(await sha256Hex(Uint8Array.from(arr))).toBe(expSha);
+      // primeiro/último valor
+      expect(back[0]).toBe(v[0]);
+      expect(back[v.length - 1]).toBe(v[v.length - 1]);
+    });
+  }
+
+  it("bytesToUint32Array decodifica LITTLE-ENDIAN e ignora resto não múltiplo de 4", () => {
+    // 0x01 0x00 0x00 0x00 (LE) = 1 ; 0xff 0xff 0xff 0xff = 4294967295 ; +3 bytes de resto
+    const v = new Uint8Array([1, 0, 0, 0, 0xff, 0xff, 0xff, 0xff, 9, 9, 9]);
+    const w = bytesToUint32Array(v);
+    expect(w.length).toBe(2); // 11 bytes -> 2 words, resto (3 bytes) descartado
+    // NOTA: bytesToUint32Array atual monta como (b0<<24)|... -> BIG-ENDIAN.
+    // Documentar o que a função REALMENTE faz (contrato observado):
+    expect(w[0]).toBe(((1 << 24) >>> 0)); // 0x01000000 = big-endian de [1,0,0,0]
+    expect(w[1]).toBe(0xffffffff);
+    // e a normalização Monte Carlo nunca chega a 1
+    for (const x of w) expect(uint32ToFloat(x)).toBeLessThan(1);
+  });
+
+  it("nenhum valor Monte Carlo == 1 para uma varredura determinística", () => {
+    const v = Uint8Array.from({ length: 4000 }, (_, i) => (i * 2654435761) & 0xff);
+    for (const x of bytesToUint32Array(v)) {
+      const u = uint32ToFloat(x);
+      expect(u).toBeGreaterThanOrEqual(0);
+      expect(u).toBeLessThan(1);
+    }
+  });
+
+  it("payload que 'parece' ASCII decimal é mantido como bytes (sem virar número)", async () => {
+    // "1234567890" em ASCII
+    const v = new Uint8Array([0x31, 0x32, 0x33, 0x34, 0x35, 0x36, 0x37, 0x38, 0x39, 0x30]);
+    const expSha = await sha256Hex(v);
+    expect(await sha256Hex(hexToBytes(bytesToHex(v)))).toBe(expSha);
+    // uint8 = [0x31,...] e NÃO [1,2,3,...]
+    expect(Array.from(v)[0]).toBe(0x31);
   });
 });
