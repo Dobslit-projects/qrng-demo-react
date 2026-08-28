@@ -299,10 +299,21 @@ Em staging, `actual_origin = replay`.
 **compose de staging** (web real + `qrng-client-api` real + `nist-staging` real
 + `fixture-upstream` replay). **Zero mocks na suíte de staging** — mocks só
 nos testes unitários node:test do `qrng-client-api`. Upstream real
-(`server_api.py`) só no script de VM `run-prov-real.sh`. Contagem no HEAD:
-*(preencher com o resultado do run — 93 + viz-provenance(4) + serialization no
-job client-api)*. Testes de proveniência: `provenance.spec.js` (9) +
-`viz-provenance.spec.js` (4) + asserts espalhados.
+(`server_api.py`) só no script de VM `run-prov-real.sh`.
+
+**Contagem no HEAD `94c1c36` (staging fresco na VM):**
+`97 passed` Playwright (1,1 min) — `api.spec` 25 + `downloads` 6 + `features`
+10 + `nist` 33 + `provenance` 9 + `ratelimit` 2 + `ui` 10 (incl. `viz-provenance`
+como parte da suíte; total = 97). Testes unitários: `qrng-client-api` **145**
+(node:test, incl. `serialization.test.js` 12 + `provenance.test.js` 15 +
+`error-contract.test.js` 3), `qrng-nist-api` **44** (python), frontend
+`qrngHelper.test.js` **44** (vitest). **Sem falhas.**
+
+Nota: a 1ª versão de `viz-provenance.spec.js` tinha uma asserção frágil
+(`request_id || content_length` — o navegador pode não expor `content-length`
+em raw; o nginx pode usar `chunked`) que passava na VM mas falhou no CI #46/#47.
+Reescrita mais enxuta e tolerante (`94c1c36`); a asserção DURA mantida: toda
+chamada `/random` = `replay`, nunca `live`.
 
 ## 19. Plano corrigido de deploy
 
