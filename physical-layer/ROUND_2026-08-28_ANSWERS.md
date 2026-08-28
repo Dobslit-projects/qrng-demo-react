@@ -1,7 +1,8 @@
 # Rodada 2026-08-28 — respostas verificáveis às 4 perguntas
 
-**Branch:** `stabilize/physical-layer-baseline-20260826` · **HEAD:** `cdff682`
-**main:** `f058f22` (inalterado) · `local = VM = origin`
+**Branch:** `stabilize/physical-layer-baseline-20260826` · **HEAD:** `1b54c24`
+(**CI #54 verde, 5/5 jobs**) · **main:** `f058f22` (inalterado) ·
+`local = VM = origin`
 **Terminologia (obrigatória):** *Trilha IID* = testes de hipótese IID +
 min-entropia aplicável. *Trilha não-IID* = estimativas não-IID e a menor
 válida. *Restart tests* = avaliação separada, dependente de reinicializações
@@ -19,8 +20,9 @@ serialização), `b8e93c1` (item 8 + fix galaxy/mandala), `1f054ef` (itens 7/9
 docs), `2fc9ffc`/`94c1c36` (item 8/9 — `viz-provenance.spec.js` enxuto após
 CI #46/#47), `5ccdc2a`/`540feac`/`a5fd8d8` (L0 completo incl. byte-lanes),
 `cdff682` (**f1** endianness `uint32-le` no frontend + 14 vetores de regressão;
-**f2** headers `X-QRNG-*` em JSON + `viz-provenance` sem `res.clone()` — resolve
-CI #48–#51). Nenhum commit em `main`.
+`X-QRNG-*` em respostas JSON), `5fd9b9d`/`1b54c24` (**f2** rota
+`/_test/reset-rate-limit` + `beforeEach`/`afterAll` nos specs de rate-limit —
+resolve CI #48–#53; **CI #54 verde**). Nenhum commit em `main`.
 
 ## 2. CI real do HEAD
 
@@ -33,43 +35,42 @@ CI #48–#51). Nenhum commit em `main`.
   **só `STABILIZATION_REPORT.md`** (10+/9−). O `c80f043` foi o último commit
   de código; o `2733968` só editou o relatório. Logo o suite completo rodou
   sobre o mesmo código em #44 (`c80f043`) e #45 (`2733968`), ambos verdes.
-- **CI real desta rodada verificado pela API do GitHub Actions** (runs #48–#51,
-  branch `stabilize/physical-layer-baseline-20260826`):
+- **CI real desta rodada — verificado pela API do GitHub Actions**
+  (branch `stabilize/physical-layer-baseline-20260826`):
 
-  | run | commit | conclusão | job que falhou |
+  | run | commit | conclusão | observação |
   |---|---|---|---|
-  | #48 | `94c1c36` | **failure** | E2E Playwright (staging determinístico) |
-  | #49 | `5ccdc2a` | **failure** | idem |
-  | #50 | `540feac` | **failure** | idem |
-  | #51 | `a5fd8d8` | **failure** | idem |
+  | #48–#51 | `94c1c36`…`a5fd8d8` | **failure** | só o step Playwright (staging); outros 4 jobs verdes |
+  | #52 | `cdff682` | **failure** | idem (f1 endianness + 1ª tentativa de fix) |
+  | #53 | `5fd9b9d` | **failure** | idem (2ª tentativa — `beforeEach` do fixture) |
+  | **#54** | **`1b54c24`** | **success** | **5/5 jobs verdes, Playwright `97 passed`** |
 
-  Nos 4 runs, **os outros 4 jobs passaram** (`qrng-client-api`, Frontend,
-  `qrng-nist-api`, `physical-layer`); só o step **"Playwright (e2e/staging) —
-  etapa BLOQUEANTE"** falhou (`exit code 1`). A alegação anterior de "97 passed
-  na VM" **não correspondia ao CI** — a execução na VM tinha diferença de
-  ambiente.
-- **Causa-raiz (reproduzida na VM com o fluxo idêntico ao CI** — checkout limpo,
-  `docker compose staging` + imagem `mcr.microsoft.com/playwright:v1.62.1`,
-  `E2E_STAGING_ONLY=1`): **1 teste** falha —
-  `viz-provenance.spec.js:87 "Aplicações (π): usa a API, actual_origin=replay"`
-  — `expect(getByText(/Erro:\s*[\d.]+\s*%/)).toBeVisible` estoura 30 s. O `π`
-  consome ~5 MB de hex; a instrumentação `INSTRUMENT` fazia
-  `await res.clone().json()` para respostas JSON — o `res.clone()` **teia o
-  stream grande e trava a leitura do corpo pelo app**, então a viz de π nunca
-  renderiza. `features.spec.js:33` (mesmo π, sem `INSTRUMENT`) passa. Demais 93
-  testes passam (94 passed, 1 failed, 2 did not run).
-- **Correção aplicada nesta rodada (`f2`):**
-  1. `qrng-client-api/server.js`: `setProvenanceHeaders(res, prov)` passa a ser
-     chamado **também nas respostas JSON** de `/v1/random` e `/v1/public/random`
-     (antes, só nas `raw`) → os `X-QRNG-Provenance` / `-Live-Verified` /
-     `-Fallback-Used` existem em todos os formatos. Paridade header↔corpo; ganho
-     real para consumidores (Jupyter inclusive) que não querem parsear o corpo.
-  2. `e2e/staging/viz-provenance.spec.js`: `INSTRUMENT` lê proveniência
-     **só dos headers** — nunca clona nem parseia o corpo. Remove o tee.
-  Reexecução do fluxo CI na VM após o fix: **registrada no item 18**.
-- Contagens de teste unitário (VM, CI-equivalente): `qrng-client-api` **145**
+  https://github.com/Dobslit-projects/qrng-demo-react/actions/runs/33193277945
+- **Causa-raiz (bissecção na VM com fluxo idêntico ao CI** — checkout limpo,
+  `docker compose staging`, imagem `mcr.microsoft.com/playwright:v1.62.1`,
+  `E2E_STAGING_ONLY=1`): **1 teste** —
+  `viz-provenance.spec.js "Aplicações (π)"` — estourava 30 s esperando
+  `Erro: %`. O snapshot da página mostrava **`RATE_LIMIT_EXCEEDED`** ao lado do
+  botão de π: `viz-provenance` roda **depois** de `ratelimit.spec.js`, cujo
+  burst esgota `PUBLIC_RATE_LIMIT_PER_IP_PER_MINUTE` (60/min, bucket único
+  atrás do nginx); a janela ainda não tinha rolado, então o `fetch` de π
+  recebia **HTTP 429** e a viz nunca renderizava. π isolado, e π depois do
+  teste "Dados" com fixture fresco, ambos passam — confirma o diagnóstico.
+- **Correção (`1b54c24`):**
+  1. `server.js`: rota **`POST /v1/_test/reset-rate-limit`** guardada por
+     `ENABLE_TEST_ROUTES` (só staging/CI) — zera o `publicIpRateLimiter` do IP
+     chamador + limpa o mapa de cota diária.
+  2. `viz-provenance.spec.js` `beforeEach` e `ratelimit.spec.js` `afterAll`
+     chamam essa rota → specs sensíveis a rate-limit ficam herméticos.
+  3. (junto) `server.js`: `setProvenanceHeaders` também nas respostas **JSON**
+     de `/v1/random` e `/v1/public/random` (antes só `raw`) → `X-QRNG-*` em
+     todos os formatos, paridade header↔corpo (ganho real p/ Jupyter);
+     `viz-provenance` `INSTRUMENT` lê proveniência **só dos headers** (sem
+     `res.clone()` do corpo).
+- Contagens de teste unitário (CI #54, verde): `qrng-client-api` **145**
   node:test, `qrng-nist-api` **44** python, frontend `qrngHelper.test.js`
-  **58** vitest (44 + 14 vetores de endianness) + `AppContext` 22.
+  **58** vitest (44 + 14 vetores de endianness `readUint32LE`) + `AppContext`
+  22. **Sem `continue-on-error` em nenhum workflow.**
 
 ## 3. Inventário e hashes das amostras L0
 
@@ -398,33 +399,26 @@ Em staging, `actual_origin = replay`.
 nos testes unitários node:test do `qrng-client-api`. Upstream real
 (`server_api.py`) só no script de VM `run-prov-real.sh`.
 
-**Suíte Playwright de staging: 97 testes** — `api.spec` 25 + `downloads` 6 +
-`features` 10 + `nist` 33 + `provenance` 9 + `ratelimit` 2 + `ui` 10 +
-`viz-provenance` 4 (na verdade `api.spec` 27 + … = 97 na contagem `--list`).
+**Suíte Playwright de staging: 97 testes** — `api.spec` 27 + `downloads` 6 +
+`features` 10 + `nist` 34 + `provenance` 9 + `ratelimit` 2 + `ui` 10 +
+`viz-provenance` 4 (`--list`). **CI #54 (`1b54c24`): `97 passed`.**
 
 **Histórico de CI desta rodada (verificado na API do GitHub Actions):**
 - #46/#47 — falha só no Playwright por asserção frágil na 1ª `viz-provenance`
   (`request_id || content_length`); reescrita em `94c1c36`.
-- #48–#51 (`94c1c36`…`a5fd8d8`) — **ainda falha só no Playwright**: 1 teste,
-  `viz-provenance.spec.js:87` (π), timeout de 30 s. A execução ad-hoc na VM
-  ("97 passed") **não reproduzia o CI**.
-- **Causa-raiz** (bissecção na VM com o fluxo idêntico ao CI): π **isolado**
-  passa; π **após o teste Dados, fixture fresco** passa; π **como último spec
-  da suíte completa** falha → algum spec anterior (`provenance`/`features`/`ui`
-  dirigem `_ctl/mode`) deixava o `fixture-upstream` fora de `online` quando
-  `viz-provenance` começava, e este spec — ao contrário de `downloads`/
-  `provenance` — não tinha `beforeEach` de reset.
-- **Correção (`5fd9b9d`):** `viz-provenance.spec.js` ganhou
-  `beforeEach → _ctl/online + _ctl/reset` (mesma disciplina dos outros specs) e
-  espera o botão de π ficar visível antes de clicar. Reexecução do fluxo CI
-  completo na VM após o fix: **§ abaixo**.
-- Testes unitários (VM, CI-equivalente, `94c1c36`/`5fd9b9d`): `qrng-client-api`
-  **145** node:test, `qrng-nist-api` **44** python, frontend `qrngHelper.test.js`
-  **58** vitest (44 + 14 vetores de endianness de `readUint32LE`) + `AppContext`
-  22. **Sem falhas.**
-
-**Reexecução do fluxo CI completo na VM em `5fd9b9d`:** *(preencher com o
-resultado — 97 passed / N failed)*.
+- #48–#53 (`94c1c36`…`5fd9b9d`) — **ainda falha só no Playwright**: 1 teste,
+  `viz-provenance.spec.js "Aplicações (π)"`, timeout de 30 s. A execução ad-hoc
+  na VM ("97 passed") **não reproduzia o CI** (não rodava a suíte inteira em
+  ordem, então não sofria o rate-limit acumulado).
+- **Causa-raiz** (item 2): π como último spec pegava **HTTP 429** porque
+  `ratelimit.spec.js` já tinha esgotado o rate-limit público do IP.
+- **Correção (`1b54c24`):** rota só-staging `/v1/_test/reset-rate-limit` +
+  `beforeEach`/`afterAll` nos specs → hermético. **CI #54: 5/5 jobs verdes,
+  `97 passed`** (52,8 s) — reproduzido na VM com o fluxo idêntico ao CI.
+- Testes unitários (CI #54, verde): `qrng-client-api` **145** node:test,
+  `qrng-nist-api` **44** python, frontend `qrngHelper.test.js` **58** vitest
+  (44 + 14 vetores de endianness `readUint32LE`) + `AppContext` 22.
+  **Sem falhas.**
 
 ## 19. Plano corrigido de deploy
 
