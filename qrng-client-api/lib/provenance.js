@@ -36,8 +36,14 @@ const NON_LIVE_MODES = ["replay", "fixture", "historical"];
  *        para "live" (com `live_verified=false`). O `server_api.py` de produção
  *        NÃO emite captured_at hoje -> com o default, produção reporta
  *        `actual_origin="unknown"` em /random até o upstream carimbar a captura.
+ * @param {boolean|null} [o.captureSha256Verified]
+ *        item 9: resultado de re-hashear o corpo e comparar com
+ *        `X-QRNG-Block-SHA256`. `null` = não checado; `false` = DIVERGIU
+ *        (integridade quebrada) -> nunca "live"; `true` = confere.
  * @param {number}  [o.now]                Date.now() injetável p/ teste
  */
+const KNOWN_ENVELOPE_VERSIONS = ["1"];
+
 function resolveProvenance(o) {
   const now = o.now || Date.now();
   const uh = o.upstreamHeaders || {};
@@ -46,6 +52,15 @@ function resolveProvenance(o) {
   const reachable = !!o.servedFromUpstream || !!o.upstreamReachable;
   const maxAgeMs = Number.isFinite(o.maxSampleAgeMs) ? o.maxSampleAgeMs : 300000;
   const allowNoEvidence = !!o.allowLiveWithoutCaptureEvidence;
+
+  // item 9 — envelope de proveniência versionado
+  const provVersion = uh["x-qrng-provenance-version"] || null;
+  const envelopeUsable = provVersion === null || KNOWN_ENVELOPE_VERSIONS.includes(provVersion);
+  const captureSha256 = uh["x-qrng-block-sha256"] || null;
+  const sourceInstance = uh["x-qrng-source-instance"] || null;
+  const captureSeq = uh["x-qrng-sequence"] != null ? Number(uh["x-qrng-sequence"]) : null;
+  // false = divergência comprovada pelo server.js; null = não checado
+  const shaVerified = o.captureSha256Verified === undefined ? null : o.captureSha256Verified;
 
   let sourceHealth = ["healthy", "degraded", "failed", "unknown"].includes(o.pollerSourceHealth)
     ? o.pollerSourceHealth : "unknown";
@@ -65,6 +80,7 @@ function resolveProvenance(o) {
   let bufferHealth = "unknown";
   if (o.insufficientEntropy) bufferHealth = "degraded";
   else if (uh["x-qrng-buffer-discontinuous"] === "true") bufferHealth = "discontinuous";
+  else if (shaVerified === false) bufferHealth = "discontinuous";  // item 9 regra 6
   else if (o.servedFromUpstream) bufferHealth = "healthy";
 
   let actualOrigin = "unknown";
@@ -76,9 +92,12 @@ function resolveProvenance(o) {
     actualOrigin = reachable ? mode : "unknown";
   } else if (mode === "live") {
     const ageOk = sampleAgeMs === null || sampleAgeMs <= maxAgeMs;
-    const haveCaptureEvidence = capturedAt !== null;
+    // item 9: evidência só conta se o envelope for de versão conhecida (regra 7)
+    // e a integridade do bloco não tiver divergido (regra 6).
+    const haveCaptureEvidence = capturedAt !== null && envelopeUsable && shaVerified !== false;
     if (o.servedFromUpstream && sourceHealth === "healthy" && bufferHealth === "healthy" && ageOk
-        && (haveCaptureEvidence || allowNoEvidence)) {
+        && shaVerified !== false
+        && (haveCaptureEvidence || (allowNoEvidence && envelopeUsable))) {
       actualOrigin = "live";
       liveVerified = haveCaptureEvidence;           // só "verificado" com captured_at
     } else if (!o.servedFromUpstream && o.upstreamReachable && sourceHealth === "healthy" && ageOk
@@ -110,6 +129,13 @@ function resolveProvenance(o) {
     capture_id: captureId,
     fallback_used: fallbackUsed,
     live_verified: liveVerified,
+    // item 9 — envelope de proveniência
+    provenance_version: provVersion,
+    envelope_usable: envelopeUsable,
+    source_instance: sourceInstance,
+    sequence: Number.isFinite(captureSeq) ? captureSeq : null,
+    capture_sha256: captureSha256,
+    capture_sha256_verified: shaVerified,
   };
 }
 

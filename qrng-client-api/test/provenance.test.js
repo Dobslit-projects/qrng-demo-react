@@ -174,3 +174,93 @@ test("header e JSON concordam: actual_origin é a única fonte de verdade", () =
   assert.equal(typeof p.actual_origin, "string");
   assert.ok(["live", "fallback", "replay", "fixture", "historical", "unknown"].includes(p.actual_origin));
 });
+
+// ── item 9 — envelope de proveniência versionado + SHA-256 de bloco ──────────
+const env1 = {
+  "x-qrng-provenance-version": "1",
+  "x-qrng-source-instance": "dobslit-qrng-ufpe-fpga",
+  "x-qrng-captured-at": fresh,
+  "x-qrng-capture-id": "cap_4096_deadbeefcafe",
+  "x-qrng-sequence": "4096",
+  "x-qrng-block-sha256": "a".repeat(64),
+  "x-qrng-source-status": "online",
+};
+
+test("item 9: envelope v1 + captured_at fresco + sha verificado -> live/live_verified + campos expostos", () => {
+  const p = resolveProvenance({
+    ...base, servedFromUpstream: true, upstreamHeaders: env1, captureSha256Verified: true,
+  });
+  assert.equal(p.actual_origin, "live");
+  assert.equal(p.live_verified, true);
+  assert.equal(p.provenance_version, "1");
+  assert.equal(p.envelope_usable, true);
+  assert.equal(p.source_instance, "dobslit-qrng-ufpe-fpga");
+  assert.equal(p.sequence, 4096);
+  assert.equal(p.capture_sha256, "a".repeat(64));
+  assert.equal(p.capture_sha256_verified, true);
+});
+
+test("item 9 regra 6: X-QRNG-Block-SHA256 DIVERGIU (server.js) -> nunca live, buffer discontinuous", () => {
+  const p = resolveProvenance({
+    ...base, servedFromUpstream: true, upstreamHeaders: env1, captureSha256Verified: false,
+  });
+  assert.notEqual(p.actual_origin, "live");
+  assert.equal(p.actual_origin, "unknown");
+  assert.equal(p.live_verified, false);
+  assert.equal(p.buffer_health, "discontinuous");
+  assert.equal(p.capture_sha256_verified, false);
+});
+
+test("item 9 regra 7: envelope de versão DESCONHECIDA -> evidência ignorada, degrada p/ unknown", () => {
+  const p = resolveProvenance({
+    ...base, servedFromUpstream: true, captureSha256Verified: true,
+    upstreamHeaders: { ...env1, "x-qrng-provenance-version": "9" },
+  });
+  assert.equal(p.envelope_usable, false);
+  assert.equal(p.actual_origin, "unknown");
+  assert.equal(p.live_verified, false);
+});
+
+test("item 9: envelope v1 mas instância REPLAY -> actual_origin=replay, NUNCA live (modo é teto)", () => {
+  const p = resolveProvenance({
+    instanceMode: "replay", configuredSource: "fpga", pollerSourceHealth: "healthy",
+    maxSampleAgeMs: 300000, now: NOW,
+    servedFromUpstream: true, captureSha256Verified: true, upstreamHeaders: env1,
+  });
+  assert.equal(p.actual_origin, "replay");
+  assert.equal(p.live_verified, false);
+});
+
+test("item 9: envelope v1 mas instância HISTORICAL + fallback -> fallback, nunca live", () => {
+  const p = resolveProvenance({
+    instanceMode: "historical", configuredSource: "fpga", pollerSourceHealth: "healthy",
+    now: NOW, servedFromUpstream: true, fallbackUsed: true,
+    captureSha256Verified: true, upstreamHeaders: env1,
+  });
+  assert.equal(p.actual_origin, "fallback");
+  assert.equal(p.live_verified, false);
+});
+
+test("item 9: envelope v1 + captured_at STALE -> unknown (idade derruba live mesmo com sha ok)", () => {
+  const p = resolveProvenance({
+    ...base, servedFromUpstream: true, captureSha256Verified: true,
+    upstreamHeaders: { ...env1, "x-qrng-captured-at": old },
+  });
+  assert.equal(p.actual_origin, "unknown");
+  assert.equal(p.live_verified, false);
+  assert.ok(p.sample_age_ms > 300000);
+});
+
+test("item 9: sem checagem de sha (null) + captured_at fresco -> live_verified=true, capture_sha256_verified=null", () => {
+  const p = resolveProvenance({ ...base, servedFromUpstream: true, upstreamHeaders: env1 });
+  assert.equal(p.actual_origin, "live");
+  assert.equal(p.live_verified, true);
+  assert.equal(p.capture_sha256_verified, null);
+});
+
+test("item 9: ausência de envelope (server_api.py de produção hoje) -> provenance_version=null, unknown", () => {
+  const p = resolveProvenance({ ...base, servedFromUpstream: true, upstreamHeaders: {} });
+  assert.equal(p.provenance_version, null);
+  assert.equal(p.envelope_usable, true); // null = legado tolerado, mas sem captured_at...
+  assert.equal(p.actual_origin, "unknown"); // ...continua unknown por falta de captured_at
+});

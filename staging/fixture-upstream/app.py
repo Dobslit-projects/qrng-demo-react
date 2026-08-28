@@ -24,8 +24,15 @@ import os
 import struct
 import random
 import time
+import hashlib
 import threading
+from collections import OrderedDict
 from datetime import datetime, timezone, timedelta
+
+PROVENANCE_ENVELOPE_VERSION = "1"
+SOURCE_INSTANCE = os.getenv("FIXTURE_SOURCE_INSTANCE", "staging-fixture-replay")
+_capture_registry: "OrderedDict[str, dict]" = OrderedDict()   # item 9: consulta por capture_id
+_CAP_REG_MAX = 512
 
 from fastapi import FastAPI, Query, Response, Request
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -64,9 +71,13 @@ def _take(n: int) -> bytes:
         return bytes(out)
 
 
-def _capture_headers() -> dict:
-    """Headers de captura por resposta (item 3). 'stale' devolve captured_at
-    antigo para o client-api derrubar o rotulo 'live' por idade."""
+def _capture_headers(block: bytes = b"") -> dict:
+    """Envelope de proveniencia v1 por resposta (itens 3 + 9). 'stale' devolve
+    captured_at antigo para o client-api derrubar o rotulo 'live' por idade.
+
+    O corpo `block` e passado para computar X-QRNG-Block-SHA256 (verificacao de
+    integridade fim-a-fim) e o capture_id. Sem `block`, os headves de bloco
+    ficam vazios (ex.: /v1/uint32, cujo corpo e JSON de inteiros)."""
     mode = _state["mode"]
     if mode == "stale":
         captured = datetime.now(timezone.utc) - timedelta(hours=6)
@@ -80,11 +91,35 @@ def _capture_headers() -> dict:
     else:  # online | exhausted
         captured = datetime.now(timezone.utc)
         status = "online"
-    return {
-        "X-QRNG-Captured-At": captured.isoformat(),
-        "X-QRNG-Capture-Id": f"cap_{_state['cursor']}",
+
+    with _lock:
+        seq = _state["total_popped"] - len(block)   # offset ANTES deste pop
+        cursor = _state["cursor"]
+    sha = hashlib.sha256(block).hexdigest() if block else ""
+    cap_id = f"cap_{seq}_{sha[:12]}" if block else f"cap_{cursor}"
+
+    hdrs = {
+        "X-QRNG-Provenance-Version": PROVENANCE_ENVELOPE_VERSION,
+        "X-QRNG-Source-Instance": SOURCE_INSTANCE,
         "X-QRNG-Source-Status": status,
+        "X-QRNG-Captured-At": captured.isoformat(),
+        "X-QRNG-Capture-Id": cap_id,
+        "X-QRNG-Transport-Format": STREAM_FORMAT,
+        "X-QRNG-Buffer-Discontinuous": "false",   # fixture nunca faz drop-oldest
     }
+    if block:
+        hdrs["X-QRNG-Sequence"] = str(seq)
+        hdrs["X-QRNG-Block-SHA256"] = sha
+        hdrs["X-QRNG-Byte-Count"] = str(len(block))
+        rec = {"capture_id": cap_id, "captured_at": captured.isoformat(),
+               "sequence": seq, "byte_count": len(block), "sha256": sha,
+               "source_status": status, "source_instance": SOURCE_INSTANCE,
+               "transport_format": STREAM_FORMAT}
+        with _lock:
+            _capture_registry[cap_id] = rec
+            while len(_capture_registry) > _CAP_REG_MAX:
+                _capture_registry.popitem(last=False)
+    return hdrs
 
 
 app = FastAPI(title="Kapua QRNG STAGING fixture upstream (replay)")
@@ -194,9 +229,9 @@ def get_random(bytes: int = Query(1024, ge=1, le=50 * 1024 * 1024),
                              "bytes": len(data), "source": "fixture-replay",
                              "provenance": PROVENANCE,
                              "generator": "STAGING fixture (deterministic replay)"},
-                            headers=_capture_headers())
+                            headers=_capture_headers(data))
     return Response(content=data, media_type="application/octet-stream",
-                    headers=_capture_headers())
+                    headers=_capture_headers(data))
 
 
 @app.get("/random_hex")
@@ -205,7 +240,7 @@ def get_random_hex(bytes: int = Query(32, ge=1, le=50 * 1024 * 1024)):
         return _offline_503()
     data = _serve_bytes(bytes)
     return JSONResponse({"bytes": len(data), "hex": data.hex(), "provenance": PROVENANCE},
-                        headers=_capture_headers())
+                        headers=_capture_headers(data))
 
 
 @app.get("/v1/raw")
@@ -223,7 +258,7 @@ def v1_raw(bytes: int = Query(1024, ge=4, le=50 * 1024 * 1024)):
         "X-QRNG-Conditioned": str(CONDITIONED).lower(),
         "X-QRNG-Bytes": str(len(data)),
         "X-QRNG-Samples": str(len(data) // SAMPLE_WIDTH_BYTES),
-        **_capture_headers(),
+        **_capture_headers(data),
     }
     return Response(content=data, media_type="application/octet-stream", headers=hdrs)
 
@@ -238,7 +273,19 @@ def v1_uint32(count: int = Query(256, ge=1, le=131072)):
                          "stream_format": STREAM_FORMAT, "conditioned": CONDITIONED,
                          "provenance": PROVENANCE,
                          "generator": "STAGING fixture (deterministic replay)"},
-                        headers=_capture_headers())
+                        headers=_capture_headers(data))
+
+
+@app.get("/v1/capture/{capture_id}")
+def v1_capture(capture_id: str):
+    """Item 9: consulta a metadata de uma resposta ja servida, por capture_id.
+    NAO devolve os bytes — so o registro correlacionado."""
+    with _lock:
+        rec = _capture_registry.get(capture_id)
+    if rec is None:
+        return JSONResponse(status_code=404,
+                            content={"error": "capture_id desconhecido", "capture_id": capture_id})
+    return JSONResponse(rec)
 
 
 @app.get("/stream")

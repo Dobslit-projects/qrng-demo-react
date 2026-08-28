@@ -106,6 +106,10 @@ jobs:
         working-directory: physical-layer/instrumentation
         run: python3 -m unittest -v test_harness
 
+      - name: Tap de captura em stream (item 8 - read-once/forward-once, so replay)
+        working-directory: physical-layer/instrumentation
+        run: python3 -m unittest -v test_stream_tap
+
       - name: Harness da restart campaign (item 9 - so piloto fixture, nunca mil)
         working-directory: physical-layer/restart-campaign
         run: python3 -m unittest -v test_harness
