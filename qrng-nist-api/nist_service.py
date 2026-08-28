@@ -194,6 +194,32 @@ def _worker():
         finally:
             _job_q.task_done()
 
+def _recover_orphan_jobs():
+    """Recuperação controlada no boot (item 7): a fila é in-memory e não
+    sobrevive a um restart. Jobs deixados em 'running' por um processo morto
+    ficariam presos para sempre -> marca como 'failed' com motivo explícito.
+    Jobs 'queued' são re-enfileirados (a linha do DB é a fonte da verdade)."""
+    _ts = datetime.now(timezone.utc).isoformat()
+    try:
+        running = _db_all("SELECT id FROM nist_test_jobs WHERE status='running'")
+        for r in running:
+            _db("""UPDATE nist_test_jobs SET status='failed', finished_at=?,
+                   error_message=? WHERE id=?""",
+                (_ts,
+                 "job abandonado: o serviço reiniciou enquanto este job estava em execução "
+                 "(fila in-memory não é durável). Reenvie o arquivo.",
+                 r["id"]))
+        requeued = 0
+        for r in _db_all("SELECT id FROM nist_test_jobs WHERE status='queued' ORDER BY created_at"):
+            _job_q.put(r["id"])
+            requeued += 1
+        if running or requeued:
+            log.info(f"[boot] recuperação: {len(running)} job(s) 'running' órfão -> failed; "
+                     f"{requeued} job(s) 'queued' re-enfileirado(s).")
+    except Exception as e:  # noqa: BLE001
+        log.warning(f"[boot] recuperação de jobs órfãos falhou (seguindo mesmo assim): {e}")
+
+_recover_orphan_jobs()
 threading.Thread(target=_worker, daemon=True, name="nist-worker").start()
 
 # ── Helpers ─────────────────────────────────────────────────────────────────────

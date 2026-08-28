@@ -420,6 +420,48 @@ class TestAssessmentEngineIdentity(unittest.TestCase):
         self.assertEqual(ns._next_periodic, before)
 
 
+class TestOrphanJobRecovery(unittest.TestCase):
+    """Item 7: no boot, jobs 'running' órfãos viram 'failed'; 'queued' voltam
+    à fila. A fila in-memory não é durável."""
+
+    def setUp(self):
+        self._orig_conn = ns._db_conn
+        self._orig_q = ns._job_q
+        ns._db_conn = fresh_db()
+
+        class _Q:
+            def __init__(self): self.items = []
+            def put(self, x): self.items.append(x)
+        ns._job_q = _Q()
+
+    def tearDown(self):
+        ns._job_q = self._orig_q
+        ns._db_conn.close()
+        ns._db_conn = self._orig_conn
+
+    def test_recupera_jobs_orfaos_no_boot(self):
+        now = datetime.now(timezone.utc).isoformat()
+        for jid, st in [("r1", "running"), ("r2", "running"),
+                        ("q1", "queued"), ("q2", "queued"),
+                        ("c1", "completed"), ("f1", "failed")]:
+            ns._db_conn.execute(
+                "INSERT INTO nist_test_jobs (id, created_at, status, trigger_type) VALUES (?,?,?,?)",
+                (jid, now, st, "upload"))
+        ns._db_conn.commit()
+
+        ns._recover_orphan_jobs()
+
+        rows = {r["id"]: r["status"] for r in
+                ns._db_conn.execute("SELECT id, status FROM nist_test_jobs").fetchall()}
+        self.assertEqual(rows["r1"], "failed")
+        self.assertEqual(rows["r2"], "failed")
+        self.assertEqual(rows["c1"], "completed")  # intacto
+        self.assertEqual(rows["f1"], "failed")     # já era
+        self.assertIn("abandonado", ns._db_conn.execute(
+            "SELECT error_message FROM nist_test_jobs WHERE id='r1'").fetchone()[0])
+        self.assertEqual(sorted(ns._job_q.items), ["q1", "q2"])  # queued re-enfileirados
+
+
 class TestSafeNameHardening(unittest.TestCase):
     """Item 6: _safe_name é só metadado -- neutraliza travessia de caminho."""
 

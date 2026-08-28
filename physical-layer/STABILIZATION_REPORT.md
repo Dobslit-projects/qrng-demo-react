@@ -142,6 +142,41 @@ venv compartilhado `/home/dobslit/qrng-api/venv` (python 3.14.4), SQLite
 `nist.db`, **sem string de versão**. Commit `e558ed4` "baseline do componente
 realmente executado". Metadados completos em `NIST_SERVICE_BASELINE.md`.
 
+## 7-bis. NIST staging com a suíte SP 800-90B REAL (rodada de 2026-08-28)
+
+`physical-layer/NIST_STAGING_REAL.md`. Imagem `nist-staging-real` compila a
+suíte real (`usnistgov/SP800-90B_EntropyAssessment` @ `87c104d0` — **o mesmo
+checkout de produção**) e roda a versão controlada em `:18093` com
+`assessment_engine=sp800-90b-reference`, `synthetic_result=false`. Wrapper
+`qrng_nist90b.sh` byte-idêntico ao de produção (`aaec3c3e…`).
+
+**Comparação PRODUTIVO (`:18002`) × STAGING-REAL** sobre uma cópia read-only
+de `run_new_01.bin` (1 MiB), modo `both`:
+
+| | PRODUTIVO | STAGING-REAL |
+|---|---|---|
+| `iid_passed` | False | **False** |
+| `chi_square` / `lrs` / `permutation` | T / T / F | **T / T / F** |
+| `h_min_iid` | 7.456189 | **7.456189** (exato) |
+| `h_min_non_iid` | 6.951334 | **6.951334** (exato) |
+| `limiting_estimator` | T-Tuple = 7.210061 | **idem** |
+| `sha256_used` | `3021cbf1…` | **`3021cbf1…`** |
+
+**`equivalent_statistically: true`.** As únicas diferenças são
+**metadados/proveniência que só a versão corrigida persiste** (sizes,
+`normalized_symbol_count`, `assessment_engine`, `synthetic_result`, …) e a
+`duration` (67 s vs 125 s — compilação sem `-march=native`, não afeta o
+resultado). **Nenhuma diferença de parser, unidade de símbolo ou bug.**
+Determinismo: 2 execuções do mesmo arquivo → idênticas. Timeout real:
+`subprocess.TimeoutExpired` → `status: failed`. Restart de container:
+`_recover_orphan_jobs()` no boot marca `running` órfão como `failed` e
+re-enfileira `queued` (teste `test_recupera_jobs_orfaos_no_boot`).
+
+> **Isto substitui a ressalva do §8**: nesta amostra, a versão corrigida + a
+> suíte real reproduzem **exatamente** o assessment de produção. Ainda não é
+> "validado" — falta a comparação sobre o conjunto completo de arquivos +
+> migração de banco (§21). **NIST produtivo NÃO substituído.**
+
 ## 8. Diff do serviço NIST (baseline × versão corrigida)
 
 `nist_service.py.diff-baseline-vs-65fb43b.txt`. 8 diferenças funcionais
@@ -440,6 +475,13 @@ power-cycles) e item 10 (recálculo de RCT/APT). Sem essa janela, os itens 6, 8,
 `OPERACIONAL, MAS AINDA EM VALIDAÇÃO DA FONTE`.
 
 Itens que podem avançar **sem** a janela da FPGA, se autorizados
-separadamente: comparação paralela do NIST de staging contra a **suíte SP
-800-90B real** (destrava a substituição do serviço NIST); merge de
-frontend/API em `main` + deploy.
+separadamente:
+
+- **NIST**: a comparação paralela contra a suíte real **foi executada numa
+  amostra** e deu equivalência estatística exata (§7-bis). Próximo passo
+  autorizável: rodar a comparação sobre **todo** o conjunto de
+  `/home/dobslit/qrng_data_nist` (incl. `.txt`/`.csv`), depois migrar o banco
+  real e trocar o `ExecStart` numa janela. **Não substituir o NIST produtivo
+  antes disso.**
+- **Deploy**: merge de frontend/API em `main` + redeploy (o `qrng-client-api`
+  agora precisa de `lib/` no deploy — ver §22).
