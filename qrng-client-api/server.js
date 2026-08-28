@@ -92,6 +92,12 @@ const QRNG_CONFIGURED_SOURCE = process.env.QRNG_CONFIGURED_SOURCE || "fpga";
 const QRNG_INSTANCE_MODE     = (process.env.QRNG_PROVENANCE || "live").toLowerCase();
 // modos: live | replay | fixture | historical   (fallback/unknown são só resultados)
 const LIVE_SAMPLE_MAX_AGE_MS = parseInt(process.env.LIVE_SAMPLE_MAX_AGE_MS || "300000", 10); // 5 min
+// item 4: por padrão "live" EXIGE evidência de captura (header X-QRNG-Captured-At
+// do upstream). Sem ela, actual_origin fica "unknown". Defina
+// LIVE_ALLOW_WITHOUT_CAPTURE_EVIDENCE=1 para aceitar "upstream saudável servindo
+// bytes" como live (com live_verified=false) -- necessário enquanto o
+// server_api.py de produção não carimbar captured_at.
+const LIVE_ALLOW_WITHOUT_CAPTURE_EVIDENCE = process.env.LIVE_ALLOW_WITHOUT_CAPTURE_EVIDENCE === "1";
 
 const { resolveProvenance: _resolveProvenance } = require("./lib/provenance");
 
@@ -114,6 +120,7 @@ function resolveProvenance(o) {
     configuredSource: QRNG_CONFIGURED_SOURCE,
     pollerSourceHealth: upstreamHealthLabel(),
     maxSampleAgeMs: LIVE_SAMPLE_MAX_AGE_MS,
+    allowLiveWithoutCaptureEvidence: LIVE_ALLOW_WITHOUT_CAPTURE_EVIDENCE,
   });
 }
 

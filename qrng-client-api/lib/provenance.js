@@ -28,6 +28,14 @@ const NON_LIVE_MODES = ["replay", "fixture", "historical"];
  * @param {boolean} [o.insufficientEntropy] buffer sem bytes suficientes
  * @param {object}  [o.upstreamHeaders]    headers do upstream (chaves minúsculas)
  * @param {number}  [o.maxSampleAgeMs]     idade máxima p/ "live" (default 300000)
+ * @param {boolean} [o.allowLiveWithoutCaptureEvidence]
+ *        default FALSE. Quando FALSE, "live" exige `x-qrng-captured-at` do
+ *        upstream — sem ele, `actual_origin` fica "unknown" (a instrução do
+ *        item 4: "actual_origin deve ser unknown quando não houver evidência
+ *        suficiente"). Quando TRUE, um upstream saudável servindo bytes basta
+ *        para "live" (com `live_verified=false`). O `server_api.py` de produção
+ *        NÃO emite captured_at hoje -> com o default, produção reporta
+ *        `actual_origin="unknown"` em /random até o upstream carimbar a captura.
  * @param {number}  [o.now]                Date.now() injetável p/ teste
  */
 function resolveProvenance(o) {
@@ -37,6 +45,7 @@ function resolveProvenance(o) {
   const fallbackUsed = !!o.fallbackUsed;
   const reachable = !!o.servedFromUpstream || !!o.upstreamReachable;
   const maxAgeMs = Number.isFinite(o.maxSampleAgeMs) ? o.maxSampleAgeMs : 300000;
+  const allowNoEvidence = !!o.allowLiveWithoutCaptureEvidence;
 
   let sourceHealth = ["healthy", "degraded", "failed", "unknown"].includes(o.pollerSourceHealth)
     ? o.pollerSourceHealth : "unknown";
@@ -67,13 +76,19 @@ function resolveProvenance(o) {
     actualOrigin = reachable ? mode : "unknown";
   } else if (mode === "live") {
     const ageOk = sampleAgeMs === null || sampleAgeMs <= maxAgeMs;
-    if (o.servedFromUpstream && sourceHealth === "healthy" && bufferHealth === "healthy" && ageOk) {
+    const haveCaptureEvidence = capturedAt !== null;
+    if (o.servedFromUpstream && sourceHealth === "healthy" && bufferHealth === "healthy" && ageOk
+        && (haveCaptureEvidence || allowNoEvidence)) {
       actualOrigin = "live";
-      liveVerified = capturedAt !== null;
-    } else if (!o.servedFromUpstream && o.upstreamReachable && sourceHealth === "healthy" && ageOk) {
-      actualOrigin = "live"; // resposta de STATUS (/health) numa instância live saudável
+      liveVerified = haveCaptureEvidence;           // só "verificado" com captured_at
+    } else if (!o.servedFromUpstream && o.upstreamReachable && sourceHealth === "healthy" && ageOk
+               && allowNoEvidence) {
+      // resposta de STATUS (/health) numa instância live saudável — só conta
+      // como "live" quando explicitamente permitido sem evidência de captura.
+      actualOrigin = "live";
       liveVerified = false;
     } else {
+      // sem evidência suficiente (ex.: server_api.py não carimba captured_at)
       actualOrigin = "unknown";
     }
   }

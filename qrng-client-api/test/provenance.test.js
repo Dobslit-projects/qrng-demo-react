@@ -112,15 +112,48 @@ test("9. proibição de live quando fallback_used=true (mesmo com todas as evid�
   assert.equal(p.live_verified, false);
 });
 
-test("bônus: /health de instância live saudável (status, sem bytes) -> live, live_verified=false", () => {
+test("item 4: DEFAULT — 'live' EXIGE captured_at. Sem evidência -> actual_origin=unknown", () => {
+  // upstream saudável servindo bytes, mas SEM X-QRNG-Captured-At (é o caso do
+  // server_api.py de produção hoje).
   const p = resolveProvenance({
     ...base,
-    servedFromUpstream: false,
-    upstreamReachable: true,
+    servedFromUpstream: true,
+    upstreamHeaders: { "x-qrng-source-status": "online", "x-qrng-capture-id": "cap_x" },
+  });
+  assert.equal(p.actual_origin, "unknown", "sem captured_at não há evidência suficiente p/ 'live'");
+  assert.equal(p.live_verified, false);
+  assert.equal(p.source_health, "healthy");
+  assert.equal(p.buffer_health, "healthy");
+});
+
+test("item 4: com LIVE_ALLOW_WITHOUT_CAPTURE_EVIDENCE -> upstream saudável basta p/ 'live' (live_verified=false)", () => {
+  const p = resolveProvenance({
+    ...base,
+    servedFromUpstream: true,
+    allowLiveWithoutCaptureEvidence: true,
     upstreamHeaders: { "x-qrng-source-status": "online" },
   });
   assert.equal(p.actual_origin, "live");
-  assert.equal(p.live_verified, false);
+  assert.equal(p.live_verified, false);           // sem captured_at -> não verificado
+});
+
+test("item 4: /health de instância live saudável (sem bytes) -> unknown por default; 'live' só com allow", () => {
+  const strict = resolveProvenance({ ...base, servedFromUpstream: false, upstreamReachable: true,
+    upstreamHeaders: { "x-qrng-source-status": "online" } });
+  assert.equal(strict.actual_origin, "unknown");
+  const lax = resolveProvenance({ ...base, servedFromUpstream: false, upstreamReachable: true,
+    allowLiveWithoutCaptureEvidence: true, upstreamHeaders: { "x-qrng-source-status": "online" } });
+  assert.equal(lax.actual_origin, "live");
+  assert.equal(lax.live_verified, false);
+});
+
+test("item 4: served_at NUNCA é usado como captured_at", () => {
+  const p = resolveProvenance({ ...base, servedFromUpstream: true,
+    upstreamHeaders: { "x-qrng-source-status": "online" } });  // sem captured_at
+  assert.equal(p.captured_at, null);
+  assert.ok(p.served_at, "served_at é preenchido");
+  assert.notEqual(p.served_at, p.captured_at);
+  assert.equal(p.sample_age_ms, null, "sem captured_at não há idade de amostra");
 });
 
 test("bônus: buffer discontinuous propagado do header do upstream", () => {
