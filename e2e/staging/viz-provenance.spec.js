@@ -120,7 +120,6 @@ test.describe.serial("visualizações — proveniência rastreável (item 8)", (
     const { net } = await grab(page);
     assertNeverLive(net); // asserção dura sempre vale
     // asserção mole: normalmente busca /random; se não buscou na janela, só registra.
-    // eslint-disable-next-line no-console
-    console.log("sonificação: chamadas /random =", net.filter((r) => /random/.test(r.url)).length);
+    test.info().annotations.push({ type: "sonif-random-calls", description: String(net.filter((r) => /random/.test(r.url)).length) });
   });
 });
