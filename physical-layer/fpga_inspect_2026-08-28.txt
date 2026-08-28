@@ -1,0 +1,157 @@
+FPGA READ-ONLY INSPECTION — 2026-08-28
+Chain: local -> Bongo 2.24.117.58 -> dobslit 192.168.0.42 (via Bongo reverse tunnel 127.0.0.1:22222)
+       -> FPGA 10.0.10.2 (root). Nested paramiko direct-tcpip channels. READ-ONLY.
+No writes, no restart, no bitstream reload, NO MMIO, no second consumer of :12345 or the FIFO.
+
+===== IDENTITY =====
+host: rp-f0d1e2 (MAC ..26:32:f0:d1:e2)
+uname: Linux rp-f0d1e2 5.15.0-xilinx #1 SMP PREEMPT ... armv7l  (Zynq-7000)
+OS: Ubuntu 22.04.4 LTS
+Red Pitaya: Version 2.00-a0457d3aa, Build 37, U-Boot redpitaya-v2022.1, Kernel branch redpitaya-v2024.1
+FPGA manager state: operating
+load: fifo ~96.7% CPU, nc ~86.7% CPU (board saturated; sshd intermittent)
+
+===== SERVER :12345 =====
+ss: LISTEN 0.0.0.0:12345  users:(("nc",pid=399,fd=3))
+ps:
+  root 389  /bin/bash -c /root/fifo | nc -k -l 0.0.0.0 12345
+  root 397  /root/fifo
+  root 399  nc -k -l 0.0.0.0 12345
+  root 215  /usr/bin/python3 /usr/local/bin/jupyter-lab
+nc binary: /usr/bin/nc.openbsd  sha256 e7c80430357fb9e8ee25464d484622d25ca39359b767b7c0f0162f13057421a4
+pipe trace: /proc/397/fd/1 -> pipe:[4202]  ;  /proc/399/fd/0 -> pipe:[4202]
+  => /root/fifo | nc -k -l 0.0.0.0 12345
+
+===== UIO MAP (/sys/class/uio/uio0 name=api) =====
+map0 hk    addr=0x40000000 size=0x00100000
+map1 acq   addr=0x40100000 size=0x00100000
+map2 asg   addr=0x40200000 size=0x00100000
+map3 pid   addr=0x40300000 size=0x00100000
+map4 ams   addr=0x40400000 size=0x00100000
+map5 daisy addr=0x40500000 size=0x00100000
+map7 test  addr=0x40700000 size=0x00100000
+/dev/mem crw-r----- 1 root kmem  ; /dev/uio0 crw-rw---- 1 root uio
+(NOTE: no uio map at 0x43C00000 — fifo.c mmaps /dev/mem directly at that GP0 address)
+
+===== /root/fifo.c  (sha256 8c738fbf47989b0175bf903c04f0efc3eb0626831442535a349df540bc2e5a05, 2131 B, mtime 2026-03-29) =====
+running binary /root/fifo == /root/fifo.binary  sha256 973840273f0354c2203ab6ba43224270452bbcdb932d030e686bc61afa15c340
+--------------------------------------------------------------------------------
+#include <unistd.h>
+#include <fcntl.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdint.h>
+#include <sys/mman.h>
+#include <signal.h>
+#include <errno.h>
+#include <endian.h>
+
+#define AXI_FIFO_ADDR   0x43C00000
+#define AXI_FIFO_WINDOW 0x20000
+
+static volatile int run = 1;
+static void intHandler(int dummy) { (void)dummy; run = 0; }
+
+static int write_all(const void *buf, size_t len)
+{
+    const unsigned char *p = (const unsigned char *)buf;
+    while (len > 0) {
+        ssize_t n = write(STDOUT_FILENO, p, len);
+        if (n < 0) { if (errno == EINTR) continue; return -1; }
+        if (n == 0) return -1;
+        p += (size_t)n; len -= (size_t)n;
+    }
+    return 0;
+}
+
+int main(void)
+{
+    int fd; unsigned int *axi_fifo; uint32_t num, le;
+    signal(SIGINT, intHandler); signal(SIGTERM, intHandler); signal(SIGPIPE, SIG_IGN);
+    fd = open("/dev/mem", O_RDWR | O_SYNC);
+    if (fd < 0) { perror("open /dev/mem"); return 1; }
+    axi_fifo = mmap(NULL, AXI_FIFO_WINDOW, PROT_READ | PROT_WRITE, MAP_SHARED, fd, AXI_FIFO_ADDR);
+    if (axi_fifo == MAP_FAILED) { perror("mmap"); close(fd); return 1; }
+    fprintf(stderr, "ISR 0x0 = %x\n", *axi_fifo);
+    *axi_fifo = 0xFFFFFFFF;
+    fprintf(stderr, "ISR 0x0 = %x\n", *axi_fifo);
+    *(axi_fifo + (0x18 / 0x4)) = 0xA5;  /* RDFR reset */
+    while (run) {
+        num = *(axi_fifo + (0x11000 / 0x4));   /* read from AXI FIFO (RDFD) -> POP */
+        *axi_fifo = 0xFFFFFFFF;                 /* clear ISR */
+        le = htole32(num);                      /* explicit little-endian, 4 bytes fixed */
+        if (write_all(&le, sizeof(le)) != 0) break;
+    }
+    munmap(axi_fifo, AXI_FIFO_WINDOW); close(fd); return 0;
+}
+--------------------------------------------------------------------------------
+
+===== /root/fifo.c.old  (sha256 8a338ad7534b8474f54392b01f0099f3a08993c4833e549fb3f748e364ef2367, PREVIOUS/replaced) =====
+KEY DIFF: used  fprintf(store, "%u", num);   with store = fopen("/dev/stdout","wb")
+  => DECIMAL ASCII, NO SEPARATOR between numbers (ambiguous serialization) — REMOVED in current fifo.c.
+Also had  *(axi_fifo + (0x18/0x4)) = 0xA5;  // RDFR   and   num = *(axi_fifo + (0x11000/0x4));
+
+===== /etc/systemd/system/qrng-stream.service  (ONLY unit in /etc/systemd/system/) =====
+[Service]
+WorkingDirectory=/root
+ExecStartPre=/opt/redpitaya/bin/fpgautil -b /root/stream_app.bit.bin
+ExecStart=/bin/bash -c '/root/fifo | nc -k -l 0.0.0.0 12345'
+Restart=always
+RestartSec=5
+KillMode=control-group
+StandardOutput=journal
+StandardError=journal
+=> every `systemctl restart qrng-stream` RELOADS the bitstream then runs fifo|nc.
+
+===== /root/init_demo.sh  (sha256 fc3cc25ecb1f45c4f0fa2e8030d3bb683a043aa51ccd919951dd1e321b1cb45f) =====
+#!/bin/bash
+echo "Initializing FPGA image"
+/opt/redpitaya/bin/fpgautil -b /root/stream_app.bit.bin
+#(rest commented out: tunnel, uvicorn server_api, `while true; do /root/fifo; sleep 5; done`)
+
+===== /root/qrng_legacy_screen_command.txt =====
+# Comando original rodando dentro do screen (sessao 394.pts-0.rp-f0d1e2, criada 24/03/2026)
+/opt/redpitaya/bin/fpgautil -b /root/stream_app.bit.bin
+/root/fifo | nc -l 0.0.0.0 12345
+# Nota: nc -l sem -k e one-shot; o novo servico qrng-stream.service substitui com loop de restart.
+
+===== /root/parameters.txt  (sha256 6c1f79c8d5fe7b2268f0a4d87f12acb9941420c4826cb93178c7fd762058c196) =====
+ch1: 0xBD0
+ch4: 0xC53
+(12-bit values 3024 / 3155 — likely per-ADC-channel offset/threshold; exact semantics need server.py — not obtained)
+
+===== DEAD PROTOTYPES (NOT running, NOT in the chain) =====
+/root/server_api.py       sha256 c98fe57420b694cd0ee8b3ace010340c8e91c9ed64d904e982251a46f5deb699  -> SOURCE_FILE = "/dev/urandom", FastAPI
+/root/server.py           sha256 07c5ad9ad99d5f821cac9eb1532086d69773a928949f4d7a85ecba892af89f0a  -> SOURCE_FILE = "/dev/urandom", PORT 9000, framed protocol MAGIC b"QRNG" struct "!4sQI"
+/root/testelocal/server_api.py  (4326 B, another prototype)
+=> the production chain uses  fifo -> nc :12345  (real AXI FIFO); downstream the dobslit server_api.py reads /tmp/fifo_qrng.
+
+===== ADC / CLOCK =====
+dmesg: only XADC (Zynq housekeeping ADC, temp/voltage) — `xadc: 961538` / `147928` / `36982` (Hz, housekeeping, NOT the RF signal path).
+RF ADC (Red Pitaya): 125 MS/s / 14-bit (standard); RTL almost certainly decimates. Decimation factor / effective rate: NOT exposed.
+Transport throughput (measured via /health, dobslit): 699,220 B/s ~= 174,805 uint32/s.
+
+===== .bash_history (relevant) =====
+gcc -O3 -g fifo.c -o fifo
+./fifo | nc -l 0.0.0.0 12345
+fpgautil -b ./stream_app.bit.bin
+(cycle: nano fifo.c -> gcc -O3 -g fifo.c -o fifo -> fpgautil -b stream_app.bit.bin -> ./fifo | nc -l 0.0.0.0 12345 ; screen -R)
+grep -rnw stream_app.bit.bin /etc
+
+===== BITSTREAM =====
+/root/stream_app.bit.bin  2083744 B (loaded by qrng-stream.service ExecStartPre)
+/root/dac_test.bit.bin    2083744 B
+/opt/redpitaya/boot.bin , /opt/redpitaya/fpga/
+NO Vivado/RTL project on the board (no .v/.vhd/.xpr/.tcl/.bd under /root or /opt/redpitaya).
+
+===== CHARACTERIZATION DATA ON THE FPGA (evidence of physical phenomenon) =====
+/root/numbers_laser_on.txt , numbers_shotnoise.txt , numbers_lab_noise.txt , numbers_sine_1k.txt ,
+numbers_noise_gen_{200mv_15M,200mv_30M,400mv_30M}.txt , numbers_qrng.txt (10.7 MB) , numbers.txt (10.7 MB) ,
+adc_counts_laser_on.txt
+=> strongly suggests OPTICAL SHOT NOISE (laser + photodetector) as the physical source.
+
+===== AXI4-Stream FIFO register map (from fifo.c + Xilinx PG080) =====
+0x00     ISR   Interrupt Status. read=status; write=write-1-to-clear.   fifo.c: reads (diag) + writes 0xFFFFFFFF at startup and after every RDFD read.
+0x18     RDFR  Receive Data FIFO Reset. write 0x000000A5 resets RX FIFO. fifo.c: writes 0xA5 once at startup.
+0x1C     RDFO  Receive Data FIFO Occupancy (words). read-only, non-destructive.  fifo.c: unused.
+0x11000  RDFD  Receive Data FIFO Data.  READ = destructive POP of one 32-bit word.  fifo.c: read every loop iteration.

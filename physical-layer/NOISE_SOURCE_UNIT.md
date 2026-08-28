@@ -1,9 +1,21 @@
 # Definição da unidade física da noise source (fase item 6)
 
-Status: **a maior parte permanece INCONCLUSIVA** — o lado FPGA não pôde ser
-inspecionado nesta rodada (ver "Bloqueio de acesso" no fim). O que mudou: o
-**caminho de software do FIFO até `server_api.py` está agora lido byte a byte a
-partir do código realmente executado** (dobslit VM, 2026-08-27).
+> **ATUALIZAÇÃO 2026-08-28:** a FPGA `10.0.10.2` foi inspecionada (read-only, sob
+> autorização) — ver **`physical-layer/FPGA_INSPECTION_RESULT.md`** e
+> **`ROUND_2026-08-28_FPGA_HARNESS_PROVENANCE.md` §5/§13**. `fifo.c` foi lido na
+> íntegra: `num = *(axi_fifo + 0x11000/4)` (1 read de RDFD = 1 palavra de 32
+> bits do AXI4-Stream FIFO @ `0x43C00000`), `le = htole32(num)`,
+> `write_all(&le, 4)`, **sem condicionamento no driver, sem framing**. A
+> serialização textual `fprintf("%u")` existia no `fifo.c.old` e foi **removida**.
+> **RESTART DA NOISE SOURCE = `systemctl restart qrng-stream`** (embute
+> `fpgautil -b stream_app.bit.bin`) ou power-cycle. **Ainda inconclusivo:** o
+> conteúdo do RTL de `stream_app.bit.bin` (condicionamento em HW, decimação,
+> taxa) — o `.bit.bin` está na placa, o projeto Vivado/RTL **não**.
+
+Status (histórico): **a maior parte permanecia INCONCLUSIVA** — o lado FPGA não
+pôde ser inspecionado até 2026-08-27. O **caminho de software do FIFO até
+`server_api.py` está lido byte a byte a partir do código realmente executado**
+(dobslit VM, 2026-08-27).
 
 ---
 

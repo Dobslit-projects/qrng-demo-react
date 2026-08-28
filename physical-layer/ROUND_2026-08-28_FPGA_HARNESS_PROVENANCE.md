@@ -43,28 +43,51 @@ DB de produção. `GET /v1/random` com o token removido → **HTTP 403**. Row co
 **de volta a `users=1` (`contact@primusquantum.com`, real), `api_tokens=0`** —
 idênticos ao backup pré-deploy `pre-deploy-9e36a90.bak` (sha `2876f3bb…`).
 
-## 5. Unidade física da amostra — BLOQUEADA
+## 5. Unidade física da amostra — PARCIALMENTE RESOLVIDA (FPGA inspecionada)
+
+Inspeção READ-ONLY da FPGA feita 2026-08-28 sob autorização
+(`FPGA_INSPECTION_RESULT.md`). O que mudou:
 
 ```
-NOISE SOURCE SAMPLE        = INCONCLUSIVO
-PHYSICAL SAMPLE RATE       = INCONCLUSIVO
-ASSESSMENT SYMBOL (físico) = INCONCLUSIVO
-HEALTH TEST SYMBOL         = INCONCLUSIVO
-TRANSPORT WORD             = uint32 little-endian, 4 bytes  (CONFIRMADO no software)
-TRANSPORT THROUGHPUT       = 699 220 B/s ≈ 174 805 uint32/s  (MEDIDO 2026-08-28, 30,4 s, via /health)
-CONDITIONING (software)    = nenhum (passthrough verbatim)
-CONDITIONING (FPGA)        = INCONCLUSIVO (RTL não inspecionado)
+TRANSPORT WORD        = uint32 little-endian, 4 bytes.
+                        CONFIRMADO NA ORIGEM: /root/fifo.c faz
+                        `num = *(axi_fifo + 0x11000/4)` (1 read de RDFD = 1
+                        palavra de 32 bits do AXI4-Stream FIFO @ 0x43C00000),
+                        `le = htole32(num)`, `write_all(&le, 4)`. Sem framing.
+NOISE SOURCE SAMPLE   = a palavra de 32 bits é 1 read de RDFD. Se o RTL empacota
+                        N sub-amostras do ADC por palavra (ou decima), a AMOSTRA
+                        FÍSICA ≠ palavra de 32 bits. O RTL de stream_app.bit.bin
+                        NÃO está na placa (sem projeto Vivado) -> AINDA
+                        INCONCLUSIVO se 1 uint32 = 1 amostra física.
+PHYSICAL SAMPLE RATE  = INCONCLUSIVO. O ADC de RF da Red Pitaya é 125 MS/s/14 bit;
+                        o RTL quase certamente decima. Fator de decimação e taxa
+                        efetiva NÃO expostos (dmesg só mostrou o XADC de
+                        housekeeping). Vazão de transporte: 699 220 B/s ≈
+                        174 805 uint32/s (MEDIDO via /health).
+CONDITIONING (fifo.c) = NENHUM. Confirmado lendo o código: RDFD cru -> write(4).
+CONDITIONING (RTL)    = INCONCLUSIVO. Não observável sem o projeto do bitstream.
+                        Estatística anterior (0 bits constantes, sem contador,
+                        min-entropia 6,9–7,1) é CONSISTENTE com ausência de
+                        whitening pesado, mas não prova.
+ASSESSMENT / HEALTH SYMBOL = INCONCLUSIVO (herdam a dúvida sobre a amostra física).
+FENÔMENO FÍSICO       = shot noise óptico (laser + fotodetector) — forte
+                        evidência circunstancial (numbers_laser_on.txt,
+                        numbers_shotnoise.txt, adc_counts_laser_on.txt,
+                        parameters.txt ch1/ch4). NÃO confirmado por datasheet.
+RESTART DA NOISE SOURCE = DEFINIDO: `systemctl restart qrng-stream` (embute
+                        `fpgautil -b stream_app.bit.bin` no ExecStartPre) ou
+                        power-cycle. Restart de fifo/connector/server_api ≠
+                        restart da noise source.
 ```
 
-**Motivo do bloqueio:** o acesso à Red Pitaya `10.0.10.2` é SSH por senha
-encadeado (Bongo → dobslit → FPGA); o classificador de segurança do ambiente
-bloqueia esse padrão mesmo para leitura (3ª rodada). Bongo **não tem**
-`sshpass`/`paramiko`. `fifo.c` **não está** no repo nem na Bongo VM. A seção MMIO
-do `fpga_readonly_inspect.sh` **não foi executada** — ela lê registradores AXI
-(`devmem 0x43C00000..+0x1C`) e **não há confirmação** de que esses offsets são
-read-only sem efeito colateral (o mapa de registradores/RTL é desconhecido; ex.:
-offset `0x18` pode ser um registrador de reset do FIFO de recepção). Ver
-`FPGA_INSPECTION.md`. **Handoff ao operador** permanece a via.
+**O que segue bloqueado:** o **conteúdo do RTL** de `stream_app.bit.bin`
+(condicionamento em HW, decimação, taxa) — o `.bit.bin` está na placa mas o
+projeto-fonte (Vivado/RTL) **não**. E MMIO — **não executado de propósito**:
+mesmo um `devmem` read-only de `0x43C00000`/`0x1C` é um **segundo acessador do
+periférico AXI FIFO ao vivo** (o `fifo.c` escreve ISR a cada iteração) e o
+`0x11000` (RDFD) é leitura **destrutiva**. O `fifo.c` + a Xilinx PG080 já dão a
+semântica dos registradores (`0x00`=ISR, `0x18`=RDFR reset, `0x1C`=RDFO
+ocupação, `0x11000`=RDFD data/pop).
 
 ## 6. Inventário de amostras (piloto NIST L0, reproduzido)
 
@@ -135,40 +158,95 @@ conservador; k-de-n continua hipótese (ver item 17 / `RCT_APT_ARCHITECTURE.md`)
 
 **NÃO EXECUTADA** (instrução explícita: "não execute o teste nist de 18horas").
 Comando e estimativa preparados (`NIST_FULLSET_COMPARE.md`: ~18 h wall, ~1,4 GB,
-lotes L0–L3). **Gate:** aguarda (a) autorização e (b) — para a *restart campaign* —
-a definição do que constitui um restart real da noise source, que depende da
-inspeção do RTL (bloqueada).
+lotes L0–L3). **Gate:** aguarda autorização.
+
+**Restart campaign — evento de restart AGORA DEFINIDO** (inspeção da FPGA, item
+13.0): `qrng-stream.service` tem `ExecStartPre=/opt/redpitaya/bin/fpgautil -b
+/root/stream_app.bit.bin` — **todo `systemctl restart qrng-stream` reCARREGA o
+bitstream** e então sobe `fifo | nc`. ⇒ **um restart real da noise source =
+`systemctl restart qrng-stream` (que embute o reload do bitstream) ou
+power-cycle da placa.** Um restart do `qrng-connector.py`/`server_api.py` da
+dobslit, ou um `SIGKILL`+respawn do `/root/fifo`, **NÃO** é restart da noise
+source (só reseta o AXI FIFO digital via `RDFR=0xA5`). Harness pronto
+(`restart-campaign/`). Campanha em si: aguarda autorização.
 
 ## 13. Matriz FPGA/FIFO → server_api.py
+
+> **Inspeção READ-ONLY da FPGA executada 2026-08-28 sob autorização explícita**
+> (SSH aninhado: local → Bongo → dobslit → `10.0.10.2` root). Sem escrita, sem
+> restart, sem reload de bitstream, **sem MMIO**, sem segundo consumidor.
+> Detalhe completo: `physical-layer/FPGA_INSPECTION_RESULT.md`.
+
+### 13.0 O que a inspeção revelou
+
+- **`:12345` = `nc`**, não um binário próprio: `qrng-stream.service` roda
+  `/bin/bash -c '/root/fifo | nc -k -l 0.0.0.0 12345'` (após
+  `fpgautil -b stream_app.bit.bin`). `nc` = openbsd (`sha256 e7c80430…`), relay
+  de bytes puro, sem framing.
+- **`/root/fifo.c`** lido na íntegra (fonte `sha256 8c738fbf…`, binário em
+  execução `sha256 97384027…`): `mmap` de `/dev/mem` em `0x43C00000` (janela
+  `0x20000`), laço `num = *(axi+0x11000/4)` (**POP de RDFD, 32 bits**);
+  `*(axi) = 0xFFFFFFFF` (limpa ISR); `le = htole32(num)`; `write_all(&le, 4)`.
+  `write_all` reencaminha write parcial, `continue` em EINTR, `break` em EPIPE
+  (`SIGPIPE` ignorado). **`stderr` de diagnóstico NUNCA no stdout binário.**
+- **`fifo.c.old`** (versão anterior, substituída): usava
+  `fprintf(stdout, "%u", num)` — **decimal ASCII SEM SEPARADOR** (defeito de
+  serialização textual real). **Removido**: o `fifo.c` atual usa
+  `htole32 + write(4)` binário.
+- **Sem condicionamento no `fifo.c`** — RDFD cru → `write(4)`. Condicionamento
+  **no RTL** (a montante do FIFO): **não observável** (bitstream
+  `stream_app.bit.bin` sem projeto Vivado/RTL na placa).
+- **Fenômeno físico:** shot noise óptico (laser + fotodetector) — forte
+  evidência circunstancial (`numbers_laser_on.txt`, `numbers_shotnoise.txt`,
+  `adc_counts_laser_on.txt`, `parameters.txt` `ch1`/`ch4`). Não confirmado por
+  datasheet/esquemático.
+- **Taxa física do ADC / decimação do RTL:** não expostas (`dmesg` só mostrou o
+  XADC de housekeeping). INCONCLUSIVO.
+- **Protótipos mortos na FPGA:** `/root/server_api.py`, `/root/server.py`,
+  `/root/testelocal/server_api.py` — todos com `SOURCE_FILE="/dev/urandom"`,
+  **NÃO em execução, fora da cadeia** (a cadeia é `fifo → nc :12345`).
+  Recomendação de higiene: remover.
+
+### 13.1 Matriz
 
 Estados: **COMPROVADO** / **INCONSISTENTE** / **NÃO OBSERVADO** / **BLOQUEADO POR RISCO OPERACIONAL**.
 
 | Fronteira | Formato esperado | Formato observado | Evidência | Estado |
 |---|---|---|---|---|
-| **FPGA → FIFO** | amostra digital do bloco de ruído escrita no AXI FIFO; largura/semântica no RTL; `htole32` por palavra | — | RTL/bitstream não acessados; SSH à `10.0.10.2` bloqueado (3 rodadas); MMIO **não lido** (sem confirmação read-only dos registradores) | **BLOQUEADO POR RISCO OPERACIONAL** |
-| **FIFO → fifo.c** | `fifo.c` faz `mmap` do AXI FIFO (~`0x43C00000`), lê a palavra, `htole32` por leitura, sem condicionamento no driver C (leitura de rodada anterior) | — | `fifo.c` **não está** no repo nem na Bongo VM; roda só na Red Pitaya | **NÃO OBSERVADO** (código) / **BLOQUEADO** (host) |
-| **fifo.c → TCP** | `write()`/`send()` da palavra LE crua no socket `:12345`; sem framing/delimitador | `:12345` responde (rodada anterior); binário/fonte não inspecionados | — | **NÃO OBSERVADO** |
-| **TCP → connector** | `recv()` de bytes crus, passthrough | `qrng-connector.py` (baseline "realmente executado", sha `4ed0b591…`): `s.recv(65536)` → `sys.stdout.buffer.write(data)` → **nenhuma** transformação/parsing/framing/contador; partial reads OK; EOF → reconexão backoff 2–30 s **sem resync/sequência**; sem duplicação | leitura do código-fonte | **COMPROVADO** (passthrough) + **INCONSISTENTE** (reconexão pode perder cauda sub-4 B de forma silenciosa → desalinhamento uint32 permanente e indetectável) |
-| **connector → pipe** | `python3 connector.py > /tmp/fifo_qrng`; `stdout.buffer.write` + `flush` por chunk; pipe cheio → escritor bloqueia (backpressure) | igual ao esperado; `BufferedWriter.write` completa ou lança; `Restart=always` → janela de perda = 1 chunk ≤ 64 KiB **só** se o processo morrer entre `recv` e `write` | código + `qrng-fifo.service` | **COMPROVADO** (sem perda/dup em operação normal + backpressure) |
-| **pipe → server_api.py** | `open(...,buffering=0)`; `read(n)` partial OK; EOF → reopen; `RingBuffer` 256 MiB **drop-oldest**; `/v1/raw` e `/random` binário = verbatim; `/v1/uint32` = `struct.unpack("<I")` (LE, só p/ JSON) | igual; `server_api.py` sha `892a4cb4…`; telemetria 2026-08-28: buffer **CHEIO**, `total_pushed` 54,5 GB, `total_popped` 15,4 MB → **99,48 % descartado** por drop-oldest; `total_pushed−total_popped−size` quantifica o gap | leitura do código + `/health` (não é 2º consumidor de dados) | **COMPROVADO** (bytes servidos verbatim) + **descontinuidade quantificável** (blocos `/v1/raw` consecutivos **não** contíguos; gap de GB agora) |
+| **FPGA → FIFO** (ADC → RTL → AXI4-Stream FIFO) | amostra digitalizada do bloco de ruído entra no AXI FIFO; largura/decimação/condicionamento definidos no RTL | AXI4-Stream FIFO Xilinx em `0x43C00000` (do `fifo.c` + PG080). RTL de `stream_app.bit.bin` **não está** na placa (sem projeto Vivado) → decimação, taxa e **existência de whitening no RTL não observáveis** | `fifo.c`; `qrng-stream.service` (`fpgautil -b stream_app.bit.bin`); ausência de RTL no filesystem | **NÃO OBSERVADO** (conteúdo do RTL) |
+| **FIFO → fifo.c** | 1 read de RDFD = 1 palavra de 32 bits, sem condicionamento no driver | **`num = *(axi_fifo + 0x11000/4)`** — POP de RDFD, `uint32_t`. `*(axi)=0xFFFFFFFF` limpa ISR. Sem XOR/whitening/hash no `fifo.c`. RDFR reset (`0x18=0xA5`) só no startup | `/root/fifo.c` (sha `8c738fbf…`), binário `97384027…` | **COMPROVADO** |
+| **fifo.c → TCP** | palavra LE de 4 bytes fixos → stdout → pipe → socket; sem framing/textual | **`le = htole32(num); write_all(&le, 4)`** num laço. `write_all` trata write parcial + EINTR; EPIPE → sai. `fifo` stdout → `pipe:[4202]` → `nc -k -l :12345` (relay puro). stderr **não** mistura | `/root/fifo.c`; `ps`/`/proc/*/fd` (fifo fd1 e nc fd0 = mesmo pipe 4202) | **COMPROVADO** (`fifo.c.old` com `%u` decimal: **substituído**) |
+| **TCP → connector** | `recv()` de bytes crus, passthrough | `qrng-connector.py` (`sha256 4ed0b591…`): `s.recv(65536)` → `sys.stdout.buffer.write(data)` → **nenhuma** transformação/parsing/framing/contador; partial reads OK; EOF → reconexão backoff 2–30 s **sem resync/sequência**; sem duplicação | leitura do código | **COMPROVADO** (passthrough) + **INCONSISTENTE** (reconexão pode perder cauda sub-4 B **silenciosamente** → desalinhamento uint32 permanente e indetectável) |
+| **connector → pipe** | `python3 connector.py > /tmp/fifo_qrng`; `stdout.buffer.write`+`flush` por chunk; pipe cheio → escritor bloqueia | igual; `BufferedWriter.write` completa ou lança; janela de perda = 1 chunk ≤ 64 KiB **só** se o processo morrer entre `recv` e `write` | código + `qrng-fifo.service` (dobslit) | **COMPROVADO** |
+| **pipe → server_api.py** | `read(n)` partial OK; EOF → reopen; `RingBuffer` 256 MiB **drop-oldest**; `/v1/raw` e `/random` binário = verbatim; `/v1/uint32` = `struct.unpack("<I")` | igual; `server_api.py` (dobslit) sha `892a4cb4…`; telemetria 2026-08-28: buffer **CHEIO**, `total_pushed` 54,5→59,7 GB, `total_popped` ~15–16 MB → **~99,5 % descartado** por drop-oldest; `total_pushed−total_popped−size` quantifica o gap | leitura do código + `/health` (não é 2º consumidor de dados) | **COMPROVADO** (verbatim) + **descontinuidade quantificável** (`/v1/raw` consecutivos **não** contíguos) |
 
-### Verificações específicas do checklist
+**Resultado global:** a cadeia **FIFO → fifo.c → TCP → connector → pipe →
+server_api.py** está **COMPROVADA como passthrough verbatim** — sem serialização
+textual (a `%u` do `fifo.c.old` foi removida), sem framing/delimitador, sem
+condicionamento no software, alinhamento de 4 bytes **garantido na origem**
+(`write(4)` fixo). Ressalvas: **(a) INCONSISTENTE** na reconexão do connector
+(perda sub-4 B silenciosa possível, sem resync); **(b) descontinuidade
+quantificável** no drop-oldest do RingBuffer. **Não observável:** o **conteúdo
+do RTL** (`stream_app.bit.bin`) — não dá para descartar whitening no hardware, a
+taxa física, nem o fator de decimação.
+
+### 13.2 Verificações específicas do checklist
 
 | item | resultado |
 |---|---|
-| `fprintf` / `%u` / serialização textual | **NÃO** no caminho bruto. `server_api.py` usa `.hex()` / `struct.unpack` (JSON reversível exato) — **não** `%u`/decimal-concat/`fprintf`. connector + pipe = 100 % binário |
-| delimitadores | **NENHUM** em qualquer fronteira observável — stream é sequência de bytes pura |
-| `write()` parcial | `BufferedWriter.write` completa ou lança; `stream_tap.write_all` reencaminha o restante (item 8, testado) |
-| `send()` parcial (FPGA→socket) | **NÃO OBSERVADO** (lado FPGA) |
-| `recv()` parcial | `qrng-connector.py` é byte-oriented → tolera; `server_api` `read(n)` idem |
-| alinhamento em 4 bytes | **NÃO** garantido por chunk. `/v1/raw` arredonda p/ baixo a múltiplo de 4 no server_api; `/random` (usado pela API pública) **não** alinha. Perda de 1–3 B numa reconexão do connector desloca o agrupamento uint32 **permanentemente** (sem resync) |
+| `fprintf` / `%u` / serialização textual | **Existia no `fifo.c.old`** (`fprintf(stdout,"%u",num)`, sem separador) — **REMOVIDO**. O `fifo.c` atual: `htole32 + write(4)`. A jusante: `server_api.py` `.hex()` / `struct.unpack` (JSON reversível exato), connector + pipe = 100 % binário |
+| delimitadores | **NENHUM** em nenhuma fronteira — stream é sequência de bytes pura |
+| `write()` parcial | `fifo.c` `write_all()` (laço + EINTR); `BufferedWriter.write` completa ou lança; `stream_tap.write_all` (item 8) idem |
+| `send()` parcial | `nc` é relay do kernel; `fifo.c` já garantiu 4 bytes por palavra antes do pipe |
+| `recv()` parcial | `qrng-connector.py` byte-oriented → tolera; `server_api` `read(n)` idem |
+| alinhamento em 4 bytes | **garantido na ORIGEM** — `fifo.c` faz `write(&le, 4)` fixo por palavra. Só quebra a jusante se uma reconexão do connector perder 1–3 bytes (sem resync) |
 | bytes residuais entre chamadas | **SIM** — drop-oldest do RingBuffer torna `/v1/raw` consecutivos **não** contíguos. `X-QRNG-Sequence` (envelope v1, item 9) exporia |
-| endianness | `uint32-le` declarado e aplicado consistentemente no software; `htole32` na FPGA (não re-verificado); frontend agora também LE (deploy) |
-| signed/unsigned | `struct.unpack("<I")` = unsigned 32; `.hex()`/bytes = unsigned; **nenhuma** interpretação signed em ponto observável |
-| descartes durante reconexão | connector: **SIM, possível** (cauda em trânsito no TCP quando o FPGA fecha), não quantificável sem sequência; reopen do pipe no server_api: buffer do kernel (64 KiB) ou escritor bloqueia — sem perda além disso |
-| duplicação | **NÃO** em nenhuma fronteira (TCP confiável na conexão; reconexão começa do zero; RingBuffer não re-serve) |
-| perda de bytes | possível em (a) reconexão do connector (**silenciosa**), (b) RingBuffer drop-oldest (**quantificável** via `total_pushed/popped`) |
-| múltiplos consumidores | `server_api.py` é o **único** leitor de `/tmp/fifo_qrng`; `qrng-connector.py` é o **único** cliente de `:12345`. **Nenhum 2º consumidor aberto nesta rodada** (telemetria via `/health`) |
+| endianness | `htole32` explícito no `fifo.c` (LE, 4 bytes fixos); `uint32-le` declarado e aplicado no `server_api.py` / `/v1/uint32`; frontend agora também LE (deploy) |
+| signed/unsigned | `uint32_t` no `fifo.c`; `struct.unpack("<I")` = unsigned 32; `.hex()`/bytes = unsigned. **Nenhuma** interpretação signed em nenhum ponto |
+| descartes durante reconexão | connector: **SIM, possível** (cauda em trânsito no TCP quando o `nc`/FPGA fecha), não quantificável sem sequência; reopen do pipe no server_api: buffer do kernel (64 KiB) ou escritor bloqueia — sem perda além disso; `fifo.c` restart → `RDFR=0xA5` esvazia o AXI FIFO (≤ KB) |
+| duplicação | **NÃO** em nenhuma fronteira (TCP confiável na conexão; reconexão começa do zero; RingBuffer não re-serve; `nc -k` = 1 cliente por vez) |
+| perda de bytes | possível em (a) reconexão do connector (**silenciosa**), (b) RingBuffer drop-oldest (**quantificável**), (c) reset do AXI FIFO num restart do `fifo` (≤ KB, no reinício do serviço) |
+| múltiplos consumidores | `fifo` é o **único** leitor de RDFD; `nc -k` serve **1 cliente por vez**; `qrng-connector.py` é o **único** cliente de `:12345`; `server_api.py` (dobslit) é o **único** leitor de `/tmp/fifo_qrng`. **Nenhum 2º consumidor aberto** — inspeção via SSH + `/proc` + `/health`, **sem** conectar em `:12345` nem mapear `/dev/mem` |
 
 ## 14. Resultado do harness em replay (item 8)
 
@@ -292,12 +370,13 @@ alvo, orçamento de recuperação).
 
 | # | risco / limitação | severidade |
 |---|---|---|
-| R1 | **Reconexão do `qrng-connector.py` pode perder cauda sub-4 B silenciosamente** → desalinhamento uint32 permanente e indetectável (sem sequência/resync). Mitigação futura: `X-QRNG-Sequence` no envelope v1 + um marcador de resync no connector (mexe no caminho produtivo). | média — não corrompe entropia; quebra alinhamento posicional |
-| R2 | **RingBuffer drop-oldest descarta 99,48 %** hoje (consumo ≈ 0). Blocos `/v1/raw` consecutivos **não** são contíguos. É comportamento documentado e mensurável (`total_pushed/popped`), não corrupção. | baixa (demo) / média sob carga |
-| R3 | **FPGA/FIFO → server_api.py NÃO COMPROVADA** — 3 fronteiras a montante NÃO OBSERVADAS / BLOQUEADAS (RTL, `fifo.c`, servidor `:12345`). Inspeção read-only bloqueada pelo classificador; MMIO não executado por falta de confirmação read-only. Handoff ao operador em `FPGA_INSPECTION.md`. | bloqueio — impede fechar a unidade física e a taxa |
-| R4 | **Envelope de proveniência v1 preparado mas NÃO implantado** no `server_api.py` real → produção segue `actual_origin=unknown` / `live_verified=false`. | baixa — é o estado honesto; exige janela de manutenção do upstream |
-| R5 | **Restart tests e health tests não concluídos** → `SP 800-90B completo = NÃO`. Campanha completa não executada (instrução). | bloqueio para "conforme SP 800-90B" |
-| R6 | 18 alertas dependabot no `main` (pré-existentes, fora de escopo — `VULNERABILITY_MATRIX.md`). Volume órfão `qrng_qrng-tokens-db`. | baixa / trivial |
+| R1 | **Reconexão do `qrng-connector.py` pode perder cauda sub-4 B silenciosamente** → desalinhamento uint32 permanente e indetectável (sem sequência/resync). O `fifo.c` garante `write(4)` alinhado na origem; a quebra só surge se a reconexão perder 1–3 bytes. Mitigação: marcador de resync no connector + `X-QRNG-Sequence` no envelope v1 (ambos mexem no caminho produtivo). | média — não corrompe entropia; quebra alinhamento posicional |
+| R2 | **RingBuffer drop-oldest descarta ~99,5 %** hoje (consumo ≈ 0). Blocos `/v1/raw` consecutivos **não** são contíguos. Comportamento documentado e mensurável (`total_pushed/popped`), não corrupção. | baixa (demo) / média sob carga |
+| R3 | **RTL de `stream_app.bit.bin` NÃO OBSERVADO** — o `.bit.bin` está na placa, o projeto Vivado/RTL **não**. Não dá para descartar whitening/condicionamento no HW, nem confirmar a taxa física / decimação. (A cadeia `fifo.c→…→server_api` já está **COMPROVADA verbatim** — item 13.) | bloqueio parcial — impede fechar a unidade física e a taxa; não afeta a integridade do transporte |
+| R4 | **Protótipos `/dev/urandom` na FPGA** (`/root/server_api.py`, `/root/server.py`, `/root/testelocal/server_api.py`) — **não em execução, fora da cadeia**, mas se o connector fosse reapontado para eles serviria PRNG do kernel rotulado como QRNG. Recomendação: remover. | baixa — nenhum está ativo; a cadeia usa `nc :12345` = FIFO real |
+| R5 | **Envelope de proveniência v1 preparado mas NÃO implantado** no `server_api.py` real → produção segue `actual_origin=unknown` / `live_verified=false`. | baixa — é o estado honesto; exige janela de manutenção do upstream |
+| R6 | **Restart tests e health tests não concluídos** → `SP 800-90B completo = NÃO`. Campanha completa não executada (instrução). Evento de restart agora DEFINIDO. | bloqueio para "conforme SP 800-90B" |
+| R7 | 18 alertas dependabot no `main` (pré-existentes, fora de escopo — `VULNERABILITY_MATRIX.md`). Volume órfão `qrng_qrng-tokens-db`. | baixa / trivial |
 
 ## 19. Commits produzidos
 
@@ -320,23 +399,33 @@ alvo, orçamento de recuperação).
 - `qrng-client-api/lib/provenance.js` (consome versão + block-sha; regras 6/7) — **não implantado**
 - `qrng-client-api/test/provenance.test.js` (15 → 23)
 
+**Novos (inspeção FPGA):**
+- `physical-layer/FPGA_INSPECTION_RESULT.md`
+
 **Não modificado:** `qrng-client-api/server.js` de produção, `server_api.py`
-real, FPGA/FIFO, `nist_service.py`, nginx do host, containers em execução.
+real, **FPGA/FIFO (só leitura — nenhuma escrita/restart/reload)**,
+`nist_service.py`, nginx do host, containers em execução.
 
 ## 21. Próxima autorização necessária
 
-1. **Janela para a FPGA `10.0.10.2`** — ou (a) regra de permissão de Bash para
-   SSH read-only pela cadeia Bongo→dobslit→FPGA, ou (b) o operador roda
-   `fpga_readonly_inspect.sh` (**sem** a seção MMIO até confirmar os registradores)
-   e devolve stdout/stderr. Fecha itens 5, 13 (montante), 17-gate(1)(2).
-2. **Janela de manutenção do `server_api.py`** para aplicar
+1. **Projeto RTL / Vivado de `stream_app.bit.bin`** — do repositório do design
+   físico (não está na placa). Fecha: condicionamento no HW, taxa física de
+   amostragem, fator de decimação → itens 5 e 17-gate(1)(2). Alternativa mais
+   fraca: uma janela de manutenção para `fpgautil -o` + análise do bitstream, ou
+   instrumentar o RTL (mexe na FPGA — janela dedicada).
+2. **Janela de manutenção do `server_api.py`** (dobslit) para aplicar
    `server_api.provenance_patch.py` (envelope v1) — mexe no upstream de produção.
-3. **Campanha NIST completa** (L1–L3, ~18 h) + **restart campaign** (1000×) —
-   ambas aguardam autorização; a restart campaign também aguarda a definição do
-   evento de restart real (depende de 1).
-4. **`LIVE_ALLOW_WITHOUT_CAPTURE_EVIDENCE=1`** em produção — só se/quando o
+3. **Marcador de resync/sequência no `qrng-connector.py`** (para tornar
+   detectável/quantificável a perda numa reconexão — item 13, ressalva R1) —
+   mexe no caminho produtivo, janela dedicada.
+4. **Campanha NIST completa** (L1–L3, ~18 h) + **restart campaign** (1000×
+   `systemctl restart qrng-stream`) — ambas aguardam autorização. (Evento de
+   restart agora DEFINIDO — item 12.)
+5. **`LIVE_ALLOW_WITHOUT_CAPTURE_EVIDENCE=1`** em produção — só se/quando o
    envelope v1 estiver no `server_api.py` (senão continua sendo alegar `live`
    sem prova).
+6. **Higiene na FPGA:** remover `/root/server_api.py`, `/root/server.py`,
+   `/root/testelocal/server_api.py` (protótipos `/dev/urandom`, fora da cadeia).
 
 ---
 
@@ -347,8 +436,8 @@ real, FPGA/FIFO, `nist_service.py`, nginx do host, containers em execução.
 | O stream intercalado é IID? | **NÃO** (cap1/cap2 FAIL permutação; cap3 10 MiB INCONCLUSIVO/timeout) | piloto L0, `ea_iid` @ `87c104d0` | 2 capturas de 1 MiB + cap3; falha compatível com diferenças entre lanes |
 | Cada lane é IID? | **SIM** — 4/4 byte-lanes de cap3 passam (chi-square + LRS + permutação) | `ea_iid` por lane, 2 621 440 símbolos/lane, `undersize_warning=false` | só cap3; lanes = recorte de transporte, não de física |
 | Qual a menor estimativa não-IID? | **`6.878090` bits / símbolo de 8 bits** (cap2, intercalado); por lane, mín. `6.915310` (lane 2) | `ea_non_iid` @ `87c104d0`; limitante Compression (trilha bitstring) | símbolo = byte, **não** amostra física |
-| Qual é a unidade física da amostra? | **INCONCLUSIVA** | `NOISE_SOURCE_UNIT.md`; RTL/`fifo.c`/servidor `:12345` não inspecionados | acesso à FPGA bloqueado (3 rodadas); MMIO não executado |
-| FPGA→server_api preserva os bytes? | **NÃO COMPROVADO.** 3 fronteiras a montante NÃO OBSERVADAS/BLOQUEADAS; TCP→connector→pipe→server_api = passthrough verbatim COMPROVADO no código, com **INCONSISTENTE** na reconexão do connector (perda sub-4 B silenciosa possível) e descontinuidade quantificável no drop-oldest | matriz do item 13; leitura de `qrng-connector.py`/`server_api.py`; telemetria `/health` | sem sequência/resync não dá para provar ausência de perda na reconexão |
+| Qual é a unidade física da amostra? | **PARCIAL.** A palavra de transporte = **1 read de RDFD = 32 bits** (`fifo.c` confirmado). Se 1 uint32 = 1 amostra física OU um agrupamento/decimação do ADC: **INCONCLUSIVO** (RTL de `stream_app.bit.bin` não está na placa) | `/root/fifo.c` (sha `8c738fbf…`); `FPGA_INSPECTION_RESULT.md` | falta o projeto RTL/Vivado; taxa do ADC e decimação não expostas |
+| FPGA→server_api preserva os bytes? | **CADEIA fifo.c→TCP→connector→pipe→server_api: COMPROVADA verbatim** (`fifo.c` `htole32+write(4)` fixo, sem framing, sem `%u` — a `%u` do `fifo.c.old` foi removida; connector/pipe/server_api passthrough). **Ressalvas:** INCONSISTENTE na reconexão do connector (perda sub-4 B silenciosa possível, sem resync) + descontinuidade quantificável no drop-oldest. **RTL→FIFO: NÃO OBSERVADO** (bitstream sem projeto-fonte) | matriz item 13; `fifo.c`; `qrng-connector.py`/`server_api.py`; `/health` | condicionamento no RTL não descartável; perda na reconexão não quantificável sem sequência |
 | server_api→cliente preserva os bytes? | **SIM** | `serialization.test.js` + `api.spec.js` (raw==hex==base64==uint8, mesmo SHA-256, round-trip); smoke de produção 2026-08-28 | região FPGA→server_api não coberta |
 | Token funciona em produção? | **SIM** | smoke autenticado 2026-08-28: register→JWT→token→`GET /v1/random` 200; token temporário **removido**, `users` de volta a 1 | — |
 | Visualizações usam os bytes da API? | **SIM** | smoke de produção 4/4; `viz-provenance.spec.js` (CI #60); auditoria estática de `Math.random` | `Math.random` só em fallback rotulado / PRNG de comparação / decoração |
@@ -366,15 +455,19 @@ OPERACIONAL, MAS AINDA EM VALIDAÇÃO DA FONTE
 Não há "passou no NIST", "NIST validado", "IID comprovado", "sem viés",
 "seguro", "live" nem "aprovado para criptografia" sem a delimitação de evidência
 acima. O deploy de 2026-08-28 tornou o pipeline de software (API + frontend)
-operacional e **honesto sobre a proveniência** (`unknown`/`live_verified=false`);
-a **fonte física** permanece em validação (unidade física, taxa, restart/health,
-independência entre lanes, integridade FPGA→server_api — todas pendentes de uma
-janela na FPGA).
+operacional e **honesto sobre a proveniência** (`unknown`/`live_verified=false`).
+A inspeção READ-ONLY da FPGA (2026-08-28) **COMPROVOU** a cadeia
+`fifo.c → TCP → connector → pipe → server_api.py` como passthrough verbatim (a
+serialização textual `%u` do `fifo.c.old` foi removida) e **definiu o evento de
+restart** da noise source. Permanece **em validação**: o **conteúdo do RTL**
+(condicionamento em HW, taxa física, decimação), a campanha NIST completa, os
+restart/health tests, a independência entre lanes.
 
 ## Pare — aguardar autorização antes de
 
-janela de acesso à FPGA `10.0.10.2` (mesmo read-only, pela cadeia bloqueada);
-aplicar o envelope v1 ao `server_api.py` de produção; executar a campanha NIST
-completa ou a restart campaign; ativar RCT/APT ou selecionar thresholds; setar
+aplicar o envelope v1 ao `server_api.py` de produção; adicionar marcador de
+resync ao `qrng-connector.py`; executar a campanha NIST completa ou a restart
+campaign (`systemctl restart qrng-stream` ×1000); ativar RCT/APT ou selecionar
+thresholds; setar
 `LIVE_ALLOW_WITHOUT_CAPTURE_EVIDENCE=1`; abrir um segundo consumidor da fonte;
 trocar o serviço NIST produtivo; alterar FPGA/FIFO em produção.
