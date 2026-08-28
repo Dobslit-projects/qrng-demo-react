@@ -156,26 +156,41 @@ de `run_new_01.bin` (1 MiB), modo `both`:
 | | PRODUTIVO | STAGING-REAL |
 |---|---|---|
 | `iid_passed` | False | **False** |
-| `chi_square` / `lrs` / `permutation` | T / T / F | **T / T / F** |
-| `h_min_iid` | 7.456189 | **7.456189** (exato) |
-| `h_min_non_iid` | 6.951334 | **6.951334** (exato) |
-| `limiting_estimator` | T-Tuple = 7.210061 | **idem** |
-| `sha256_used` | `3021cbf1…` | **`3021cbf1…`** |
+| `permutation_passed` | False | **False** |
+| `chi_square` / `lrs` | T / T | **T / T** |
+| `h_min_non_iid` | 6.951334 | **6.951334** (exato) — **crédito de entropia** (bits/símbolo de 8 bits) |
+| `h_min_iid` | 7.456189 | 7.456189 (exato) — **NÃO usar: hipótese IID falhou** |
+| `sha256_used` | `3021cbf1…` | **`3021cbf1…`** (mesmo binário avaliado) |
 
-**`equivalent_statistically: true`.** As únicas diferenças são
-**metadados/proveniência que só a versão corrigida persiste** (sizes,
-`normalized_symbol_count`, `assessment_engine`, `synthetic_result`, …) e a
-`duration` (67 s vs 125 s — compilação sem `-march=native`, não afeta o
-resultado). **Nenhuma diferença de parser, unidade de símbolo ou bug.**
-Determinismo: 2 execuções do mesmo arquivo → idênticas. Timeout real:
-`subprocess.TimeoutExpired` → `status: failed`. Restart de container:
-`_recover_orphan_jobs()` no boot marca `running` órfão como `failed` e
-re-enfileira `queued` (teste `test_recupera_jobs_orfaos_no_boot`).
+**Escopo (não generalizar):** a versão corrigida reproduziu **exatamente** o
+serviço produtivo **para uma amostra `.bin` raw de 1 MiB, com o mesmo
+SHA-256**. A equivalência de `.txt`, `.csv` e do conjunto histórico completo
+**permanece pendente** (`NIST_FULLSET_COMPARE.md`). Para **este arquivo** não
+houve diferença de parser, unidade de símbolo, arquivo usado ou bug — nada
+disso é afirmado para os demais formatos. As demais diferenças observadas são
+**metadados que só a versão corrigida persiste** + `duration` (67 s vs 125 s,
+compilação sem `-march=native`).
 
-> **Isto substitui a ressalva do §8**: nesta amostra, a versão corrigida + a
-> suíte real reproduzem **exatamente** o assessment de produção. Ainda não é
-> "validado" — falta a comparação sobre o conjunto completo de arquivos +
-> migração de banco (§21). **NIST produtivo NÃO substituído.**
+**Item 2 — semântica do estimador limitante corrigida:** o job registrava
+`limiting_estimator = "T-Tuple Test Estimate = 7.210061"` mas
+`h_min_non_iid = 6.951334` — não correspondiam. `7.210061` é o menor da
+**trilha original** (`H_original`, por símbolo de 8 bits); `6.951334` vem da
+**trilha bitstring** (`8 × H_bitstring = 8 × 0.868917`, limitante =
+`Compression Test Estimate (bit string)`). Parser reescrito; campos não
+ambíguos (`h_original_non_iid`/`original_limiting_estimator`,
+`h_bitstring_non_iid`/`bitstring_limiting_estimator`,
+`bitstring_to_symbol_conversion`, `limiting_path`, `limiting_estimator`
+correspondendo a `h_min_non_iid`). `statistical_result_valid` →
+`assessment_execution_valid` ("o assessment rodou e foi interpretado", não "a
+fonte foi validada"). 6 fixtures + `TestParseOutputLimitingEstimator`.
+Ver `NIST_STAGING_REAL.md §2-bis`.
+
+Determinismo: 2 execuções idênticas. Timeout real: `subprocess.TimeoutExpired`
+→ `failed`. Restart de container: `_recover_orphan_jobs()` no boot.
+
+> **NIST produtivo NÃO substituído.** Ainda **não** é "validado" — falta a
+> comparação sobre o conjunto completo (`NIST_FULLSET_COMPARE.md`) + a
+> migração de banco (§21).
 
 ## 8. Diff do serviço NIST (baseline × versão corrigida)
 
@@ -477,8 +492,10 @@ power-cycles) e item 10 (recálculo de RCT/APT). Sem essa janela, os itens 6, 8,
 Itens que podem avançar **sem** a janela da FPGA, se autorizados
 separadamente:
 
-- **NIST**: a comparação paralela contra a suíte real **foi executada numa
-  amostra** e deu equivalência estatística exata (§7-bis). Próximo passo
+- **NIST**: a comparação paralela contra a suíte real **foi executada para
+  UMA amostra `.bin` raw de 1 MiB** — resultado estatístico idêntico ao
+  produtivo (mesmo SHA-256, `h_min_non_iid` exato). `.txt`/`.csv`/conjunto
+  completo **pendentes** (`NIST_FULLSET_COMPARE.md`). Próximo passo
   autorizável: rodar a comparação sobre **todo** o conjunto de
   `/home/dobslit/qrng_data_nist` (incl. `.txt`/`.csv`), depois migrar o banco
   real e trocar o `ExecStart` numa janela. **Não substituir o NIST produtivo

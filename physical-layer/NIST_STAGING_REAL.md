@@ -48,32 +48,82 @@ modificados** — o compare fez upload de uma cópia.
 | `chi_square_passed` | True | True | ✅ |
 | `lrs_passed` | True | True | ✅ |
 | `permutation_passed` | **False** | **False** | ✅ |
-| `h_min_iid` | **7.456189** | **7.456189** | ✅ (exato) |
-| `h_min_non_iid` | **6.951334** | **6.951334** | ✅ (exato) |
-| `limiting_estimator` | `T-Tuple Test Estimate = 7.210061` | idem | ✅ (exato) |
+| `h_min_iid` | 7.456189 | 7.456189 | ✅ (exato) — **mas NÃO é crédito de entropia: `iid_passed=false`** |
+| `h_min_non_iid` | **6.951334** | **6.951334** | ✅ (exato) — bits por símbolo de 8 bits |
+| `limiting_estimator` | `T-Tuple Test Estimate = 7.210061` (registrado assim no job) | idem | ✅ (idêntico entre os dois serviços) — **ver §2-bis: essa string era ambígua e foi corrigida** |
 | `duration_seconds` | 67.6 s | 125.5 s | ➖ (compilação sem `-march=native` é mais lenta; **não afeta o resultado**) |
 | `sha256_normalized`, `size_original/normalized_bytes`, `normalized_symbol_count`, `assessment_symbol_width`, `normalization_method`, `sample_endianness` | `None` | preenchidos | ➖ **a versão corrigida persiste esses metadados; o baseline não** (diferenças A–D do diff — ver `NIST_SERVICE_BASELINE.md`) |
 | `assessment_engine`, `synthetic_result` | `None` | `sp800-90b-reference`, `false` | ➖ **só a versão corrigida tem** (item 4) |
 
-**`equivalent_statistically: true`** — nenhuma das diferenças toca IID / χ² /
-LRS / permutation / estimadores de entropia. **Todos os resultados
-estatísticos são idênticos.**
+### Escopo do resultado (não generalizar)
 
-### Classificação de cada diferença (contrato do item 7)
+**A versão corrigida reproduziu exatamente o serviço produtivo para uma amostra
+`.bin` raw de 1 MiB, com o mesmo SHA-256.** A equivalência de `.txt`, `.csv` e
+do conjunto histórico completo **permanece pendente** (item 7 completo — ver
+`NIST_FULLSET_COMPARE.md`).
 
-| diferença | causa | é discrepância de resultado? |
+Resultado da amostra a preservar:
+
+```
+iid_passed          = false
+permutation_passed  = false
+h_min_non_iid       = 6.951334 bits por símbolo de 8 bits   (crédito de entropia)
+h_min_iid           = 7.456189                              (NÃO usar — hipótese IID falhou)
+```
+
+### Classificação de cada diferença observada nesta amostra
+
+| diferença | causa | é discrepância de resultado nesta amostra? |
 |---|---|---|
 | `duration_seconds` | flags de compilação (`-march=native` só no prod) | **não** — parâmetro de execução |
 | `sha256_normalized` / `size_*` / `normalized_symbol_count` / `assessment_symbol_width` / `normalization_method` / `sample_endianness` | **versão**: colunas de metadados adicionadas na versão corrigida (aditivas, migração idempotente) | **não** — o baseline apenas não grava esses campos |
 | `assessment_engine` / `synthetic_result` | **versão**: identificação do motor (item 4) | **não** |
-| — | — | **nenhuma diferença de parser, unidade de símbolo, arquivo usado ou bug** |
 
-> **Conclusão (substitui a ressalva do relatório):** nesta amostra de 1 MiB, a
-> versão corrigida rodando a suíte SP 800-90B real **reproduz exatamente** o
-> assessment estatístico do serviço produtivo. O diff A–H permanece **apenas
-> metadados + proveniência**, sem efeito nos estimadores. Isto ainda **não** é
-> "conformidade validada" — é uma comparação de UMA amostra; a validação
-> completa exige o conjunto de arquivos reais + a migração de banco (item 21).
+Para **este arquivo** (1 MiB raw): não houve diferença de parser, de unidade de
+símbolo, de arquivo efetivamente usado, nem bug. **Nada disso é afirmado para
+`.txt`/`.csv`/o conjunto completo** enquanto o item 7 não estiver concluído.
+
+## 2-bis. Correção da semântica do `limiting_estimator` (item 2)
+
+O job registrava `limiting_estimator = "T-Tuple Test Estimate = 7.210061"`,
+mas `h_min_non_iid = 6.951334`. Os dois **não correspondiam**: `7.210061` é o
+menor estimador da **trilha original** (por símbolo de 8 bits); `6.951334` vem
+da **trilha bitstring** — `8 × H_bitstring = 8 × 0.868917`. O `ea_non_iid`
+imprime as duas trilhas:
+
+```
+Compression Test Estimate (bit string) = 0.868917 / 1 bit(s)   ← menor da trilha bitstring
+T-Tuple Test Estimate                  = 7.210061 / 8 bit(s)   ← menor da trilha original
+H_original: 7.210061
+H_bitstring: 0.868917
+min(H_original, 8 X H_bitstring): 6.951334                     ← 8 × 0.868917 ⇒ trilha bitstring limita
+```
+
+O parser foi reescrito. Campos NÃO ambíguos agora persistidos e expostos
+(API, histórico, frontend):
+
+```json
+{
+  "h_original_non_iid": 7.210061,
+  "original_limiting_estimator": "T-Tuple Test Estimate",
+  "h_bitstring_non_iid": 0.868917,
+  "bitstring_limiting_estimator": "Compression Test Estimate",
+  "bitstring_to_symbol_conversion": "min(8, bits_per_symbol) x H_bitstring = 8 x H_bitstring",
+  "h_min_non_iid": 6.951334,
+  "limiting_path": "bitstring",
+  "limiting_estimator": "Compression Test Estimate"
+}
+```
+
+`limiting_estimator` agora **corresponde sempre** a `h_min_non_iid` (via
+`limiting_path`). Fixtures cobrindo: trilha original limita; trilha bitstring
+limita; empate; uma trilha ausente; saída incompleta (`parse_incomplete`).
+Testes: `TestParseOutputLimitingEstimator` (6 casos).
+
+`statistical_result_valid` → **renomeado** para `assessment_execution_valid`
+(alias legado por 1 versão): significa "o assessment RODOU e foi INTERPRETADO
+corretamente", **não** que a fonte foi validada ou passou. `False` se: executor
+sintético, status ≠ completed, ou `parse_incomplete`.
 
 ## 3. Determinismo (staging-real, mesmo arquivo 2×)
 

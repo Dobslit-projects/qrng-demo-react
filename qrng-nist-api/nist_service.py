@@ -156,6 +156,13 @@ for _col, _decl in [
     ("first_parse_error",        "TEXT"),
     ("endianness_rule",          "TEXT"),
     ("stored_filename",          "TEXT"),
+    # item 2: semântica NÃO AMBÍGUA do estimador limitante non-IID
+    ("original_limiting_estimator",     "TEXT"),
+    ("bitstring_limiting_estimator",    "TEXT"),
+    ("bitstring_to_symbol_conversion",  "TEXT"),
+    ("limiting_path",                   "TEXT"),   # 'original' | 'bitstring'
+    ("bitstring_estimators_json",       "TEXT"),
+    ("parse_incomplete",                "INTEGER"),
 ]:
     try:
         _db_conn.execute(f"ALTER TABLE nist_test_jobs ADD COLUMN {_col} {_decl}")
@@ -389,35 +396,75 @@ def _csv_to_u32txt(src: str, dst: str) -> int:
     return count
 
 # ── Output parser ───────────────────────────────────────────────────────────────
+#
+# A suíte SP 800-90B (non-IID) roda DUAS trilhas e o resultado final é
+#   H = min( H_original ,  min(8, bits_per_symbol) x H_bitstring )
+# onde:
+#   - H_original  = menor "Estimate = X / 8 bit(s)"  (trilha literal, por símbolo);
+#   - H_bitstring = menor "Estimate (bit string) = X / 1 bit(s)" (trilha bitstring, por bit).
+# O estimador que "limita" o resultado final pode estar em QUALQUER uma das
+# trilhas. Os campos abaixo desambiguam isso; `limiting_estimator` sempre
+# corresponde a `h_min_non_iid` (via `limiting_path`).
+
+_TOL_EST = 5e-4  # tolerância p/ casar um estimador ao H_ da sua trilha (arredondamento 6 casas)
 
 def _parse_output(stdout: str, test_type: str) -> dict:
     r = {
+        # IID
         "h_original_iid": None, "h_bitstring_iid": None, "h_min_iid": None,
         "iid_passed": None, "chi_square_passed": None, "lrs_passed": None,
         "permutation_passed": None,
-        "h_original_non_iid": None, "h_bitstring_non_iid": None, "h_min_non_iid": None,
-        "limiting_estimator": None, "estimators": {},
+        # non-IID — campos DESAMBIGUADOS
+        "h_original_non_iid": None,      "original_limiting_estimator": None,
+        "h_bitstring_non_iid": None,     "bitstring_limiting_estimator": None,
+        "bitstring_to_symbol_conversion": None,
+        "h_min_non_iid": None,
+        "limiting_path": None,           # "original" | "bitstring"
+        "limiting_estimator": None,      # corresponde a h_min_non_iid
+        "estimators": {},               # trilha literal (compat)
+        "bitstring_estimators": {},      # trilha bitstring (por bit)
+        "parse_incomplete": False,       # a saída não trouxe algum campo esperado
     }
 
     # Split stdout into IID and non-IID sections
     iid_text = non_iid_text = stdout
-
     if "Rodando IID" in stdout and "Rodando non-IID" in stdout:
         parts = re.split(r"Rodando non-IID\.\.\.", stdout, maxsplit=1)
-        iid_text     = parts[0]
-        non_iid_text = parts[1] if len(parts) > 1 else ""
+        iid_text, non_iid_text = parts[0], (parts[1] if len(parts) > 1 else "")
     elif "Rodando IID" in stdout:
-        iid_text     = stdout
-        non_iid_text = ""
+        iid_text, non_iid_text = stdout, ""
     elif "Rodando non-IID" in stdout:
-        iid_text     = ""
-        non_iid_text = stdout
+        iid_text, non_iid_text = "", stdout
 
     def _extract(text, key):
         m = re.search(key, text)
         return float(m.group(1)) if m else None
 
-    # IID
+    # cada estimador aparece como:
+    #   "<Nome> Estimate = X / 8 bit(s)"                 -> trilha literal
+    #   "<Nome> Estimate (bit string) = X / 1 bit(s)"    -> trilha bitstring
+    _RE_LITERAL   = re.compile(r"([A-Za-z0-9 ()/'\-]+?Estimate)\s*=\s*([\d.]+)\s*/\s*8\s*bit", re.M)
+    _RE_BITSTRING = re.compile(r"([A-Za-z0-9 ()/'\-]+?Estimate)\s*\(bit string\)\s*=\s*([\d.]+)\s*/\s*1\s*bit", re.M)
+
+    def _collect(text):
+        lit, bits = {}, {}
+        for m in _RE_BITSTRING.finditer(text):
+            name = re.sub(r"\s*\(bit string\)\s*$", "", m.group(1)).strip()
+            bits[name] = float(m.group(2))
+        # remove os matches bitstring antes de varrer literais (evitam falso match)
+        text_wo_bits = _RE_BITSTRING.sub("", text)
+        for m in _RE_LITERAL.finditer(text_wo_bits):
+            lit[m.group(1).strip()] = float(m.group(2))
+        return lit, bits
+
+    def _match_estimator(estimators: dict, target):
+        """Nome do estimador cujo valor casa `target` (menor |diff|)."""
+        if target is None or not estimators:
+            return None
+        name, _ = min(estimators.items(), key=lambda kv: abs(kv[1] - target))
+        return name if abs(estimators[name] - target) <= _TOL_EST else None
+
+    # ── IID ──────────────────────────────────────────────────────────────────
     if test_type in ("iid", "both") and iid_text:
         r["h_original_iid"]    = _extract(iid_text, r"H_original:\s*([\d.]+)")
         r["h_bitstring_iid"]   = _extract(iid_text, r"H_bitstring:\s*([\d.]+)")
@@ -427,17 +474,48 @@ def _parse_output(stdout: str, test_type: str) -> dict:
         r["permutation_passed"] = "Passed IID permutation tests"                     in iid_text
         r["iid_passed"]         = bool(r["chi_square_passed"] and r["lrs_passed"] and r["permutation_passed"])
 
-    # non-IID
+    # ── non-IID ──────────────────────────────────────────────────────────────
     if test_type in ("non_iid", "both") and non_iid_text:
-        r["h_original_non_iid"]  = _extract(non_iid_text, r"H_original:\s*([\d.]+)")
-        r["h_bitstring_non_iid"] = _extract(non_iid_text, r"H_bitstring:\s*([\d.]+)")
-        r["h_min_non_iid"]       = _extract(non_iid_text, r"min\(H_original,\s*8\s*[Xx]\s*H_bitstring\):\s*([\d.]+)")
-        # Estimators
-        for m in re.finditer(r"(.+?(?:Estimate))\s*=\s*([\d.]+)\s*/\s*\d+\s*bit", non_iid_text):
-            r["estimators"][m.group(1).strip()] = float(m.group(2))
-        if r["estimators"]:
-            lim = min(r["estimators"].items(), key=lambda x: x[1])
-            r["limiting_estimator"] = f"{lim[0]} = {lim[1]:.6f}"
+        h_orig = _extract(non_iid_text, r"H_original:\s*([\d.]+)")
+        h_bits = _extract(non_iid_text, r"H_bitstring:\s*([\d.]+)")
+        h_min  = _extract(non_iid_text, r"min\(H_original,\s*8\s*[Xx]\s*H_bitstring\):\s*([\d.]+)")
+        lit, bits = _collect(non_iid_text)
+
+        r["estimators"] = lit
+        r["bitstring_estimators"] = bits
+        r["h_original_non_iid"]  = h_orig
+        r["h_bitstring_non_iid"] = h_bits
+        r["h_min_non_iid"]       = h_min
+
+        # se H_original não veio no cabeçalho, deriva do min da trilha literal
+        if h_orig is None and lit:
+            h_orig = min(lit.values()); r["h_original_non_iid"] = h_orig
+        if h_bits is None and bits:
+            h_bits = min(bits.values()); r["h_bitstring_non_iid"] = h_bits
+
+        r["original_limiting_estimator"]  = _match_estimator(lit, h_orig) or (
+            min(lit, key=lit.get) if lit else None)
+        r["bitstring_limiting_estimator"] = _match_estimator(bits, h_bits) or (
+            min(bits, key=bits.get) if bits else None)
+        r["bitstring_to_symbol_conversion"] = "min(8, bits_per_symbol) x H_bitstring = 8 x H_bitstring"
+
+        # qual trilha limita o resultado final?
+        if h_min is not None and h_orig is not None and h_bits is not None:
+            conv = 8.0 * h_bits
+            r["limiting_path"] = "bitstring" if abs(h_min - conv) <= abs(h_min - h_orig) else "original"
+        elif h_min is not None and h_bits is not None and abs(h_min - 8.0 * h_bits) <= _TOL_EST:
+            r["limiting_path"] = "bitstring"
+        elif h_min is not None and h_orig is not None and abs(h_min - h_orig) <= _TOL_EST:
+            r["limiting_path"] = "original"
+
+        if r["limiting_path"] == "bitstring":
+            r["limiting_estimator"] = r["bitstring_limiting_estimator"]
+        elif r["limiting_path"] == "original":
+            r["limiting_estimator"] = r["original_limiting_estimator"]
+
+        # sinaliza saída incompleta (o chamador decide o status do job)
+        r["parse_incomplete"] = any(v is None for v in (
+            h_orig, h_bits, h_min)) or (not lit and not bits) or r["limiting_path"] is None
 
     return r
 
@@ -581,7 +659,10 @@ def _run_job(job_id: str):
                 iid_passed=?, chi_square_passed=?, lrs_passed=?, permutation_passed=?,
                 h_original_iid=?, h_bitstring_iid=?, h_min_iid=?,
                 h_original_non_iid=?, h_bitstring_non_iid=?, h_min_non_iid=?,
-                limiting_estimator=?, estimators_json=?
+                limiting_estimator=?, estimators_json=?,
+                original_limiting_estimator=?, bitstring_limiting_estimator=?,
+                bitstring_to_symbol_conversion=?, limiting_path=?, bitstring_estimators_json=?,
+                parse_incomplete=?
                WHERE id=?""",
             (
                 _now(), duration, stdout_path, stderr_path, result_dir,
@@ -590,10 +671,16 @@ def _run_job(job_id: str):
                 parsed["h_original_iid"],    parsed["h_bitstring_iid"],    parsed["h_min_iid"],
                 parsed["h_original_non_iid"], parsed["h_bitstring_non_iid"], parsed["h_min_non_iid"],
                 parsed["limiting_estimator"], json.dumps(parsed["estimators"]),
+                parsed["original_limiting_estimator"], parsed["bitstring_limiting_estimator"],
+                parsed["bitstring_to_symbol_conversion"], parsed["limiting_path"],
+                json.dumps(parsed["bitstring_estimators"]),
+                1 if parsed["parse_incomplete"] else 0,
                 job_id,
             )
         )
-        log.info(f"[job {job_id[:8]}] Done in {duration:.1f}s — iid_passed={parsed['iid_passed']}")
+        log.info(f"[job {job_id[:8]}] Done in {duration:.1f}s — iid_passed={parsed['iid_passed']} "
+                 f"h_min_non_iid={parsed['h_min_non_iid']} limiting_path={parsed['limiting_path']} "
+                 f"limiting_estimator={parsed['limiting_estimator']!r} parse_incomplete={parsed['parse_incomplete']}")
 
     except Exception as e:
         duration = time.time() - t0
@@ -744,15 +831,44 @@ def _row(row) -> dict:
     if row is None:
         return None
     d = dict(row)
-    if d.get("estimators_json"):
-        try:    d["estimators"] = json.loads(d["estimators_json"])
-        except: d["estimators"] = {}
-    else:
-        d["estimators"] = {}
-    d.pop("estimators_json", None)
+    for _js, _dst in (("estimators_json", "estimators"),
+                      ("bitstring_estimators_json", "bitstring_estimators")):
+        if d.get(_js):
+            try:    d[_dst] = json.loads(d[_js])
+            except Exception:  d[_dst] = {}
+        else:
+            d[_dst] = {}
+        d.pop(_js, None)
     for k in ["iid_passed", "chi_square_passed", "lrs_passed", "permutation_passed"]:
         if d.get(k) is not None:
             d[k] = bool(d[k])
+
+    # ── Item 2: semântica NÃO AMBÍGUA do estimador limitante non-IID ──────────
+    # h_min_non_iid vem SEMPRE de min(H_original, 8 x H_bitstring). limiting_path
+    # diz de qual trilha veio; limiting_estimator corresponde a ele.
+    d["h_original_non_iid_track"] = {
+        "h": d.get("h_original_non_iid"),
+        "limiting_estimator": d.get("original_limiting_estimator"),
+        "unit": "bits/símbolo de 8 bits",
+    }
+    d["h_bitstring_non_iid_track"] = {
+        "h": d.get("h_bitstring_non_iid"),
+        "limiting_estimator": d.get("bitstring_limiting_estimator"),
+        "unit": "bits/bit",
+        "to_symbol": d.get("bitstring_to_symbol_conversion"),
+    }
+    # limiting_estimator final tem que corresponder a h_min_non_iid
+    if d.get("limiting_path") == "bitstring":
+        d["limiting_estimator"] = d.get("bitstring_limiting_estimator") or d.get("limiting_estimator")
+    elif d.get("limiting_path") == "original":
+        d["limiting_estimator"] = d.get("original_limiting_estimator") or d.get("limiting_estimator")
+    # nota de leitura quando o IID falhou (não creditar h_min_iid como entropia)
+    d["entropy_estimate_bits_per_8bit_symbol"] = (
+        d.get("h_min_non_iid") if d.get("iid_passed") is False else d.get("h_min_iid"))
+    d["entropy_estimate_basis"] = (
+        "non-IID (hipótese IID falhou; h_min_iid NÃO é crédito de entropia)"
+        if d.get("iid_passed") is False else
+        ("IID" if d.get("iid_passed") is True else "indeterminado"))
     if d.get("sample_conditioned") is not None:
         d["sample_conditioned"] = bool(d["sample_conditioned"])
 
@@ -779,7 +895,13 @@ def _row(row) -> dict:
     d["assessment_engine"]         = _engine
     d["assessment_engine_version"] = NIST_ASSESSMENT_ENGINE_VERSION
     d["synthetic_result"]          = bool(_synth)
-    d["statistical_result_valid"]  = not bool(_synth)
+    # RENOMEADO (item 2): "o assessment RODOU e foi INTERPRETADO corretamente".
+    # NÃO significa que a fonte foi validada ou que passou. False se: executor
+    # sintético, ou o parser não conseguiu extrair os campos essenciais.
+    d["assessment_execution_valid"] = (not bool(_synth)) and (d.get("status") == "completed") \
+        and not bool(d.get("parse_incomplete"))
+    # alias legado por 1 versão, claramente deprecado
+    d["statistical_result_valid"]  = d["assessment_execution_valid"]  # DEPRECATED: use assessment_execution_valid
 
     # Idade da amostra: usa captured_at persistido (nunca mtime relido ao
     # vivo -- o arquivo pode ter sido removido/rotacionado desde o job).
@@ -813,7 +935,9 @@ def health():
         "assessment_engine": NIST_ASSESSMENT_ENGINE,
         "assessment_engine_version": NIST_ASSESSMENT_ENGINE_VERSION,
         "synthetic_result": NIST_SYNTHETIC,
-        "statistical_result_valid": not NIST_SYNTHETIC,
+        # item 2: "o assessment RODA e é interpretável" -- NÃO "a fonte foi validada".
+        "assessment_execution_valid": not NIST_SYNTHETIC,
+        "statistical_result_valid": not NIST_SYNTHETIC,  # DEPRECATED: use assessment_execution_valid
         "periodic_enabled": bool(NIST_ENABLED and NIST_LIVE_CAPTURE_PATH),
         "live_capture_configured": NIST_LIVE_CAPTURE_PATH is not None,
         "upload_policy": {
@@ -845,7 +969,8 @@ def nist_status():
             "assessment_engine": NIST_ASSESSMENT_ENGINE,
             "assessment_engine_version": NIST_ASSESSMENT_ENGINE_VERSION,
             "synthetic_result": NIST_SYNTHETIC,
-            "statistical_result_valid": not NIST_SYNTHETIC,
+            "assessment_execution_valid": not NIST_SYNTHETIC,
+            "statistical_result_valid": not NIST_SYNTHETIC,  # DEPRECATED
         },
         "suite_dir":         NIST_SUITE_DIR,
         "script":            NIST_SCRIPT,

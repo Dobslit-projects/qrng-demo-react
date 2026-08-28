@@ -207,20 +207,35 @@ function JobModal({ job, log, onClose }) {
                 </div>
               )}
 
-              {/* non-IID */}
+              {/* non-IID — trilhas desambiguadas (item 2) */}
               {(job.test_type === "non_iid" || job.test_type === "both") && (
                 <div style={{ gridColumn: job.test_type === "non_iid" ? "1" : "1 / -1" }}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, fontFamily: mono, marginBottom: 8 }}>NÃO-IID</div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
                     <div>
-                      <H label="H_original (non-IID)"         value={job.h_original_non_iid} />
-                      <H label="H_bitstring (non-IID)"         value={job.h_bitstring_non_iid} />
-                      <H label="min(H_original, 8×H_bit)"      value={job.h_min_non_iid} />
+                      <H label="H_original (por símbolo de 8 bits)" value={job.h_original_non_iid} />
+                      <H label="↳ estimador limitante (original)" value={job.original_limiting_estimator} />
+                      <H label="H_bitstring (por bit)" value={job.h_bitstring_non_iid} />
+                      <H label="↳ estimador limitante (bitstring)" value={job.bitstring_limiting_estimator} />
                     </div>
                     <div>
-                      <H label="Estimador limitante" value={job.limiting_estimator} />
+                      <H label="conversão bitstring→símbolo" value={job.bitstring_to_symbol_conversion} />
+                      <H label="h_min_non_iid = min(H_original, 8×H_bitstring)" value={job.h_min_non_iid} />
+                      <H label="trilha que limita" value={job.limiting_path} />
+                      <H label="estimador limitante (corresponde a h_min)" value={job.limiting_estimator} />
                     </div>
                   </div>
+                  {job.iid_passed === false && (
+                    <div style={{ marginTop: 8, fontSize: 10, color: theme.warning, fontFamily: mono }}>
+                      ⚠ Hipótese IID falhou → o crédito de entropia é <strong>h_min_non_iid</strong>
+                      {" "}({job.h_min_non_iid != null ? job.h_min_non_iid.toFixed(4) : "—"} bits/símbolo de 8 bits). h_min_iid NÃO é usado.
+                    </div>
+                  )}
+                  {job.parse_incomplete && (
+                    <div style={{ marginTop: 6, fontSize: 10, color: theme.danger, fontFamily: mono }}>
+                      ⚠ Saída do assessment incompleta — algum campo essencial não pôde ser extraído.
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -235,27 +250,33 @@ function JobModal({ job, log, onClose }) {
           )}
 
           {tab === "estimadores" && (
-            <div>
-              <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, fontFamily: mono, marginBottom: 12 }}>
-                ESTIMADORES non-IID
-              </div>
-              {job.estimators && Object.keys(job.estimators).length > 0 ? (
-                Object.entries(job.estimators)
-                  .sort((a, b) => a[1] - b[1])
-                  .map(([name, val]) => (
-                    <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0",
-                      borderBottom: `1px solid ${theme.border}` }}>
-                      <span style={{ fontSize: 11, color: theme.textDim, fontFamily: mono }}>{name}</span>
-                      <span style={{ fontSize: 12, fontWeight: 700, fontFamily: mono, color: theme.quantum }}>
-                        {val.toFixed(6)} bits
-                      </span>
-                    </div>
-                  ))
-              ) : (
-                <span style={{ color: theme.textMuted, fontSize: 11, fontFamily: mono }}>
-                  {job.status !== "completed" ? "Aguardando conclusão..." : "Nenhum estimador capturado."}
-                </span>
-              )}
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
+              {[
+                ["TRILHA ORIGINAL (por símbolo de 8 bits)", job.estimators, job.original_limiting_estimator, "bits/símbolo"],
+                ["TRILHA BITSTRING (por bit)", job.bitstring_estimators, job.bitstring_limiting_estimator, "bits/bit"],
+              ].map(([title, est, limName, unit]) => (
+                <div key={title}>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, fontFamily: mono, marginBottom: 12 }}>{title}</div>
+                  {est && Object.keys(est).length > 0 ? (
+                    Object.entries(est).sort((a, b) => a[1] - b[1]).map(([name, val]) => (
+                      <div key={name} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0",
+                        borderBottom: `1px solid ${theme.border}`,
+                        background: name === limName ? theme.quantum + "12" : "transparent" }}>
+                        <span style={{ fontSize: 11, color: name === limName ? theme.quantum : theme.textDim, fontFamily: mono, fontWeight: name === limName ? 700 : 400 }}>
+                          {name}{name === limName ? " ◀ limita" : ""}
+                        </span>
+                        <span style={{ fontSize: 12, fontWeight: 700, fontFamily: mono, color: theme.quantum }}>
+                          {val.toFixed(6)} {unit}
+                        </span>
+                      </div>
+                    ))
+                  ) : (
+                    <span style={{ color: theme.textMuted, fontSize: 11, fontFamily: mono }}>
+                      {job.status !== "completed" ? "Aguardando conclusão..." : "—"}
+                    </span>
+                  )}
+                </div>
+              ))}
             </div>
           )}
 

@@ -74,6 +74,9 @@ def fresh_db():
         ("size_normalized_bytes", "INTEGER"), ("normalized_symbol_count", "INTEGER"),
         ("first_parse_error", "TEXT"), ("endianness_rule", "TEXT"),
         ("stored_filename", "TEXT"),
+        ("original_limiting_estimator", "TEXT"), ("bitstring_limiting_estimator", "TEXT"),
+        ("bitstring_to_symbol_conversion", "TEXT"), ("limiting_path", "TEXT"),
+        ("bitstring_estimators_json", "TEXT"), ("parse_incomplete", "INTEGER"),
     ]:
         try:
             conn.execute(f"ALTER TABLE nist_test_jobs ADD COLUMN {col} {decl}")
@@ -418,6 +421,102 @@ class TestAssessmentEngineIdentity(unittest.TestCase):
         before = ns._next_periodic
         ns._run_periodic()
         self.assertEqual(ns._next_periodic, before)
+
+
+class TestParseOutputLimitingEstimator(unittest.TestCase):
+    """Item 2: semântica NÃO ambígua do estimador limitante non-IID.
+    h_min_non_iid = min(H_original, 8 x H_bitstring); limiting_estimator
+    corresponde a ele via limiting_path."""
+
+    IID_HDR = ("Rodando IID...\n"
+               "\tMost Common Value Estimate (bit string) = 0.998765 / 1 bit(s)\n"
+               "\tMost Common Value Estimate = 7.912345 / 8 bit(s)\n"
+               "H_original: 7.912345\nH_bitstring: 0.998765\n"
+               "min(H_original, 8 X H_bitstring): 7.912345\n"
+               "Passed chi square tests\n"
+               "Passed length of longest repeated substring test\n"
+               "Passed IID permutation tests\n")
+
+    def _noniid(self, body):
+        return self.IID_HDR + "Rodando non-IID...\n" + body
+
+    def test_bitstring_limita(self):
+        body = (
+            "\tMost Common Value Estimate (bit string) = 0.997000 / 1 bit(s)\n"
+            "\tMost Common Value Estimate = 7.950000 / 8 bit(s)\n"
+            "\tCompression Test Estimate (bit string) = 0.868917 / 1 bit(s)\n"
+            "\tT-Tuple Test Estimate (bit string) = 0.931125 / 1 bit(s)\n"
+            "\tT-Tuple Test Estimate = 7.210061 / 8 bit(s)\n"
+            "\tLRS Test Estimate = 7.882387 / 8 bit(s)\n"
+            "H_original: 7.210061\nH_bitstring: 0.868917\n"
+            "min(H_original, 8 X H_bitstring): 6.951334\n")
+        r = ns._parse_output(self._noniid(body), "both")
+        self.assertAlmostEqual(r["h_original_non_iid"], 7.210061, places=5)
+        self.assertEqual(r["original_limiting_estimator"], "T-Tuple Test Estimate")
+        self.assertAlmostEqual(r["h_bitstring_non_iid"], 0.868917, places=5)
+        self.assertEqual(r["bitstring_limiting_estimator"], "Compression Test Estimate")
+        self.assertAlmostEqual(r["h_min_non_iid"], 6.951334, places=5)
+        self.assertEqual(r["limiting_path"], "bitstring")
+        self.assertEqual(r["limiting_estimator"], "Compression Test Estimate")  # corresponde a h_min
+        self.assertFalse(r["parse_incomplete"])
+        self.assertFalse(r["iid_passed"] is None)
+
+    def test_original_limita(self):
+        body = (
+            "\tMost Common Value Estimate (bit string) = 0.999000 / 1 bit(s)\n"
+            "\tMost Common Value Estimate = 7.850000 / 8 bit(s)\n"
+            "\tCompression Test Estimate (bit string) = 0.998000 / 1 bit(s)\n"
+            "\tT-Tuple Test Estimate = 7.600000 / 8 bit(s)\n"
+            "H_original: 7.600000\nH_bitstring: 0.998000\n"
+            "min(H_original, 8 X H_bitstring): 7.600000\n")
+        r = ns._parse_output(self._noniid(body), "both")
+        self.assertEqual(r["limiting_path"], "original")
+        self.assertEqual(r["limiting_estimator"], "T-Tuple Test Estimate")
+        self.assertEqual(r["original_limiting_estimator"], "T-Tuple Test Estimate")
+        self.assertEqual(r["bitstring_limiting_estimator"], "Compression Test Estimate")
+
+    def test_empate_original_e_bitstring(self):
+        body = (
+            "\tMost Common Value Estimate (bit string) = 0.975000 / 1 bit(s)\n"
+            "\tCompression Test Estimate (bit string) = 0.950000 / 1 bit(s)\n"
+            "\tMost Common Value Estimate = 7.600000 / 8 bit(s)\n"
+            "\tT-Tuple Test Estimate = 7.600000 / 8 bit(s)\n"
+            "H_original: 7.600000\nH_bitstring: 0.950000\n"
+            "min(H_original, 8 X H_bitstring): 7.600000\n")
+        r = ns._parse_output(self._noniid(body), "both")
+        # 8 x 0.95 = 7.6 == H_original -> desempate para bitstring (abs<=abs)
+        self.assertIn(r["limiting_path"], ("bitstring", "original"))
+        self.assertAlmostEqual(r["h_min_non_iid"], 7.600000, places=5)
+        # o limiting_estimator escolhido tem que ser da trilha do limiting_path
+        if r["limiting_path"] == "bitstring":
+            self.assertEqual(r["limiting_estimator"], r["bitstring_limiting_estimator"])
+        else:
+            self.assertEqual(r["limiting_estimator"], r["original_limiting_estimator"])
+
+    def test_trilha_bitstring_ausente(self):
+        body = (
+            "\tMost Common Value Estimate = 7.900000 / 8 bit(s)\n"
+            "\tT-Tuple Test Estimate = 7.802345 / 8 bit(s)\n"
+            "H_original: 7.802345\n"
+            "min(H_original, 8 X H_bitstring): 7.802345\n")  # H_bitstring ausente
+        r = ns._parse_output(self._noniid(body), "both")
+        self.assertIsNone(r["h_bitstring_non_iid"])
+        self.assertEqual(r["limiting_path"], "original")
+        self.assertEqual(r["limiting_estimator"], "T-Tuple Test Estimate")
+        self.assertTrue(r["parse_incomplete"])  # falta a trilha bitstring
+
+    def test_saida_incompleta_sem_min(self):
+        body = ("\tMost Common Value Estimate = 7.900000 / 8 bit(s)\n"
+                "H_original: 7.900000\n")  # sem H_bitstring e sem min(...)
+        r = ns._parse_output(self._noniid(body), "both")
+        self.assertIsNone(r["h_min_non_iid"])
+        self.assertIsNone(r["limiting_path"])
+        self.assertTrue(r["parse_incomplete"])
+
+    def test_iid_min_vem_de_original(self):
+        r = ns._parse_output(self.IID_HDR, "iid")
+        self.assertAlmostEqual(r["h_min_iid"], 7.912345, places=5)
+        self.assertTrue(r["iid_passed"])
 
 
 class TestOrphanJobRecovery(unittest.TestCase):
