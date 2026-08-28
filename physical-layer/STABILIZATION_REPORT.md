@@ -59,12 +59,13 @@ nist 37/37). Validação completa na VM após as correções: **Playwright 85/85
 
 ## 1. Commits e branches
 
-Rodada anterior: 28 commits em `f058f22..89a63fd`. Rodada de 2026-08-28:
-`6248f0a` (itens 1-2), `9350732` (itens 3-4-6), `326f38a` (fix staging),
-`7c44e23`+`b3024d1`+`41b2b18` (item 7 + itens 8-9 docs), `ffa41c9`+`41b2b18`
-(item 5). HEAD atual **`41b2b18`**. `local = VM (/root/projects) =
-origin (github Dobslit-projects/qrng-demo-react)`. **Nenhum commit em `main`**
-(`main` = `f058f22`).
+Rodada anterior: 28 commits em `f058f22..89a63fd`. Rodada de 2026-08-28 (1ª
+parte): `6248f0a`…`41b2b18` + `ffa41c9`. **Rodada de fechamento pré-merge**
+(2026-08-28, 2ª parte, a partir de `84818ae`): `1ca463a` (itens 1-2),
+`a902a9a`+`2a835bb` (itens 3-5-6), `b0973af` (item 4), `9989db4` (item 7),
+`60745f9` (itens 8-9 FPGA), `c80f043` (item 8 artefatos), + docs
+(`aa90a7c`/`84818ae`/`a2c3947`). **HEAD atual `c80f043`+**. `local = VM
+(/root/projects) = origin`. **Nenhum commit em `main`** (`main` = `f058f22`).
 
 ## 2. GitHub Actions real
 
@@ -75,9 +76,9 @@ Repo público → API do Actions consultável sem token.
   Frontend (build+testes), qrng-client-api (testes + OpenAPI drift),
   qrng-nist-api (testes Python), physical-layer (RCT/APT + os 2 harnesses
   11/11 + 8/8), E2E Playwright (staging determinístico, bloqueante).
-- **Rodada de 2026-08-28**: runs #37 (`7c44e23`) e #38 (`b3024d1`) =
-  **success**. O HEAD `41b2b18` dispara o run #39 (registrar o resultado final
-  ao fechar).
+- **Rodada de 2026-08-28**: runs #37…#43 = **success**. Última:
+  **run #43 (`a2c3947`)** completed / **success**, 5 jobs. O HEAD `c80f043`
+  dispara o run #44 (registrar o resultado final ao fechar).
 - Runs #32/#33 haviam reprovado só no passo **Lint** (`no-unused-vars` em
   `ratelimit.spec.js`), corrigido em `ffc763c`.
 
