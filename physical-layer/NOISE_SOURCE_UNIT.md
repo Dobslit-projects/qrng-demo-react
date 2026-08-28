@@ -41,10 +41,14 @@ PHYSICAL SAMPLE RATE  = INCONCLUSIVO — EVIDÊNCIA NECESSÁRIA: taxa de
                         NÃO é conhecida a relação entre "1 uint32" e "1
                         amostra física".
 
-TRANSPORT THROUGHPUT  = ~680.626 B/s  ≈  170.157 transport words (uint32)/s.
+TRANSPORT THROUGHPUT  = vazão observada na fronteira de software:
+                        ~680.626 B/s ≈ 170.157 transport words (uint32)/s.
                         MEDIDO 2026-08-27 (total_pushed do ring buffer /
-                        60 s, três amostras). É a vazão do TRANSPORTE, não
-                        necessariamente a taxa física de amostras.
+                        60 s, três amostras). NÃO existe relação comprovada
+                        entre essa vazão e a taxa física de amostragem até
+                        que o empacotamento da FPGA seja conhecido (pode haver
+                        agrupamento, decimação OU replicação a jusante da
+                        digitização).
 
 CONDITIONING          = Nenhum no software (connector + FIFO + server_api.py
                         são passthrough verbatim — ver abaixo).

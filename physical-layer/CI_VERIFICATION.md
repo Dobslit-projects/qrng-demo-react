@@ -4,6 +4,34 @@ O repositório `Dobslit-projects/qrng-demo-react` é **público** — a API do G
 responde sem autenticação, então a execução do CI pôde ser verificada de fato
 (não apenas localmente).
 
+## HEAD FINAL DA FASE — `542dad4` (run #36)
+
+| campo | valor |
+|---|---|
+| workflow | **CI** (run #36) |
+| URL | https://github.com/Dobslit-projects/qrng-demo-react/actions/runs/33121178255 |
+| `head_sha` | **`542dad4334b1428bfde226dd37e3a8cf787becfc`** (== HEAD obrigatório da branch) |
+| `head_branch` | `stabilize/physical-layer-baseline-20260826` |
+| `event` | `push` |
+| `status` / `conclusion` | `completed` / **`success`** |
+
+### 5 jobs / todos os passos `success`
+
+| job | passos-chave | conclusão |
+|---|---|---|
+| **Frontend (build + testes)** | Instalar deps · Lint (ESLint) · Lint-gate · Testes (vitest) · Build | todos `success` |
+| **qrng-client-api (testes + OpenAPI)** | Instalar deps · Lint (Node) · Lint-gate · Testes (unit+integração+contrato) · Regenerar OpenAPI + checar drift | todos `success` |
+| **qrng-nist-api (testes Python)** | Testes (`test/test_nist_service.py`, 23/23) | `success` |
+| **physical-layer (RCT/APT health tests)** | Testes RCT/APT + máquina de estados · **Harness de instrumentação (item 7, 11/11)** · **Harness da restart campaign (item 9, 8/8)** | todos `success` |
+| **E2E Playwright (staging determinístico)** | Subir staging (fixture replay + **NIST staging**) · **Playwright e2e/staging — BLOQUEANTE** (62/62) · Derrubar staging | `success` (passo "Logs em caso de falha" `skipped` — não houve falha) |
+
+Evidência coletada via API pública (`GET /actions/runs/33121178255/jobs`) em
+2026-08-27. O run #35 (`89a63fd`) **não** é usado como substituto — esta seção
+registra o run do HEAD final `542dad4`.
+
+---
+
+
 ## Execução correspondente ao commit `0403e61`
 
 | campo | valor |

@@ -1,14 +1,18 @@
 # Kapuã QRNG — Relatório técnico consolidado
 
 **Branch:** `stabilize/physical-layer-baseline-20260826`
-**HEAD:** `89a63fd` · **main / produção:** `f058f22` (sem merge, sem deploy)
+**HEAD:** `542dad4`+ (esta rodada) · **main / produção:** `f058f22` (sem merge, sem deploy)
 **Data:** 2026-08-27
 **Veredito:** `OPERACIONAL, MAS AINDA EM VALIDAÇÃO DA FONTE`
 
-> O pipeline serve bytes de forma estável e observável; a **unidade física da
-> amostra e a taxa física da fonte permanecem INCONCLUSIVAS** (lado FPGA
-> inacessível nesta sessão). Nenhuma alegação de conformidade NIST, de
-> "validado", "seguro", "uniforme" ou "sem viés" é feita.
+> **O escopo autorizado foi executado. Os itens relacionados à unidade física,
+> localização do viés, restart campaign e RCT/APT operacional permanecem
+> INCONCLUSIVOS ou BLOQUEADOS por falta de acesso controlado à FPGA.**
+>
+> O pipeline serve bytes de forma estável e observável; a unidade física da
+> amostra e a taxa física da fonte permanecem INCONCLUSIVAS. Nenhuma alegação
+> de conformidade NIST, de "validado", "seguro", "uniforme" ou "sem viés" é
+> feita.
 
 ---
 
@@ -120,9 +124,11 @@ proveniência), **B** 8 colunas de metadados (aditivo), **C** `EXCLUDED_PATTERNS
 `assessment_symbol_width`/`normalization_method` (aditivo), **E** `sample_origin`
 obrigatório em `_create_and_enqueue` (mudança de contrato), **F** campo em
 `/nist/status` (aditivo), **G** `attested_transport_format` no upload +400
-(aditivo+validação), **H** fallback "unknown" em `_row()` (aditivo). O
-**comportamento estatístico é idêntico**; ambas as versões têm os mesmos 7
-endpoints; nenhuma é versionada. Nenhuma migração de schema é destrutiva.
+(aditivo+validação), **H** fallback "unknown" em `_row()` (aditivo). **O diff
+não identificou mudança intencional nos estimadores. A equivalência dos
+resultados permanece pendente de comparação paralela com a suíte real.**
+Ambas as versões têm os mesmos 7 endpoints; nenhuma é versionada. Nenhuma
+migração de schema é destrutiva. Ver §7-bis (comparação com a suíte real).
 
 ## 9. Serviço NIST de staging
 
@@ -172,7 +178,7 @@ TRANSPORT WORD        = uint32 little-endian, 4 bytes (CONFIRMADO no software)
 ASSESSMENT SYMBOL     = INCONCLUSIVO enquanto NOISE SOURCE SAMPLE for desconhecido
 HEALTH TEST SYMBOL    = INCONCLUSIVO (mesma dependência)
 PHYSICAL SAMPLE RATE  = INCONCLUSIVO — EVIDÊNCIA NECESSÁRIA: taxa de amostragem do ADC
-TRANSPORT THROUGHPUT  = ~680.626 B/s ≈ 170.157 transport words/s (MEDIDO 2026-08-27)
+TRANSPORT THROUGHPUT  = vazão observada na fronteira de software (~680.626 B/s ≈ 170.157 tw/s, 2026-08-27) — SEM relação comprovada com a taxa física
 CONDITIONING          = Nenhum no software; FPGA-side INCONCLUSIVO
 REAL NOISE-SOURCE RESTART = INCONCLUSIVO (hipótese: power-cycle / recarga de bitstream)
 ```
@@ -198,13 +204,15 @@ unidade usada antes.
 
 ## 13. Taxa física × throughput de transporte
 
-- **TRANSPORT THROUGHPUT** = ~680.626 B/s ≈ 170.157 transport words/s
-  (medido 2026-08-27, na saída do `server_api.py`).
-- **PHYSICAL SAMPLE RATE** = INCONCLUSIVO. Não se pode afirmar que o throughput
-  de transporte é igual à taxa de amostragem física: pode haver
-  buffering/decimação/replicação no caminho FPGA→socket não observável sem
-  acesso à FPGA. O throughput medido é um **teto** para a taxa de símbolos
-  entregues, não uma medida da fonte.
+- **TRANSPORT THROUGHPUT** = **vazão observada na fronteira de software**
+  (~680.626 B/s ≈ 170.157 transport words/s, medido 2026-08-27 na saída do
+  `server_api.py`). **Não existe relação comprovada entre essa vazão e a taxa
+  física de amostragem até que o empacotamento da FPGA seja conhecido.**
+- **PHYSICAL SAMPLE RATE** = INCONCLUSIVO. Pode haver
+  buffering/decimação/replicação/agrupamento no caminho FPGA→socket não
+  observável sem acesso à FPGA; a vazão de software não é medida da fonte nem
+  necessariamente um teto dela (se houver replicação/expansão a jusante da
+  digitização, a vazão de software pode até exceder a taxa física).
 
 ## 14. Pontos de captura (instrumentação)
 
@@ -350,7 +358,8 @@ em produção muda.
   no software (hashes conferidos).
 - O transporte usa **`uint32` little-endian de 4 bytes** (confirmado no
   software).
-- Throughput de transporte **medido**: ~680.626 B/s.
+- **Vazão observada na fronteira de software**: ~680.626 B/s (sem relação
+  comprovada com a taxa física de amostragem).
 - Rate limit: **quotas independentes por IP**, demonstradas com **dois IPs
   reais distintos**; 429 estruturado; janela de 60 s.
 - Suítes de teste: **62/62** Playwright no staging; **23/23** unit NIST;
