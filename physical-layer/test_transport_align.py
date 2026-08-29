@@ -72,10 +72,29 @@ class TestDesconexoesDeterministicas(unittest.TestCase):
         # out = words[0..4] + words[7..49]  (palavras 5,6 perdidas, sem desalinhar)
         self.assertEqual(as_u32(out)[:5], [0, 1, 2, 3, 4])
         self.assertEqual(as_u32(out)[5], 7)
-        # reconnect registrado, mas SEM realign (offset 20 já é múltiplo de 4)
+        # reconnect registrado para auditoria, mas SEM realign (offset 20 mult. 4)
         kinds = [d.kind for d in a.discontinuities]
         self.assertIn("reconnect", kinds)
         self.assertNotIn("realign", kinds)
+        # e NÃO conta como descontinuidade de DADOS (restart limpo não polui)
+        self.assertEqual(a.data_discontinuities(), 0)
+        self.assertFalse(a.discontinuous())
+        self.assertEqual(a.state()["discontinuities"], 0)
+        self.assertEqual(a.state()["events_total"], 1)
+
+    def test_reconexao_com_realign_conta_como_descontinuidade_de_dados(self):
+        a, out, logical = self._run_misaligned(cut_at=21)   # 21 % 4 = 1 -> realign 3
+        self.assertTrue(a.discontinuous())
+        self.assertEqual(a.data_discontinuities(), 1)        # o realign
+        self.assertEqual(a.state()["events_total"], 2)       # reconnect + realign
+
+    def _run_misaligned(self, cut_at):
+        logical = words(50)
+        a = WordAligner()
+        a.feed(logical[:cut_at])
+        a.note_reconnect(connector_forwarded_offset=cut_at)
+        out = a.feed(logical[cut_at:])
+        return a, out, logical
 
     def test_perda_de_2_bytes_realinha_descartando_2(self):
         # o connector recebeu 22 bytes crus quando caiu (`forwarded_offset=22`);

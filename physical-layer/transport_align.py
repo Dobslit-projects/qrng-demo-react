@@ -106,6 +106,14 @@ class WordAligner:
             kind="drop_oldest", at_offset=self.out_offset, bytes_dropped=dropped,
             ts_civil=ts, detail="RingBuffer overflow — oldest bytes discarded"))
 
+    def data_discontinuities(self) -> int:
+        """Contagem de eventos que envolveram PERDA/DESCARTE de bytes: `realign`
+        (bytes descartados p/ re-encaixar o grid) + `drop_oldest`. Uma reconexão
+        que caiu numa borda de palavra (misalign 0) é registrada para auditoria
+        mas NÃO conta aqui — um restart limpo do connector/server_api não deve
+        marcar o buffer como descontínuo para sempre."""
+        return sum(1 for d in self.discontinuities if d.kind in ("realign", "drop_oldest"))
+
     # ---- estado p/ /health e headers ----
     def state(self) -> dict:
         return {
@@ -116,15 +124,16 @@ class WordAligner:
             "held_partial_bytes": len(self._rem),
             "reconnects": self.reconnects,
             "realign_bytes_total": self.realign_total,
-            "discontinuities": len(self.discontinuities),
+            "discontinuities": self.data_discontinuities(),        # só perda de bytes
+            "events_total": len(self.discontinuities),             # incl. reconnects limpos
             "last_discontinuity": self.discontinuities[-1].as_dict() if self.discontinuities else None,
         }
 
     def discontinuous(self) -> bool:
-        """True se HOUVE alguma descontinuidade que quebra a contiguidade com a
-        origem (reconnect/realign/drop) — o consumidor deve tratar os blocos
-        como possivelmente NÃO contíguos."""
-        return len(self.discontinuities) > 0
+        """True se HOUVE realign ou drop_oldest — o consumidor deve tratar os
+        blocos como possivelmente NÃO contíguos. Reconexão em borda de palavra
+        (sem perda além do que sumiu na rede, múltiplo de 4) não conta."""
+        return self.data_discontinuities() > 0
 
 
 # --------- leitor do sideband do connector (item 2) ----------
