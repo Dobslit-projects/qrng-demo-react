@@ -1,0 +1,122 @@
+{
+  "$schema_note": "Baseline imutável do bitstream de produção do Kapuã QRNG. Gerado em 2026-08-29 por inspeção SOMENTE LEITURA via multi-hop SSH (local -> Bongo -> dobslit -> FPGA 10.0.10.2). Nenhuma escrita, nenhuma reprogramação, nenhum acesso destrutivo a MMIO.",
+  "generated_at_utc": "2026-08-29T14:00:00Z",
+  "collection_method": "read-only SSH (paramiko nested channels); sha256sum/sha512sum/stat/od/python3 on-board; no /dev/mem access; no fpgautil; no JTAG",
+  "board": {
+    "declared_by_project": "Red Pitaya z20_125_4ch",
+    "declared_fpga_by_project": "Zynq-7020 (xc7z020)",
+    "on_board_monitor_f": "z10_125",
+    "on_board_hostname": "rp-f0d1e2",
+    "on_board_uname": "Linux rp-f0d1e2 5.15.0-xilinx #1 SMP PREEMPT Tue Aug 6 18:57:28 UTC 2024 armv7l",
+    "os": "Ubuntu 22.04.4 LTS",
+    "redpitaya_ecosystem_version": "2.00-a0457d3aa, Build 37, commit a0457d3aa595ca790b8c4386990f963f775e6c03",
+    "clock_state": "SEM NTP / RTC dessincronizado: o relógio da placa marcava 2026-03-28 durante a coleta (data real 2026-08-29). TODOS os timestamps abaixo estão nesse relógio enviesado.",
+    "uptime_seconds_at_collection": 47276,
+    "device_discrepancy": "IDCODE do bitstream = 0x03722093 = xc7z010 (Zynq-7010). 'monitor -f' = z10_125. A documentacao do projeto diz z20_125_4ch / Zynq-7020. Discrepancia NAO resolvida nesta etapa: precisa de confirmacao dos autores. Ver FPGA_PROVENANCE.md."
+  },
+  "primary_bitstream": {
+    "abs_path": "/root/stream_app.bit.bin",
+    "name": "stream_app.bit.bin",
+    "size_bytes": 2083744,
+    "sha256": "392a51e610ad3ec2751d7674beb2e61ef8e1d600a8c018285829f166aa8f4e3e",
+    "sha512": "030fd18a4bfac739c33c330524e9ea30c20aef5eabd52a907689ae186e97267fa8a121bb69b02702a4d2c0a80e2b2f81d790a747e3f2dec258527271b9ede013",
+    "owner": "root:root",
+    "perms": "0644 (-rw-r--r--)",
+    "mtime_board_clock": "2026-02-11T18:41:38.832302969Z",
+    "ctime_board_clock": "2026-02-11T18:41:38.832302969Z",
+    "atime_board_clock": "2026-06-05T19:53:59.445371106Z",
+    "birth_board_clock": "2025-10-31T17:13:24.871111394Z",
+    "file_type": "raw Xilinx 7-series configuration bitstream, headerless (.bin), 32-bit words byte-swapped vs canonical .bit (Red Pitaya / fpgautil PCAP convention). 'file' command not installed on board; type determined by parsing the config packet stream.",
+    "first_16_bytes_hex": "ffffffffffffffffffffffffffffffff",
+    "sync_word": "0xAA995566 present at byte offset 48 after de-swapping (dummy pad 0xFF x8, bus-width detect 0x000000BB / 0x11220044, more 0xFF, then sync)",
+    "ascii_bit_header_present": false,
+    "embedded_build_metadata": "NONE. No .bit ASCII header => no design name, no Vivado version string, no build date, no user id. 'strings' output is pure configuration-frame data.",
+    "config_registers_parsed": {
+      "IDCODE": "0x03722093  => xc7z010 (Zynq-7010)",
+      "CTL0": "0x00000501  => ENC bit (bit 6) = 0  => bitstream NOT encrypted; no AES/HMAC",
+      "COR0": "0x02003fe5",
+      "COR1": "0x00000000",
+      "CMD_sequence": "NULLCMD, WCFG(0x1) ... standard full-config sequence",
+      "FDRI_word_count": 520352,
+      "FDRI_payload_bytes_approx": 2081408,
+      "reconfig_type": "FULL configuration (not partial reconfiguration)"
+    },
+    "compressed": "Vivado BITSTREAM.GENERAL.COMPRESS status NOT determined from header alone. Note: stock Red Pitaya .bit.bin sizes on this same board range 372 KB..2.4 MB for the same device => compression IS used in the RP flow; file size is NOT a reliable device/design discriminator.",
+    "authenticated": false,
+    "encrypted": false,
+    "associated_files_on_board": {
+      "bit": "none (no /root/stream_app.bit)",
+      "bif": "none",
+      "xsa_hwh_hdf": "none",
+      "dtbo_dts": "none co-located; the runtime DT overlay is a STOCK Red Pitaya dtbo, see loader section",
+      "BOOT_BIN": "none co-located (a stock /boot/boot.bin exists, unrelated to this fabric load)"
+    }
+  },
+  "sibling_bitstream": {
+    "abs_path": "/root/dac_test.bit.bin",
+    "size_bytes": 2083744,
+    "sha256": "de763e62eab3ae2f4ce8a1a49ad732c29d71104d5732a7eab73475d5f31bc57f",
+    "mtime_board_clock": "2026-02-11T22:06:38.296437418Z",
+    "relation_to_primary": "SAME size (2083744). Differs in 63379 of ~2.08M bytes, in a single contiguous region of the FDRI frame data (bytes 249301..2081652). Same device, same I/O ring, same base infrastructure => interpreted as the SAME Vivado project built with a different top-level/mode (a DAC test-pattern build vs the streaming build). Circumstantial, not proven without sources."
+  },
+  "loader": {
+    "unit": "/etc/systemd/system/qrng-stream.service (enabled via multi-user.target.wants)",
+    "exec_start_pre": "/opt/redpitaya/bin/fpgautil -b /root/stream_app.bit.bin   (NO -o overlay argument => reprograms PL fabric only, leaves the device-tree overlay untouched)",
+    "exec_start": "/bin/bash -c '/root/fifo | nc -k -l 0.0.0.0 12345'",
+    "restart": "always, RestartSec=5, KillMode=control-group",
+    "also_referenced_in": ["/root/init_demo.sh", "/root/qrng_legacy_screen_command.txt (marked legacy, superseded by qrng-stream.service)"],
+    "load_evidence_journal": "Mar 28 06:46:52 rp-f0d1e2 fpgautil[378]: Time taken to load BIN is 39.000000 Milli Seconds  ;  systemd: Started QRNG FPGA stream TCP server ; bash[401]: ISR 0x0 = 900000 -> ISR 0x0 = ffffffff",
+    "service_active_since_board_clock": "2026-03-28T06:46:52Z (continuous; fifo PID 401, nc PID 403)",
+    "boot_fabric_before_override": "startup.sh -> mkoverlay.sh v0.94 -> overlay.sh: fpgautil -b /opt/redpitaya/fpga/<model>/v0.94/fpga.bit.bin -o .../v0.94/fpga.dtbo -n Full  (/tmp/loaded_fpga.inf = 'v0.94')"
+  },
+  "fpga_manager": {
+    "sysfs": "/sys/devices/soc0/axi/f8007000.devcfg/fpga_manager/fpga0",
+    "name": "Xilinx Zynq FPGA Manager",
+    "state": "operating",
+    "firmware_attr": "(empty)",
+    "flags": "0"
+  },
+  "device_tree_overlay": {
+    "configfs_overlay": "/sys/kernel/config/device-tree/overlays/Full",
+    "path_attr": "fpga.dtbo",
+    "status_attr": "applied",
+    "source_dtbo": "a STOCK Red Pitaya fpga.dtbo (from the 'v0.94' variant selected by startup.sh at boot). NOT regenerated when qrng-stream reprogrammed the fabric with /root/stream_app.bit.bin.",
+    "candidate_stock_dtbo_sha256_z20_125_4ch": {
+      "barebones": "bbc63d10e7837930c528f2719bad36e5e19042b399a56a2f90b703659f8dd5cd",
+      "logic": "91434c0ba4a1307dec80d7a6499b29b42c390202ec43c309cdb0eec6426b7074",
+      "stream_app": "ebaf66eae60828249b7edd834ce0fa18c3e4437ee7b2ba54191f6587b6e85b9b",
+      "v0.94": "dd09b17e87dab07e5344441cc09e11156660ab109cd5a8aa90dc76da47a3cea6"
+    },
+    "impact_on_datapath": "NONE. fifo.c reaches the AXI4-Stream FIFO by mmap of /dev/mem at physical 0x43C00000 (raw), NOT through a UIO/DT node. The stock overlay describes rp_oscilloscope@0x40000000 and rp_gpio@0x40200000 only; it does NOT describe anything at 0x43C00000. The custom FIFO block is therefore invisible to the device tree by design."
+  },
+  "datapath_contract_fifo_c": {
+    "source_file": "/root/fifo.c  (sha256 8c738fbf47989b0175bf903c04f0efc3eb0626831442535a349df540bc2e5a05)",
+    "binary": "/root/fifo == /root/fifo.binary  (sha256 973840273f0354c2203ab6ba43224270452bbcdb932d030e686bc61afa15c340)",
+    "AXI_FIFO_ADDR": "0x43C00000",
+    "AXI_FIFO_WINDOW": "0x20000",
+    "RDFD_offset_read": "0x11000 (Receive Data FIFO Data -- read POPS one 32-bit word)",
+    "startup_writes": "*axi_fifo = 0xFFFFFFFF (ISR clear); *(axi_fifo + 0x18/4) = 0xA5 (RDFR reset)",
+    "per_word": "num = *(axi_fifo + 0x11000/4);  *axi_fifo = 0xFFFFFFFF;  le = htole32(num);  write_all(&le, 4)",
+    "conditioning_in_software": "NONE. No XOR, no hash, no decimation, no bit-selection, no framing. Verbatim: read RDFD -> htole32 -> write 4 bytes.",
+    "transport_word": "uint32, little-endian, 4 bytes == exactly one RDFD read"
+  },
+  "artifact_search_result": {
+    "scope": "FPGA rootfs (/ ext4) + /boot + /opt/redpitaya (vfat ro); dobslit (/ ext4, /boot/efi); Bongo (/ ext4, /boot); local repo qrng-demo-react + full git history (--all).",
+    "vivado_project_xpr": "NOT FOUND",
+    "rtl_v_sv_vhd": "NOT FOUND (0 files)",
+    "block_design_bd": "NOT FOUND",
+    "constraints_xdc_ucf": "NOT FOUND (only stock RP .dts/.dtsi)",
+    "checkpoints_dcp": "NOT FOUND",
+    "hw_handoff_xsa_hwh_hdf": "NOT FOUND",
+    "vivado_logs_jou": "NOT FOUND",
+    "tcl_build_scripts": "NOT FOUND (only stock RP overlay.sh / mkoverlay.sh, which just call fpgautil)",
+    "archives_tar_zip": "NOT FOUND (only Debian dpkg backups)",
+    "project_git_repo": "NOT FOUND (FPGA has only clones of RedPitaya/jupyter and WhirlwindTourOfPython; Bongo/dobslit have only software repos)",
+    "hardware_artifacts_found": [
+      "/root/stream_app.bit.bin (custom, this manifest)",
+      "/root/dac_test.bit.bin (custom sibling)",
+      "stock Red Pitaya /boot/fpga/** and /opt/redpitaya/fpga/** tree (Release-2024.3, upstream redpitaya-fpga commit b6023edeba7ea396da19346909c4aafeef7bf1f0)"
+    ]
+  },
+  "verdict": "SOMENTE BITSTREAM DISPONIVEL"
+}
