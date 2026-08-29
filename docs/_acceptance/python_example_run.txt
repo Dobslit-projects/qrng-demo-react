@@ -1,0 +1,47 @@
+KAPUA_API_TOKEN não definido — usando os endpoints PÚBLICOS (/v1/public/random, cota reduzida, sem /health nem /me/*).
+Para o fluxo autenticado: export KAPUA_API_TOKEN="dobslit_qrng_live_..." (NUNCA comite um token real).
+
+== GET /v1/health ==
+  (pulado: exige token; sem KAPUA_API_TOKEN definido)
+
+== GET /v1/random?bytes=64&format=raw ==
+  recebidos 64 bytes  (Content-Length=64)
+  request_id: req_341c10422506bbdb
+  SHA-256   : f5d33ca0c81dbf12206cd081c2f691c359be8ebc309ba67ab450fab3ab4225be
+  proveniência efetiva : unknown
+  live_verified        : False
+  captured_at          : None
+  transport_health     : healthy
+  buffer_health        : discontinuous
+  entropy_health       : not_assessed
+  NOTA: esta resposta NÃO é uma captura live verificada.
+
+== GET /v1/random?bytes=64&format=hex ==
+  hex[:32] = d991e0de2502a3ddb61ea03adcb1dd34
+  64 bytes  SHA-256=81ac8b7e64c3d75441153ede9281724ec831f515cfc4623f20fb8a549bff379c
+  request_id: req_d80dd524321299ec
+  proveniência efetiva : unknown
+  live_verified        : False
+  captured_at          : None
+  transport_health     : healthy
+  buffer_health        : discontinuous
+  entropy_health       : not_assessed
+  NOTA: esta resposta NÃO é uma captura live verificada.
+== GET /v1/random?bytes=64&format=base64 ==
+  base64[:24] = 0f4HurjTtUTxBQbLrGpEwb1R
+  64 bytes  SHA-256=4d12e667cde582eb47f029dd08d9fb548fee85405edd738afcaee9aa440e4171
+== GET /v1/random?bytes=64&format=uint8 ==
+  uint8[:16] = [88, 184, 9, 9, 43, 3, 128, 169, 169, 161, 89, 179, 162, 116, 206, 117]
+  64 bytes  SHA-256=34f7c255f67f6b7d39907005d3632b01c04e3092e8d4b6603d20b428f3228623
+
+== salvo 64 bytes em kapua_sample.bin ==
+
+== GET /v1/me/usage ==
+  (pulado: exige token)
+
+== tratamento de erros ==
+  401 esperado -> HTTP 403  corpo=b'{"request_id":"req_1792e38ef5da487a","error":"INVALID_TOKEN","message":"Token inv\xc3\xa1lido ou revogado."}'
+  429 (cota/rate limit): capture KapuaError e faça backoff exponencial; não trate como sucesso, não reutilize bytes antigos.
+  503 (upstream/entropia): capture KapuaError e faça backoff exponencial; não trate como sucesso, não reutilize bytes antigos.
+
+Lembre-se: o token autentica e mede cota; não melhora a entropia. A caracterização física e a validação operacional da fonte continuam em andamento.

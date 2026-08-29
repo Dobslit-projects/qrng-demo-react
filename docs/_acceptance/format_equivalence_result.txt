@@ -1,0 +1,19 @@
+amostra fixa: 64 bytes  sha256=33efd4a8aa5447eb5366b3e6b6806cff01c2dd6ab238d43f14d6433dbf451a05
+hex[..16]=00010203f0f1f2f3  b64[..12]=AAECA/Dx8vP/  uint8[..4]=[0,1,2,3]
+
+PASS  N bytes solicitados == N bytes entregues (raw)
+PASS  raw == decode(hex)
+PASS  raw == decode(base64)
+PASS  raw == bytes(uint8)
+PASS  hex tem 2 chars por byte
+PASS  hex é [0-9a-f] apenas
+PASS  uint8 todos em 0..255
+PASS  uint8 tem N elementos
+PASS  base64 decodifica para N bytes
+PASS  sem BOM no início do raw
+PASS  SHA-256 idêntico em raw/hex/base64/uint8
+PASS  uint32 lido em little-endian (00 01 02 03 -> 50462976)
+PASS  little-endian != big-endian nesta amostra (guarda de regressão)
+PASS  readUint32LE == DataView.getUint32(0,true)
+
+14/14 verificações OK
