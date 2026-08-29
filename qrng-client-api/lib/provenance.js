@@ -111,6 +111,60 @@ function resolveProvenance(o) {
   // compat: source_health == transport_health
   const sourceHealth = transportHealth;
 
+  // ── MODELO FORMAL DE PROVENIÊNCIA LIVE (item 8) ───────────────────────────
+  // Separação obrigatória: delivery_mode | transport_origin | actual_origin |
+  //   physical_capture_verified | live_verified.
+  const sourceSessionId = uh["x-qrng-source-session-id"] || null;
+  const connectionGeneration = uh["x-qrng-connection-generation"] != null
+    ? Number(uh["x-qrng-connection-generation"]) : null;
+  const unknownGapBefore = uh["x-qrng-unknown-gap-before"] === "true";
+  const ageOk = sampleAgeMs === null || sampleAgeMs <= maxAgeMs;
+  const entropyOk = entropyHealth !== "failed";
+
+  let deliveryMode = "none";
+  let transportOrigin = "none";
+  if (fallbackUsed) { deliveryMode = "fallback"; transportOrigin = "fallback"; }
+  else if (NON_LIVE_MODES.includes(mode)) {
+    deliveryMode = "replay"; transportOrigin = mode;
+  } else if (mode === "live") {
+    // recebendo um stream em tempo real do caminho FPGA→TCP — SEM afirmar
+    // captura física verificada.
+    deliveryMode = o.servedFromUpstream ? "streaming" : (o.upstreamReachable ? "streaming" : "none");
+    transportOrigin = (o.servedFromUpstream || o.upstreamReachable) ? "fpga_tcp" : "none";
+  }
+
+  // 8.1 — critérios para actual_origin=live (TODOS obrigatórios)
+  const c = {
+    source_session_id: sourceSessionId !== null,
+    monotonic_sequence: captureSeq !== null && o.sequenceMonotonic !== false,
+    acquisition_timestamp: capturedAt !== null || receivedAt !== null,
+    block_hash_origin_and_consumer: shaVerified === true,
+    producer_identity_and_version: sourceInstance !== null && provVersion !== null && envelopeUsable,
+    no_replay_or_historical: mode === "live" && !fallbackUsed,
+    no_unknown_discontinuity_in_block: !unknownGapBefore,
+    source_status_operational: transportHealth === "healthy",
+    response_in_current_session:
+      o.currentSessionId ? sourceSessionId === o.currentSessionId : sourceSessionId !== null,
+    documented_freshness_policy: ageOk && Number.isFinite(maxAgeMs),
+  };
+  const liveCriteriaMet = Object.values(c).every(Boolean);
+
+  // 8.2 — critérios ADICIONAIS para live_verified=true
+  const v = {
+    ...c,
+    physical_capture_timestamp: capturedAt !== null,
+    metadata_bound_to_block: shaVerified === true && captureId !== null,
+    anti_replay_mechanism: o.antiReplayVerified === true,
+    producer_identity_validated: o.producerIdentityVerified === true,
+    hash_matches_body: shaVerified === true,
+    timestamp_in_freshness_window: ageOk,
+    not_env_var_only: true, // este ramo NUNCA classifica por env var
+  };
+  const liveVerifiedCriteriaMet = Object.values(v).every(Boolean);
+
+  const physicalCaptureVerified = capturedAt !== null && shaVerified === true
+    && o.producerIdentityVerified === true;
+
   let actualOrigin = "unknown";
   let liveVerified = false;
 
@@ -119,42 +173,40 @@ function resolveProvenance(o) {
   } else if (NON_LIVE_MODES.includes(mode)) {
     actualOrigin = reachable ? mode : "unknown";
   } else if (mode === "live") {
-    const ageOk = sampleAgeMs === null || sampleAgeMs <= maxAgeMs;
-    // item 9: evidência só conta se o envelope for de versão conhecida (regra 7)
-    // e a integridade do bloco não tiver divergido (regra 6).
-    // item 4: haveCaptureEvidence exige `captured_at` (carimbo FÍSICO) — o
-    //   `received_at` sozinho dá frescor mas NÃO "live_verified".
-    const haveCaptureEvidence = capturedAt !== null && envelopeUsable && shaVerified !== false;
-    // item 5: um health test em estado "failed" DERRUBA o rótulo live.
-    //   "not_assessed"/"healthy"/"degraded" NÃO bloqueiam (live = proveniência,
-    //   não é validação de entropia).
-    const entropyOk = entropyHealth !== "failed";
-    if (o.servedFromUpstream && transportHealth === "healthy" && bufferHealth === "healthy"
-        && ageOk && entropyOk && shaVerified !== false
-        && (haveCaptureEvidence || (allowNoEvidence && envelopeUsable))) {
+    if (liveCriteriaMet && entropyOk && bufferHealth === "healthy" && shaVerified !== false) {
       actualOrigin = "live";
-      liveVerified = haveCaptureEvidence;           // só "verificado" com captured_at FÍSICO
-    } else if (!o.servedFromUpstream && o.upstreamReachable && transportHealth === "healthy"
-               && ageOk && entropyOk && allowNoEvidence) {
-      // resposta de STATUS (/health) numa instância live saudável — só conta
-      // como "live" quando explicitamente permitido sem evidência de captura.
-      actualOrigin = "live";
-      liveVerified = false;
+      liveVerified = liveVerifiedCriteriaMet;
+    } else if ((o.servedFromUpstream || o.upstreamReachable) && transportHealth === "healthy"
+               && ageOk && entropyOk && o.emitLiveUnverified === true) {
+      // o contrato aceita explicitamente "live_unverified": stream em tempo real
+      // do caminho FPGA, sem verificação de captura física. NÃO por env var.
+      actualOrigin = "live_unverified";
     } else {
-      // sem evidência suficiente (ex.: server_api.py não carimba captured_at)
+      // sem evidência suficiente -> unknown + delivery_mode="streaming" comunica
+      // "estamos recebendo um stream ao vivo" sem afirmar captura verificada.
       actualOrigin = "unknown";
     }
   }
+  void allowNoEvidence;   // DEPRECATED (item 8): a flag NÃO produz "live".
 
   // regras duras finais (redundantes de propósito)
   if (fallbackUsed) { actualOrigin = "fallback"; liveVerified = false; }
-  if (NON_LIVE_MODES.includes(mode) && actualOrigin === "live") actualOrigin = mode;
+  if (NON_LIVE_MODES.includes(mode) && (actualOrigin === "live" || actualOrigin === "live_unverified")) actualOrigin = mode;
   if (actualOrigin !== "live") liveVerified = false;
 
   return {
     configured_source: o.configuredSource || "unknown",
     instance_mode: mode,
     actual_origin: actualOrigin,
+    // item 8 — modelo formal
+    delivery_mode: deliveryMode,               // streaming | replay | fallback | none
+    transport_origin: transportOrigin,         // fpga_tcp | replay | fixture | historical | fallback | none
+    physical_capture_verified: physicalCaptureVerified,
+    live_criteria: c,                          // 8.1 (10 itens)
+    live_verified_criteria: v,                 // 8.2
+    source_session_id: sourceSessionId,
+    connection_generation: Number.isFinite(connectionGeneration) ? connectionGeneration : null,
+    unknown_gap_before: unknownGapBefore,
     // item 5 — saúde em três eixos ortogonais
     transport_health: transportHealth,
     buffer_health: bufferHealth,

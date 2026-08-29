@@ -1,6 +1,8 @@
 "use strict";
-// Item 3: contrato de proveniência POR RESPOSTA. Testa a função pura
-// lib/provenance.resolveProvenance nos 9 cenários exigidos.
+// Contrato de proveniência POR RESPOSTA — lib/provenance.resolveProvenance.
+// Itens 3/4/5/8/9: modelo formal (delivery_mode | transport_origin |
+// actual_origin | physical_capture_verified | live_verified), 3 eixos de saúde,
+// envelope v1, e os critérios 8.1/8.2 para live / live_verified.
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
 const { resolveProvenance } = require("../lib/provenance");
@@ -17,337 +19,230 @@ const base = {
   now: NOW,
 };
 
-test("1. live saudável: actual_origin=live, live_verified=true (com captured_at)", () => {
-  const p = resolveProvenance({
-    ...base,
-    servedFromUpstream: true,
-    upstreamHeaders: { "x-qrng-captured-at": fresh, "x-qrng-capture-id": "cap_1", "x-qrng-source-status": "online" },
-  });
+// TODOS os sinais 8.1 presentes no envelope do upstream:
+const fullLiveHeaders = {
+  "x-qrng-provenance-version": "1",
+  "x-qrng-source-instance": "dobslit-qrng-ufpe-fpga",
+  "x-qrng-source-session-id": "sess_abc123",
+  "x-qrng-connection-generation": "7",
+  "x-qrng-sequence": "4096",
+  "x-qrng-block-sha256": "a".repeat(64),
+  "x-qrng-capture-id": "cap_4096_deadbeefcafe",
+  "x-qrng-received-at": fresh,
+  "x-qrng-source-status": "online",
+  "x-qrng-unknown-gap-before": "false",
+};
+// opções do caller que completam 8.1 (sessão atual) e 8.2 (identidade/anti-replay):
+const callerLiveOpts = {
+  servedFromUpstream: true,
+  captureSha256Verified: true,
+  currentSessionId: "sess_abc123",
+  producerIdentityVerified: true,
+  antiReplayVerified: true,
+};
+
+// ── 8.1 — actual_origin=live só com os 10 critérios ──────────────────────────
+test("8.1: envelope COMPLETO + sha verificado + sessão atual + identidade -> actual_origin=live", () => {
+  const p = resolveProvenance({ ...base, ...callerLiveOpts, upstreamHeaders: fullLiveHeaders });
+  assert.equal(p.actual_origin, "live");
+  assert.equal(p.delivery_mode, "streaming");
+  assert.equal(p.transport_origin, "fpga_tcp");
+  assert.equal(Object.values(p.live_criteria).every(Boolean), true, "todos os 10 critérios 8.1");
+  assert.equal(p.source_session_id, "sess_abc123");
+  assert.equal(p.connection_generation, 7);
+});
+
+test("8.1: falta source_session_id -> NÃO é live (unknown + delivery_mode=streaming)", () => {
+  const h = { ...fullLiveHeaders }; delete h["x-qrng-source-session-id"];
+  const p = resolveProvenance({ ...base, ...callerLiveOpts, currentSessionId: null, upstreamHeaders: h });
+  assert.equal(p.actual_origin, "unknown");
+  assert.equal(p.delivery_mode, "streaming");
+  assert.equal(p.transport_origin, "fpga_tcp");
+  assert.equal(p.live_criteria.source_session_id, false);
+});
+
+test("8.1: sha do bloco NÃO verificado (null) -> NÃO é live (critério 4 falha)", () => {
+  const p = resolveProvenance({ ...base, ...callerLiveOpts, captureSha256Verified: null, upstreamHeaders: fullLiveHeaders });
+  assert.equal(p.actual_origin, "unknown");
+  assert.equal(p.live_criteria.block_hash_origin_and_consumer, false);
+});
+
+test("8.1: sha DIVERGIU -> NÃO é live, buffer discontinuous", () => {
+  const p = resolveProvenance({ ...base, ...callerLiveOpts, captureSha256Verified: false, upstreamHeaders: fullLiveHeaders });
+  assert.notEqual(p.actual_origin, "live");
+  assert.equal(p.buffer_health, "discontinuous");
+});
+
+test("8.1: unknown gap DENTRO do bloco -> NÃO é live (critério 7 falha)", () => {
+  const h = { ...fullLiveHeaders, "x-qrng-unknown-gap-before": "true" };
+  const p = resolveProvenance({ ...base, ...callerLiveOpts, upstreamHeaders: h });
+  assert.equal(p.actual_origin, "unknown");
+  assert.equal(p.live_criteria.no_unknown_discontinuity_in_block, false);
+  assert.equal(p.unknown_gap_before, true);
+});
+
+test("8.1: resposta de sessão ANTIGA (session_id != currentSessionId) -> NÃO é live", () => {
+  const p = resolveProvenance({ ...base, ...callerLiveOpts, currentSessionId: "sess_NEW", upstreamHeaders: fullLiveHeaders });
+  assert.equal(p.actual_origin, "unknown");
+  assert.equal(p.live_criteria.response_in_current_session, false);
+});
+
+test("8.1: amostra STALE (fora da janela de frescor) -> NÃO é live", () => {
+  const h = { ...fullLiveHeaders, "x-qrng-received-at": old };
+  const p = resolveProvenance({ ...base, ...callerLiveOpts, upstreamHeaders: h });
+  assert.equal(p.actual_origin, "unknown");
+  assert.equal(p.live_criteria.documented_freshness_policy, false);
+  assert.ok(p.sample_age_ms > 300000);
+});
+
+// ── 8.2 — live_verified=true exige critérios adicionais ──────────────────────
+test("8.2: com carimbo FÍSICO (captured_at) + identidade + anti-replay -> live_verified=true", () => {
+  const h = { ...fullLiveHeaders, "x-qrng-captured-at": fresh };
+  const p = resolveProvenance({ ...base, ...callerLiveOpts, upstreamHeaders: h });
   assert.equal(p.actual_origin, "live");
   assert.equal(p.live_verified, true);
-  assert.equal(p.source_health, "healthy");
-  assert.equal(p.buffer_health, "healthy");
-  assert.equal(p.fallback_used, false);
-  assert.equal(p.capture_id, "cap_1");
+  assert.equal(p.physical_capture_verified, true);
+  assert.equal(Object.values(p.live_verified_criteria).every(Boolean), true);
 });
 
-test("2. fonte offline (poller failed, sem bytes): actual_origin=unknown, nunca live", () => {
-  const p = resolveProvenance({
-    ...base,
-    pollerSourceHealth: "failed",
-    servedFromUpstream: false,
-  });
-  assert.equal(p.actual_origin, "unknown");
+test("8.2: SEM carimbo físico (só received_at) -> live mas live_verified=FALSE", () => {
+  const p = resolveProvenance({ ...base, ...callerLiveOpts, upstreamHeaders: fullLiveHeaders });
+  assert.equal(p.actual_origin, "live");
+  assert.equal(p.live_verified, false, "received_at dá frescor, não prova captura física");
+  assert.equal(p.physical_capture_verified, false);
+  assert.equal(p.live_verified_criteria.physical_capture_timestamp, false);
+});
+
+test("8.2: sem anti-replay verificado -> live mas NÃO live_verified", () => {
+  const h = { ...fullLiveHeaders, "x-qrng-captured-at": fresh };
+  const p = resolveProvenance({ ...base, ...callerLiveOpts, antiReplayVerified: false, upstreamHeaders: h });
+  assert.equal(p.actual_origin, "live");
   assert.equal(p.live_verified, false);
-  assert.equal(p.source_health, "failed");
+  assert.equal(p.live_verified_criteria.anti_replay_mechanism, false);
 });
 
-test("3. buffer ainda contém dados antigos: source failed mas serviu bytes -> estado explícito, não live", () => {
+test("8: live_verified NUNCA por variável de ambiente — a flag legada é inerte", () => {
+  // upstream saudável servindo bytes, SEM os sinais 8.1, com a flag legada ligada
   const p = resolveProvenance({
-    ...base,
-    pollerSourceHealth: "failed",
-    servedFromUpstream: true,
-    upstreamHeaders: { "x-qrng-source-status": "offline", "x-qrng-captured-at": fresh },
-  });
-  assert.equal(p.actual_origin, "unknown");
-  assert.equal(p.source_health, "failed");
-  assert.equal(p.buffer_health, "healthy"); // ainda serviu, mas...
-  assert.equal(p.live_verified, false);
-});
-
-test("4. buffer esgotado (insufficient entropy): buffer_health=degraded, actual_origin=unknown", () => {
-  const p = resolveProvenance({
-    ...base,
-    servedFromUpstream: false,
-    insufficientEntropy: true,
+    ...base, servedFromUpstream: true, allowLiveWithoutCaptureEvidence: true,
     upstreamHeaders: { "x-qrng-source-status": "online" },
   });
+  assert.equal(p.actual_origin, "unknown");        // a flag NÃO produz live
+  assert.equal(p.live_verified, false);
+  assert.equal(p.delivery_mode, "streaming");
+});
+
+test("8: live_unverified só quando o contrato opta explicitamente (emitLiveUnverified)", () => {
+  const p = resolveProvenance({
+    ...base, servedFromUpstream: true, emitLiveUnverified: true,
+    upstreamHeaders: { "x-qrng-source-status": "online", "x-qrng-received-at": fresh },
+  });
+  assert.equal(p.actual_origin, "live_unverified");
+  assert.equal(p.live_verified, false);
+  assert.equal(p.delivery_mode, "streaming");
+  assert.equal(p.transport_origin, "fpga_tcp");
+});
+
+// ── cenários base preservados ────────────────────────────────────────────────
+test("fonte offline (poller failed, sem bytes): actual_origin=unknown, delivery_mode=none", () => {
+  const p = resolveProvenance({ ...base, pollerSourceHealth: "failed", servedFromUpstream: false });
+  assert.equal(p.actual_origin, "unknown");
+  assert.equal(p.delivery_mode, "none");
+  assert.equal(p.transport_origin, "none");
+  assert.equal(p.source_health, "failed");
+});
+
+test("buffer esgotado (insufficient entropy): buffer_health=degraded, actual_origin=unknown", () => {
+  const p = resolveProvenance({ ...base, servedFromUpstream: false, insufficientEntropy: true,
+    upstreamHeaders: { "x-qrng-source-status": "online" } });
   assert.equal(p.buffer_health, "degraded");
   assert.equal(p.actual_origin, "unknown");
 });
 
-test("5. fallback: fallback_used=true -> actual_origin=fallback, live_verified=false", () => {
-  const p = resolveProvenance({ ...base, servedFromUpstream: true, fallbackUsed: true,
-    upstreamHeaders: { "x-qrng-captured-at": fresh } });
+test("fallback: fallback_used=true -> actual_origin=fallback, delivery_mode=fallback, live_verified=false", () => {
+  const p = resolveProvenance({ ...base, ...callerLiveOpts, fallbackUsed: true, upstreamHeaders: fullLiveHeaders });
   assert.equal(p.actual_origin, "fallback");
-  assert.equal(p.fallback_used, true);
+  assert.equal(p.delivery_mode, "fallback");
   assert.equal(p.live_verified, false);
 });
 
-test("6. replay: instância replay nunca reporta live, mesmo com upstream saudável", () => {
-  const p = resolveProvenance({
-    ...base,
-    instanceMode: "replay",
-    servedFromUpstream: true,
-    upstreamHeaders: { "x-qrng-captured-at": fresh, "x-qrng-source-status": "online" },
-  });
+test("replay: instância replay NUNCA reporta live, mesmo com envelope completo", () => {
+  const p = resolveProvenance({ ...base, ...callerLiveOpts, instanceMode: "replay", upstreamHeaders: fullLiveHeaders });
   assert.equal(p.actual_origin, "replay");
+  assert.equal(p.delivery_mode, "replay");
+  assert.equal(p.transport_origin, "replay");
   assert.equal(p.live_verified, false);
 });
 
-test("7. origem desconhecida: modo live, upstream não alcançado, sem fallback", () => {
-  const p = resolveProvenance({ ...base, pollerSourceHealth: "unknown", servedFromUpstream: false });
-  assert.equal(p.actual_origin, "unknown");
-});
-
-test("8. conflito config x origem efetiva: instância 'live' mas amostra velha -> não live", () => {
-  const p = resolveProvenance({
-    ...base,
-    servedFromUpstream: true,
-    upstreamHeaders: { "x-qrng-captured-at": old, "x-qrng-source-status": "online" },
-  });
-  assert.equal(p.actual_origin, "unknown", "amostra de 6h não pode ser 'live' com maxAge 5min");
-  assert.ok(p.sample_age_ms > 300000);
-});
-
-test("9. proibição de live quando fallback_used=true (mesmo com todas as evidências live)", () => {
-  const p = resolveProvenance({
-    ...base,
-    servedFromUpstream: true,
-    fallbackUsed: true,
-    upstreamHeaders: { "x-qrng-captured-at": fresh, "x-qrng-capture-id": "cap_9", "x-qrng-source-status": "online" },
-  });
+test("historical + fallback -> fallback, nunca live", () => {
+  const p = resolveProvenance({ ...base, ...callerLiveOpts, instanceMode: "historical", fallbackUsed: true, upstreamHeaders: fullLiveHeaders });
   assert.equal(p.actual_origin, "fallback");
-  assert.notEqual(p.actual_origin, "live");
-  assert.equal(p.live_verified, false);
 });
 
-test("item 4: DEFAULT — 'live' EXIGE captured_at. Sem evidência -> actual_origin=unknown", () => {
-  // upstream saudável servindo bytes, mas SEM X-QRNG-Captured-At (é o caso do
-  // server_api.py de produção hoje).
-  const p = resolveProvenance({
-    ...base,
-    servedFromUpstream: true,
-    upstreamHeaders: { "x-qrng-source-status": "online", "x-qrng-capture-id": "cap_x" },
-  });
-  assert.equal(p.actual_origin, "unknown", "sem captured_at não há evidência suficiente p/ 'live'");
-  assert.equal(p.live_verified, false);
-  assert.equal(p.source_health, "healthy");
-  assert.equal(p.buffer_health, "healthy");
-});
-
-test("item 4: com LIVE_ALLOW_WITHOUT_CAPTURE_EVIDENCE -> upstream saudável basta p/ 'live' (live_verified=false)", () => {
-  const p = resolveProvenance({
-    ...base,
-    servedFromUpstream: true,
-    allowLiveWithoutCaptureEvidence: true,
-    upstreamHeaders: { "x-qrng-source-status": "online" },
-  });
-  assert.equal(p.actual_origin, "live");
-  assert.equal(p.live_verified, false);           // sem captured_at -> não verificado
-});
-
-test("item 4: /health de instância live saudável (sem bytes) -> unknown por default; 'live' só com allow", () => {
-  const strict = resolveProvenance({ ...base, servedFromUpstream: false, upstreamReachable: true,
-    upstreamHeaders: { "x-qrng-source-status": "online" } });
-  assert.equal(strict.actual_origin, "unknown");
-  const lax = resolveProvenance({ ...base, servedFromUpstream: false, upstreamReachable: true,
-    allowLiveWithoutCaptureEvidence: true, upstreamHeaders: { "x-qrng-source-status": "online" } });
-  assert.equal(lax.actual_origin, "live");
-  assert.equal(lax.live_verified, false);
-});
-
-test("item 4: served_at NUNCA é usado como captured_at", () => {
+test("served_at NUNCA é usado como captured_at; sem carimbo -> sample_age via received_at", () => {
   const p = resolveProvenance({ ...base, servedFromUpstream: true,
-    upstreamHeaders: { "x-qrng-source-status": "online" } });  // sem captured_at
+    upstreamHeaders: { "x-qrng-source-status": "online", "x-qrng-received-at": fresh } });
   assert.equal(p.captured_at, null);
-  assert.ok(p.served_at, "served_at é preenchido");
+  assert.ok(p.served_at);
   assert.notEqual(p.served_at, p.captured_at);
-  assert.equal(p.sample_age_ms, null, "sem captured_at não há idade de amostra");
+  assert.ok(p.sample_age_ms >= 0 && p.sample_age_ms < 5000);
 });
 
-test("bônus: buffer discontinuous propagado do header do upstream", () => {
-  const p = resolveProvenance({
-    ...base,
-    servedFromUpstream: true,
-    upstreamHeaders: { "x-qrng-buffer-discontinuous": "true", "x-qrng-captured-at": fresh, "x-qrng-source-status": "online" },
-  });
-  assert.equal(p.buffer_health, "discontinuous");
-  assert.equal(p.actual_origin, "unknown", "buffer descontínuo não é 'live'");
+test("header e JSON concordam: actual_origin ∈ conjunto conhecido", () => {
+  const p = resolveProvenance({ ...base, ...callerLiveOpts, upstreamHeaders: fullLiveHeaders });
+  assert.ok(["live", "live_unverified", "fallback", "replay", "fixture", "historical", "unknown"].includes(p.actual_origin));
 });
 
-test("header e JSON concordam: actual_origin é a única fonte de verdade", () => {
-  const p = resolveProvenance({ ...base, servedFromUpstream: true,
-    upstreamHeaders: { "x-qrng-captured-at": fresh, "x-qrng-source-status": "online" } });
-  // o server usa p.actual_origin tanto no header X-QRNG-Provenance quanto no
-  // campo JSON provenance -> não há divergência possível.
-  assert.equal(typeof p.actual_origin, "string");
-  assert.ok(["live", "fallback", "replay", "fixture", "historical", "unknown"].includes(p.actual_origin));
-});
-
-// ── item 9 — envelope de proveniência versionado + SHA-256 de bloco ──────────
-const env1 = {
-  "x-qrng-provenance-version": "1",
-  "x-qrng-source-instance": "dobslit-qrng-ufpe-fpga",
-  "x-qrng-captured-at": fresh,
-  "x-qrng-capture-id": "cap_4096_deadbeefcafe",
-  "x-qrng-sequence": "4096",
-  "x-qrng-block-sha256": "a".repeat(64),
-  "x-qrng-source-status": "online",
-};
-
-test("item 9: envelope v1 + captured_at fresco + sha verificado -> live/live_verified + campos expostos", () => {
-  const p = resolveProvenance({
-    ...base, servedFromUpstream: true, upstreamHeaders: env1, captureSha256Verified: true,
-  });
-  assert.equal(p.actual_origin, "live");
-  assert.equal(p.live_verified, true);
-  assert.equal(p.provenance_version, "1");
-  assert.equal(p.envelope_usable, true);
-  assert.equal(p.source_instance, "dobslit-qrng-ufpe-fpga");
-  assert.equal(p.sequence, 4096);
-  assert.equal(p.capture_sha256, "a".repeat(64));
-  assert.equal(p.capture_sha256_verified, true);
-});
-
-test("item 9 regra 6: X-QRNG-Block-SHA256 DIVERGIU (server.js) -> nunca live, buffer discontinuous", () => {
-  const p = resolveProvenance({
-    ...base, servedFromUpstream: true, upstreamHeaders: env1, captureSha256Verified: false,
-  });
-  assert.notEqual(p.actual_origin, "live");
-  assert.equal(p.actual_origin, "unknown");
-  assert.equal(p.live_verified, false);
-  assert.equal(p.buffer_health, "discontinuous");
-  assert.equal(p.capture_sha256_verified, false);
-});
-
-test("item 9 regra 7: envelope de versão DESCONHECIDA -> evidência ignorada, degrada p/ unknown", () => {
-  const p = resolveProvenance({
-    ...base, servedFromUpstream: true, captureSha256Verified: true,
-    upstreamHeaders: { ...env1, "x-qrng-provenance-version": "9" },
-  });
+// ── item 9 — envelope versionado + SHA-256 de bloco ─────────────────────────
+test("item 9 regra 7: envelope de versão DESCONHECIDA -> evidência ignorada -> unknown", () => {
+  const p = resolveProvenance({ ...base, ...callerLiveOpts,
+    upstreamHeaders: { ...fullLiveHeaders, "x-qrng-provenance-version": "9" } });
   assert.equal(p.envelope_usable, false);
   assert.equal(p.actual_origin, "unknown");
-  assert.equal(p.live_verified, false);
-});
-
-test("item 9: envelope v1 mas instância REPLAY -> actual_origin=replay, NUNCA live (modo é teto)", () => {
-  const p = resolveProvenance({
-    instanceMode: "replay", configuredSource: "fpga", pollerSourceHealth: "healthy",
-    maxSampleAgeMs: 300000, now: NOW,
-    servedFromUpstream: true, captureSha256Verified: true, upstreamHeaders: env1,
-  });
-  assert.equal(p.actual_origin, "replay");
-  assert.equal(p.live_verified, false);
-});
-
-test("item 9: envelope v1 mas instância HISTORICAL + fallback -> fallback, nunca live", () => {
-  const p = resolveProvenance({
-    instanceMode: "historical", configuredSource: "fpga", pollerSourceHealth: "healthy",
-    now: NOW, servedFromUpstream: true, fallbackUsed: true,
-    captureSha256Verified: true, upstreamHeaders: env1,
-  });
-  assert.equal(p.actual_origin, "fallback");
-  assert.equal(p.live_verified, false);
-});
-
-test("item 9: envelope v1 + captured_at STALE -> unknown (idade derruba live mesmo com sha ok)", () => {
-  const p = resolveProvenance({
-    ...base, servedFromUpstream: true, captureSha256Verified: true,
-    upstreamHeaders: { ...env1, "x-qrng-captured-at": old },
-  });
-  assert.equal(p.actual_origin, "unknown");
-  assert.equal(p.live_verified, false);
-  assert.ok(p.sample_age_ms > 300000);
-});
-
-test("item 9: sem checagem de sha (null) + captured_at fresco -> live_verified=true, capture_sha256_verified=null", () => {
-  const p = resolveProvenance({ ...base, servedFromUpstream: true, upstreamHeaders: env1 });
-  assert.equal(p.actual_origin, "live");
-  assert.equal(p.live_verified, true);
-  assert.equal(p.capture_sha256_verified, null);
+  assert.equal(p.live_criteria.producer_identity_and_version, false);
 });
 
 test("item 9: ausência de envelope (server_api.py de produção hoje) -> provenance_version=null, unknown", () => {
   const p = resolveProvenance({ ...base, servedFromUpstream: true, upstreamHeaders: {} });
   assert.equal(p.provenance_version, null);
-  assert.equal(p.envelope_usable, true); // null = legado tolerado, mas sem captured_at...
-  assert.equal(p.actual_origin, "unknown"); // ...continua unknown por falta de captured_at
-});
-
-// ── item 4 — X-QRNG-Received-At (frescor do broker) vs X-QRNG-Captured-At (físico)
-test("item 4: Received-At fresco + allow -> live mas live_verified=false (não é carimbo físico)", () => {
-  const p = resolveProvenance({
-    ...base, servedFromUpstream: true, allowLiveWithoutCaptureEvidence: true,
-    upstreamHeaders: { "x-qrng-provenance-version": "1", "x-qrng-received-at": fresh, "x-qrng-source-status": "online" },
-  });
-  assert.equal(p.actual_origin, "live");
-  assert.equal(p.live_verified, false, "received_at NÃO é live_verified");
-  assert.equal(p.received_at, fresh);
-  assert.equal(p.captured_at, null);
-  assert.ok(p.sample_age_ms >= 0 && p.sample_age_ms < 5000);
-});
-
-test("item 4: Received-At STALE -> unknown por idade (mesmo com allow)", () => {
-  const p = resolveProvenance({
-    ...base, servedFromUpstream: true, allowLiveWithoutCaptureEvidence: true,
-    upstreamHeaders: { "x-qrng-provenance-version": "1", "x-qrng-received-at": old, "x-qrng-source-status": "online" },
-  });
   assert.equal(p.actual_origin, "unknown");
-  assert.ok(p.sample_age_ms > 300000);
+  assert.equal(p.delivery_mode, "streaming");
 });
 
-test("item 4: captured_at (físico) prevalece sobre received_at para live_verified", () => {
-  const p = resolveProvenance({
-    ...base, servedFromUpstream: true,
-    upstreamHeaders: {
-      "x-qrng-provenance-version": "1",
-      "x-qrng-received-at": old,          // broker recebeu há 6h...
-      "x-qrng-captured-at": fresh,        // ...mas a FPGA carimbou agora (hipotético)
-      "x-qrng-source-status": "online",
-    },
-  });
-  assert.equal(p.actual_origin, "live");
-  assert.equal(p.live_verified, true, "captured_at presente -> verificado");
-  assert.ok(p.sample_age_ms < 5000, "idade vem do captured_at, não do received_at");
-});
-
-// ── item 5 — saúde em três eixos ortogonais
-test("item 5: entropy_health = not_assessed por padrão (RCT/APT não rodam)", () => {
-  const p = resolveProvenance({ ...base, servedFromUpstream: true,
-    upstreamHeaders: { "x-qrng-captured-at": fresh, "x-qrng-source-status": "online" } });
+// ── item 5 — três eixos de saúde ortogonais ─────────────────────────────────
+test("item 5: entropy_health = not_assessed por padrão; NÃO bloqueia live", () => {
+  const p = resolveProvenance({ ...base, ...callerLiveOpts, upstreamHeaders: fullLiveHeaders });
   assert.equal(p.entropy_health, "not_assessed");
   assert.equal(p.transport_health, "healthy");
   assert.equal(p.buffer_health, "healthy");
-  assert.equal(p.source_health, p.transport_health, "source_health = alias de transport_health");
-  assert.equal(p.actual_origin, "live", "not_assessed NÃO bloqueia live (live = proveniência)");
+  assert.equal(p.source_health, p.transport_health);
+  assert.equal(p.actual_origin, "live", "not_assessed NÃO bloqueia (live = proveniência)");
 });
 
 test("item 5: transporte OK + buffer OK NUNCA implicam entropy_health healthy", () => {
-  const p = resolveProvenance({ ...base, servedFromUpstream: true,
-    upstreamHeaders: { "x-qrng-captured-at": fresh, "x-qrng-source-status": "online" } });
+  const p = resolveProvenance({ ...base, ...callerLiveOpts, upstreamHeaders: fullLiveHeaders });
   assert.notEqual(p.entropy_health, "healthy");
 });
 
 test("item 5: X-QRNG-Entropy-Health=failed DERRUBA live", () => {
-  const p = resolveProvenance({ ...base, servedFromUpstream: true,
-    upstreamHeaders: {
-      "x-qrng-provenance-version": "1", "x-qrng-captured-at": fresh,
-      "x-qrng-source-status": "online", "x-qrng-entropy-health": "failed",
-    } });
+  const p = resolveProvenance({ ...base, ...callerLiveOpts,
+    upstreamHeaders: { ...fullLiveHeaders, "x-qrng-entropy-health": "failed" } });
   assert.equal(p.entropy_health, "failed");
   assert.notEqual(p.actual_origin, "live");
-  assert.equal(p.actual_origin, "unknown");
 });
 
-test("item 5: X-QRNG-Entropy-Health=degraded NÃO derruba live (só failed derruba)", () => {
-  const p = resolveProvenance({ ...base, servedFromUpstream: true,
-    upstreamHeaders: {
-      "x-qrng-provenance-version": "1", "x-qrng-captured-at": fresh,
-      "x-qrng-source-status": "online", "x-qrng-entropy-health": "degraded",
-    } });
+test("item 5: X-QRNG-Entropy-Health=degraded NÃO derruba live", () => {
+  const p = resolveProvenance({ ...base, ...callerLiveOpts,
+    upstreamHeaders: { ...fullLiveHeaders, "x-qrng-entropy-health": "degraded" } });
   assert.equal(p.entropy_health, "degraded");
   assert.equal(p.actual_origin, "live");
 });
 
-test("item 5: os três eixos são independentes — transporte degraded, buffer discontinuous, entropy failed", () => {
+test("item 5: eixos independentes — transporte degraded + buffer discontinuous + entropy failed", () => {
   const p = resolveProvenance({ ...base, servedFromUpstream: true,
     upstreamHeaders: {
-      "x-qrng-source-status": "degraded",
-      "x-qrng-buffer-discontinuous": "true",
-      "x-qrng-entropy-health": "failed",
-      "x-qrng-discontinuities": "3",
-      "x-qrng-captured-at": fresh,
+      "x-qrng-source-status": "degraded", "x-qrng-buffer-discontinuous": "true",
+      "x-qrng-entropy-health": "failed", "x-qrng-discontinuities": "3", "x-qrng-received-at": fresh,
     } });
   assert.equal(p.transport_health, "degraded");
   assert.equal(p.buffer_health, "discontinuous");
@@ -356,9 +251,9 @@ test("item 5: os três eixos são independentes — transporte degraded, buffer 
   assert.notEqual(p.actual_origin, "live");
 });
 
-test("item 5: X-QRNG-Discontinuities > 0 -> buffer_health discontinuous", () => {
-  const p = resolveProvenance({ ...base, servedFromUpstream: true,
-    upstreamHeaders: { "x-qrng-captured-at": fresh, "x-qrng-source-status": "online", "x-qrng-discontinuities": "1" } });
+test("item 5: X-QRNG-Discontinuities > 0 -> buffer_health discontinuous -> não live", () => {
+  const p = resolveProvenance({ ...base, ...callerLiveOpts,
+    upstreamHeaders: { ...fullLiveHeaders, "x-qrng-discontinuities": "1" } });
   assert.equal(p.buffer_health, "discontinuous");
   assert.notEqual(p.actual_origin, "live");
 });
