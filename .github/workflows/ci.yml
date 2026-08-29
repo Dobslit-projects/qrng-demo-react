@@ -114,6 +114,10 @@ jobs:
         working-directory: physical-layer
         run: python3 -m unittest -v test_transport_align
 
+      - name: Integridade de palavra ponta a ponta (itens 3/5/6/7 - valores uint32 exatos)
+        working-directory: physical-layer
+        run: python3 -m unittest -v test_word_integrity
+
       - name: Harness da restart campaign (item 9 - so piloto fixture, nunca mil)
         working-directory: physical-layer/restart-campaign
         run: python3 -m unittest -v test_harness
