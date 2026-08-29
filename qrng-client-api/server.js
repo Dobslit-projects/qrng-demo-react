@@ -124,17 +124,25 @@ function resolveProvenance(o) {
   });
 }
 
-/** Escreve a proveniência nos headers de uma resposta binária (raw). */
+/** Escreve a proveniência nos headers da resposta (raw e JSON). */
 function setProvenanceHeaders(res, prov) {
   res.setHeader("X-QRNG-Provenance", prov.actual_origin);
   res.setHeader("X-QRNG-Live-Verified", String(prov.live_verified));
   res.setHeader("X-QRNG-Fallback-Used", String(prov.fallback_used));
-  res.setHeader("X-QRNG-Source-Health", prov.source_health);
+  // item 5 — saúde em três eixos ortogonais
+  res.setHeader("X-QRNG-Transport-Health", prov.transport_health || prov.source_health);
   res.setHeader("X-QRNG-Buffer-Health", prov.buffer_health);
+  res.setHeader("X-QRNG-Entropy-Health", prov.entropy_health || "not_assessed");
+  res.setHeader("X-QRNG-Source-Health", prov.source_health); // DEPRECATED: = transport
   res.setHeader("X-QRNG-Served-At", prov.served_at);
+  // item 4 — frescor
+  if (prov.received_at) res.setHeader("X-QRNG-Received-At", prov.received_at);
   if (prov.captured_at) res.setHeader("X-QRNG-Captured-At", prov.captured_at);
   if (prov.capture_id)  res.setHeader("X-QRNG-Capture-Id", prov.capture_id);
   if (prov.sample_age_ms !== null) res.setHeader("X-QRNG-Sample-Age-Ms", String(prov.sample_age_ms));
+  if (prov.discontinuities !== null && prov.discontinuities !== undefined) {
+    res.setHeader("X-QRNG-Discontinuities", String(prov.discontinuities));
+  }
 }
 
 /** Objeto plano de headers do upstream em minúsculas (node-fetch Headers). */

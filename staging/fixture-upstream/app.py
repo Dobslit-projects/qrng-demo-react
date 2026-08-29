@@ -50,7 +50,9 @@ _POOL = bytes(_rng.getrandbits(8) for _ in range(POOL_BYTES))
 
 # mode: online | degraded | stale | exhausted | offline
 _state = {"mode": "online", "cursor": 0, "total_pushed": 0, "total_popped": 0,
-          "last_push": time.time(), "exhaust_remaining": 0}
+          "last_push": time.time(), "exhaust_remaining": 0,
+          "entropy_health": "not_assessed", "discontinuities": 0,
+          "physical_capture_stamp": False}
 _lock = threading.Lock()
 
 
@@ -72,49 +74,61 @@ def _take(n: int) -> bytes:
 
 
 def _capture_headers(block: bytes = b"") -> dict:
-    """Envelope de proveniencia v1 por resposta (itens 3 + 9). 'stale' devolve
-    captured_at antigo para o client-api derrubar o rotulo 'live' por idade.
+    """Envelope de proveniencia v1 por resposta (itens 3 + 9 + 4 + 5).
 
-    O corpo `block` e passado para computar X-QRNG-Block-SHA256 (verificacao de
-    integridade fim-a-fim) e o capture_id. Sem `block`, os headves de bloco
-    ficam vazios (ex.: /v1/uint32, cujo corpo e JSON de inteiros)."""
+    Item 4: X-QRNG-Received-At = instante em que o broker RECEBEU os bytes
+      (frescor verificavel). X-QRNG-Captured-At = carimbo FISICO da FPGA — o
+      fixture NAO tem esse carimbo, entao NAO emite (fica ausente/null). 'stale'
+      devolve Received-At antigo para o client-api derrubar 'live' por idade.
+    Item 5: X-QRNG-Entropy-Health = not_assessed (RCT/APT nao rodam). Separado
+      de transporte (Source-Status) e de buffer (Discontinuities).
+
+    O corpo `block` e passado para X-QRNG-Block-SHA256 e o capture_id."""
     mode = _state["mode"]
     if mode == "stale":
-        captured = datetime.now(timezone.utc) - timedelta(hours=6)
+        received = datetime.now(timezone.utc) - timedelta(hours=6)
         status = "online"
     elif mode == "degraded":
-        captured = datetime.now(timezone.utc)
+        received = datetime.now(timezone.utc)
         status = "degraded"
     elif mode == "offline":
-        captured = datetime.now(timezone.utc)
+        received = datetime.now(timezone.utc)
         status = "offline"
     else:  # online | exhausted
-        captured = datetime.now(timezone.utc)
+        received = datetime.now(timezone.utc)
         status = "online"
 
     with _lock:
         seq = _state["total_popped"] - len(block)   # offset ANTES deste pop
         cursor = _state["cursor"]
+        discont = _state.get("discontinuities", 0)
     sha = hashlib.sha256(block).hexdigest() if block else ""
     cap_id = f"cap_{seq}_{sha[:12]}" if block else f"cap_{cursor}"
 
     hdrs = {
         "X-QRNG-Provenance-Version": PROVENANCE_ENVELOPE_VERSION,
         "X-QRNG-Source-Instance": SOURCE_INSTANCE,
-        "X-QRNG-Source-Status": status,
-        "X-QRNG-Captured-At": captured.isoformat(),
+        "X-QRNG-Source-Status": status,                 # eixo TRANSPORTE
+        "X-QRNG-Received-At": received.isoformat(),      # item 4 (frescor do broker)
+        "X-QRNG-Entropy-Health": _state.get("entropy_health", "not_assessed"),  # item 5
         "X-QRNG-Capture-Id": cap_id,
         "X-QRNG-Transport-Format": STREAM_FORMAT,
-        "X-QRNG-Buffer-Discontinuous": "false",   # fixture nunca faz drop-oldest
+        "X-QRNG-Buffer-Discontinuous": "true" if discont else "false",  # eixo BUFFER
+        "X-QRNG-Discontinuities": str(discont),
     }
+    # X-QRNG-Captured-At: só se o fixture for instruido a simular um carimbo físico
+    if _state.get("physical_capture_stamp"):
+        hdrs["X-QRNG-Captured-At"] = received.isoformat()
     if block:
         hdrs["X-QRNG-Sequence"] = str(seq)
         hdrs["X-QRNG-Block-SHA256"] = sha
         hdrs["X-QRNG-Byte-Count"] = str(len(block))
-        rec = {"capture_id": cap_id, "captured_at": captured.isoformat(),
-               "sequence": seq, "byte_count": len(block), "sha256": sha,
-               "source_status": status, "source_instance": SOURCE_INSTANCE,
-               "transport_format": STREAM_FORMAT}
+        rec = {"capture_id": cap_id, "received_at": received.isoformat(),
+               "captured_at": None, "sequence": seq, "byte_count": len(block),
+               "sha256": sha, "source_status": status,
+               "entropy_health": _state.get("entropy_health", "not_assessed"),
+               "discontinuities": _state.get("discontinuities", 0),
+               "source_instance": SOURCE_INSTANCE, "transport_format": STREAM_FORMAT}
         with _lock:
             _capture_registry[cap_id] = rec
             while len(_capture_registry) > _CAP_REG_MAX:
@@ -143,6 +157,9 @@ def ctl_offline():
 def ctl_online():
     _state["mode"] = "online"
     _state["exhaust_remaining"] = 0
+    _state["entropy_health"] = "not_assessed"
+    _state["discontinuities"] = 0
+    _state["physical_capture_stamp"] = False
     return {"mode": "online"}
 
 
@@ -160,10 +177,42 @@ def ctl_mode(mode: str = Query(...), remaining: int = Query(0, ge=0),
             "hang_seconds": _state.get("hang_seconds")}
 
 
+@app.post("/_ctl/entropy_health")
+def ctl_entropy_health(state: str = Query(...)):
+    """Item 5: força o eixo ENTROPIA (RCT/APT). not_assessed | healthy | degraded | failed."""
+    if state not in ("not_assessed", "healthy", "degraded", "failed"):
+        return JSONResponse(status_code=400, content={"error": "bad entropy state"})
+    _state["entropy_health"] = state
+    return {"entropy_health": state}
+
+
+@app.post("/_ctl/discontinuity")
+def ctl_discontinuity(count: int = Query(None, ge=0), inc: int = Query(0, ge=0)):
+    """Item 3/6: simula descontinuidades no ring buffer (drop-oldest / realign).
+    `count` seta o total; `inc` incrementa. Reflete em X-QRNG-Discontinuities e
+    X-QRNG-Buffer-Discontinuous."""
+    with _lock:
+        if count is not None:
+            _state["discontinuities"] = count
+        _state["discontinuities"] = _state.get("discontinuities", 0) + inc
+    return {"discontinuities": _state["discontinuities"]}
+
+
+@app.post("/_ctl/physical_stamp")
+def ctl_physical_stamp(on: int = Query(0)):
+    """Item 4: liga/desliga a simulação de um carimbo FÍSICO da FPGA
+    (X-QRNG-Captured-At). Por padrão OFF — o fixture não tem esse carimbo."""
+    _state["physical_capture_stamp"] = bool(on)
+    return {"physical_capture_stamp": bool(on)}
+
+
 @app.post("/_ctl/reset")
 def ctl_reset():
     with _lock:
         _state["cursor"] = 0
+        _state["discontinuities"] = 0
+        _state["entropy_health"] = "not_assessed"
+        _state["physical_capture_stamp"] = False
     return {"cursor": 0}
 
 

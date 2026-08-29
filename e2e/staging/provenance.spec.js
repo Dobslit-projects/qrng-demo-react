@@ -83,13 +83,57 @@ test.describe.serial("proveniência por resposta", () => {
     expect(b.provenance_detail.actual_origin).not.toBe("live");
   });
 
-  test("amostra antiga (stale): sample_age_ms grande, captured_at presente, não vira live", async ({ request }) => {
+  test("amostra antiga (stale): sample_age_ms grande via received_at, não vira live", async ({ request }) => {
     await mode(request, "stale");
     const b = await (await request.get(`/qrng/api/random?bytes=32&format=hex`)).json();
     const d = b.provenance_detail;
-    expect(d.captured_at).toBeTruthy();
+    expect(d.received_at).toBeTruthy();                 // item 4: frescor pelo Received-At
+    expect(d.captured_at).toBeNull();                   // carimbo físico: ausente (não há)
     expect(d.sample_age_ms).toBeGreaterThan(3600 * 1000);
     expect(d.actual_origin).not.toBe("live");
+  });
+
+  // ── item 4/5 — Received-At, saúde em três eixos ─────────────────────────────
+  test("item 4: Received-At presente e recente; captured_at null (fixture não carimba físico)", async ({ request }) => {
+    const r = await request.get(`/qrng/api/random?bytes=16&format=raw`);
+    const h = r.headers();
+    expect(h["x-qrng-received-at"]).toMatch(/^\d{4}-\d\d-\d\dT/);
+    expect(h["x-qrng-captured-at"]).toBeFalsy();        // não emitido
+    const b = await (await request.get(`/qrng/api/random?bytes=16&format=hex`)).json();
+    expect(b.provenance_detail.received_at).toBeTruthy();
+    expect(b.provenance_detail.captured_at).toBeNull();
+  });
+
+  test("item 5: entropy_health = not_assessed por padrão; três eixos separados nos headers", async ({ request }) => {
+    const r = await request.get(`/qrng/api/random?bytes=16&format=raw`);
+    const h = r.headers();
+    expect(h["x-qrng-entropy-health"]).toBe("not_assessed");
+    expect(h["x-qrng-transport-health"]).toBeTruthy();
+    expect(h["x-qrng-buffer-health"]).toBeTruthy();
+    const d = (await (await request.get(`/qrng/api/random?bytes=16&format=hex`)).json()).provenance_detail;
+    expect(d.entropy_health).toBe("not_assessed");
+    expect(d.transport_health).toBeTruthy();
+    expect(d.source_health).toBe(d.transport_health);   // alias
+  });
+
+  test("item 5: X-QRNG-Entropy-Health=failed do upstream -> entropy_health=failed, nunca live", async ({ request }) => {
+    test.skip(!CTL, "FIXTURE_CTL_URL");
+    await request.post(`${CTL}/_ctl/entropy_health?state=failed`);
+    const d = (await (await request.get(`/qrng/api/random?bytes=16&format=hex`)).json()).provenance_detail;
+    expect(d.entropy_health).toBe("failed");
+    expect(d.actual_origin).not.toBe("live");
+    await request.post(`${CTL}/_ctl/entropy_health?state=not_assessed`);
+  });
+
+  test("item 3/5: descontinuidade do buffer -> buffer_health=discontinuous, X-QRNG-Discontinuities>0", async ({ request }) => {
+    test.skip(!CTL, "FIXTURE_CTL_URL");
+    await request.post(`${CTL}/_ctl/discontinuity?inc=2`);
+    const r = await request.get(`/qrng/api/random?bytes=16&format=raw`);
+    expect(Number(r.headers()["x-qrng-discontinuities"])).toBeGreaterThan(0);
+    const d = (await (await request.get(`/qrng/api/random?bytes=16&format=hex`)).json()).provenance_detail;
+    expect(d.buffer_health).toBe("discontinuous");
+    expect(d.actual_origin).not.toBe("live");
+    await request.post(`${CTL}/_ctl/discontinuity?count=0`);
   });
 
   test("OpenAPI reflete o contrato: ProvenanceDetail + RandomResponse.required", async ({ request }) => {

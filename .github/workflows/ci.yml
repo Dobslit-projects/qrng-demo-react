@@ -110,6 +110,10 @@ jobs:
         working-directory: physical-layer/instrumentation
         run: python3 -m unittest -v test_stream_tap
 
+      - name: Realinhamento de palavra + descontinuidade do transporte (itens 2/3/6)
+        working-directory: physical-layer
+        run: python3 -m unittest -v test_transport_align
+
       - name: Harness da restart campaign (item 9 - so piloto fixture, nunca mil)
         working-directory: physical-layer/restart-campaign
         run: python3 -m unittest -v test_harness

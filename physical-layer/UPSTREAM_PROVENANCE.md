@@ -34,21 +34,78 @@ byte-idêntico.
 
 ## Envelope v1 (headers)
 
-Emitido em `/random` (binário e hex), `/v1/raw`, `/v1/uint32`:
+Emitido em `/random` (binário e hex), `/v1/raw`, `/v1/uint32`, e replicado pelo
+`qrng-client-api` (`setProvenanceHeaders`, raw **e** JSON):
 
 | header | valor | significado / verificação |
 |---|---|---|
-| `X-QRNG-Provenance-Version` | `1` | versão do envelope; consumidor rejeita o que não entende |
+| `X-QRNG-Provenance-Version` | `1` | versão do envelope; consumidor de versão desconhecida trata como "sem evidência" |
 | `X-QRNG-Source-Instance` | `dobslit-qrng-ufpe-fpga` | qual fonte física (config); distingue instâncias |
-| `X-QRNG-Source-Status` | `online` \| `degraded` \| `offline` | `rb.source_status()` no instante do `pop` |
-| `X-QRNG-Captured-At` | ISO-8601 UTC | **`last_push_time`** — instante em que os bytes **mais recentes** entraram no ring buffer. **NÃO** é o instante da detecção do fóton; é a fronteira de frescor verificável sem tocar a FPGA. Documentado como tal. |
-| `X-QRNG-Capture-Id` | `cap_<popcount>_<sha12>` | ID estável do bloco servido: `total_popped` no pop + 12 hex do SHA-256 do bloco |
-| `X-QRNG-Sequence` | inteiro | `total_popped` **antes** deste pop = offset em bytes no fluxo já drenado do broker. Permite ao consumidor detectar buracos/reordenação entre chamadas. |
-| `X-QRNG-Block-SHA256` | 64 hex | SHA-256 do corpo **exato** servido. O consumidor re-hasheia o corpo e compara → prova de integridade fim-a-fim broker→cliente. |
+| `X-QRNG-Source-Status` | `online` \| `degraded` \| `offline` | **eixo TRANSPORTE** — `rb.source_status()` no instante do `pop` |
+| `X-QRNG-Entropy-Health` | `not_assessed` \| `healthy` \| `degraded` \| `failed` | **eixo ENTROPIA** (item 5) — RCT/APT. `not_assessed` por padrão (não rodam no caminho live). **NUNCA** inferido do transporte/buffer |
+| `X-QRNG-Received-At` | ISO-8601 UTC | **item 4** — `last_push_time`: instante em que os bytes mais recentes **entraram no broker**. **NÃO** é a detecção do fóton — é a fronteira de frescor verificável sem tocar a FPGA |
+| `X-QRNG-Captured-At` | ISO-8601 UTC **ou ausente** | carimbo de **captura física** da FPGA. **Hoje AUSENTE** — o `fifo.c` não produz timestamp (`FPGA_INSPECTION_RESULT.md`). Reservado; quando existir, é evidência mais forte que `Received-At` e habilita `live_verified=true` |
+| `X-QRNG-Capture-Id` | `cap_<seq>_<sha12>` | ID estável do bloco servido |
+| `X-QRNG-Sequence` | inteiro | **item 2/3** — `total_popped` **antes** deste pop = offset **monótono** em bytes no fluxo drenado do broker (sobrevive ao drop-oldest). Detecta buracos/reordenação entre chamadas |
+| `X-QRNG-Block-SHA256` | 64 hex | SHA-256 do corpo **exato** servido — o consumidor re-hasheia e compara (integridade fim-a-fim broker→cliente) |
 | `X-QRNG-Byte-Count` | inteiro | `len(body)` |
-| `X-QRNG-Transport-Format` | `uint32-le` | idem `X-QRNG-Format` já existente |
-| `X-QRNG-Buffer-Discontinuous` | `true` \| `false` | `true` se houve `drop-oldest` (o `total_pushed-total_popped-size` cresceu) desde o pop anterior → este bloco **não** é contíguo com o anterior |
+| `X-QRNG-Transport-Format` | `uint32-le` | idem `X-QRNG-Format` |
+| `X-QRNG-Buffer-Discontinuous` | `true` \| `false` | **eixo BUFFER** — `true` se `X-QRNG-Discontinuities > 0` |
+| `X-QRNG-Discontinuities` | inteiro | **item 3** — contagem acumulada de eventos `reconnect` + `realign` + `drop_oldest` do `WordAligner` |
+| `X-QRNG-Realign-Bytes` | inteiro | **item 2/3** — bytes descartados no total para re-encaixar o grid uint32 após reconexões |
 | `X-QRNG-Conditioned` | `false` | já existente |
+
+## Itens 2/3/6 — alinhamento de palavra + descontinuidade
+
+`physical-layer/transport_align.py` (`WordAligner`) + `test_transport_align.py`
+(11 testes, no CI). Contexto: `fifo.c` escreve 4 bytes/palavra; numa **reconexão
+do connector** os bytes em trânsito na rede se perdem — se a perda não for
+múltiplo de 4, o agrupamento uint32 a jusante fica **permanentemente
+desalinhado** (não há número de sequência da FPGA).
+
+O `WordAligner`:
+1. só entrega **palavras completas** (segura 0–3 bytes de cauda por conexão);
+2. quando o connector sinaliza reconexão num `forwarded_offset` com resto ≠ 0,
+   **descarta `(4 − resto) % 4` bytes** do próximo dado → re-encaixa o grid
+   (best-effort, custa 0–3 bytes — **não recupera** os bytes perdidos na rede);
+3. registra `Discontinuity{kind: reconnect|realign|drop_oldest, at_offset,
+   bytes_dropped, ts}` num anel — exposto nos headers, **nunca** no stream.
+
+Sinal do connector: **sideband JSONL** (`QRNG_CONNECTOR_EVENTS`, fora do stream)
+emitido por `physical-layer/qrng-connector.staging.py`:
+`{"event":"reconnect","forwarded_offset":N,"ts":...,"backoff_s":B}`. O
+`server_api.py` (patch) drena esse sideband no produtor e chama
+`aligner.note_reconnect(N)`.
+
+**Desconexões determinísticas testadas** (item 6): corte após N bytes com
+`N % 4 ∈ {0,1,2,3}`, perda de 0/2/4/6/8 bytes, reconexão → verifica: só
+palavras completas; realinhamento descarta o número certo de bytes; o grid
+volta a bater com a fonte lógica; cada evento vira `Discontinuity`; nada de
+metadata entra no stream. `entropy_health` permanece `not_assessed` em todos.
+
+## Item 5 — saúde em três eixos ortogonais
+
+`qrng-client-api/lib/provenance.js` `resolveProvenance` passa a retornar:
+
+| campo | fonte | valores |
+|---|---|---|
+| `transport_health` | `X-QRNG-Source-Status` + poller | `healthy` / `degraded` / `failed` / `unknown` |
+| `buffer_health` | `X-QRNG-Discontinuities`, insufficient, sha-mismatch | `healthy` / `discontinuous` / `degraded` / `unknown` |
+| `entropy_health` | `X-QRNG-Entropy-Health` (default `not_assessed`) | `not_assessed` / `healthy` / `degraded` / `failed` |
+| `source_health` | **DEPRECATED** — alias de `transport_health` | — |
+
+**Invariante:** `transport_health=healthy` + `buffer_health=healthy` **NÃO**
+implica `entropy_health`. Um `entropy_health=failed` **derruba** `actual_origin`
+de `live`; `not_assessed`/`degraded` **não** derrubam (`live` = proveniência,
+não é validação de entropia). `provenance.test.js`: 23 → 32 (9 casos itens 4/5).
+
+## Item 4 — Received-At (não "Captured-At")
+
+`X-QRNG-Captured-At` era semanticamente errado (era `last_push_time`, não a
+detecção física). Renomeado para **`X-QRNG-Received-At`**. `captured_at` fica
+`null` até a FPGA carimbar de fato (exige RTL — bloqueado). `sample_age_ms` =
+idade por `captured_at || received_at`. `live_verified=true` **só** com
+`captured_at` (carimbo físico) presente e fresco.
 
 ## Regra anti-má-classificação (invariante)
 
