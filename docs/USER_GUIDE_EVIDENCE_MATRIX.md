@@ -53,6 +53,8 @@ Cada afirmação técnica relevante do guia tem uma origem verificável abaixo.
 | 42 | Testes da API (`qrng-client-api`) | `node --test` | **não executável localmente** (`better-sqlite3` nativo não compilado p/ Node 22.17/Windows); CI Node 20 é a referência | erro `MODULE_NOT_FOUND`/binding | NÃO EXECUTADO localmente (registrado) |
 | 43 | Exemplo Python roda contra a produção (caminho público) | `docs/examples/kapua_api_example.py` | execução | `docs/_acceptance/python_example_run.txt` | CONFIRMADO |
 | 44 | Notebook Jupyter roda célula a célula (caminho público, sem token real) | `docs/examples/kapua_jupyter_example.ipynb` | células extraídas e executadas | `docs/_acceptance/notebook_cells_run.txt` | CONFIRMADO |
+| 45 | Figuras 1–25 = capturas do bundle de produção (`qrng-web:9e36a90`, `index-GEJGDRrN.js` idêntico ao servido) renderizado localmente sobre os endpoints QRNG reais da produção; sem token/senha/cookie; barra sempre em `origem efetiva: desconhecida` | `docs/_build/serve_local.mjs` + `docs/_build/screenshots.mjs` | execução Playwright 2026-08-29 | `docs/images/*.png` (25) + `docs/images/README.md` | CONFIRMADO |
+| 46 | Portal em `bongo.dobslit.com/qrng/` está atrás de gate de sessão do host (302 sem `bongo_session`) — por isso as figuras são render local do mesmo bundle, não do site hospedado | aceitação: `GET /qrng/` → 302 `?redirect=` | execução | `docs/images/README.md` | CONFIRMADO |
 
 ## Bugs / achados
 
@@ -64,6 +66,7 @@ Cada afirmação técnica relevante do guia tem uma origem verificável abaixo.
 | B4 | UX / clareza | Fallback `Math.random()` nas Visualizações Interativas fica só no rótulo "QRNG · Math.random() — …"; o título da coluna continua "QRNG" | `src/components/games/QuantumVisualizer.jsx:126-135,470` | desconectar a rede e abrir Visualizações Interativas | banner explícito de fallback (como o `FallbackBanner` global) | NÃO CORRIGIDO |
 | B5 | doc/observação | `bytesToDiscreteFloats` divide por **255** (não 256) → a Análise Estatística pode produzir `1.0` inclusive; o Histograma trata (clamp no último bin), Scatter/bits toleram | `src/lib/qrngHelper.js:277`; `qrngHelper.test.js:133` (comportamento **testado**, intencional) | — | nenhuma (documentar); se quiser `[0,1)` estrito, dividir por 256 | INTENCIONAL — documentado |
 | B6 | ambiente | Suíte de testes do `qrng-client-api` não roda localmente (`better-sqlite3` binding ausente para Node 22.17/Windows) | `qrng-client-api/test/` | `npm test` em `qrng-client-api/` | rodar em Node 20 / CI; ou `npm rebuild better-sqlite3` | ambiente local; CI é a referência |
+| B7 | observação/UX | Texto da UI (página inicial) mais forte que o escopo comprovado: "gerar entropia real", "distribuição uniforme comprovada", "aleatoriedade fundamentalmente imprevisível"; gráfico do dispositivo com a grafia antiga "KUAPOÃ" | `src/components/kapua/KapuaSection.jsx` | Figura 1 | alinhar textos da UI ao guia (seções 13–14) | NÃO CORRIGIDO (frontend, fora do escopo desta etapa) |
 
 Nenhum bug **funcional** que invalide o contrato de bytes, a interpretação `uint32-LE`, o Monte Carlo `[0,1)`, o cálculo de π, o rejection sampling ou a proveniência foi encontrado. Os achados são textuais/cosméticos/UX/ambiente.
 

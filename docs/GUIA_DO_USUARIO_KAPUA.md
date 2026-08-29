@@ -48,11 +48,15 @@ O **Kapuã** é a infraestrutura da Dobslit/UFPE para distribuir **bytes aleató
 
 Este guia cobre: o portal e suas páginas; o cadastro, a autenticação e o token; a API (endpoints, parâmetros, formatos, erros, proveniência, limites); um exemplo completo em Jupyter; o que cada visualização faz com os dados; a página de testes NIST; os estados de saúde; e as limitações conhecidas.
 
+**Sobre as figuras.** As capturas de tela deste guia foram feitas em **2026-08-29** a partir do **bundle de produção** (`qrng-web:9e36a90`, mesmo arquivo `assets/index-GEJGDRrN.js` servido em `https://bongo.dobslit.com`), renderizado localmente e consumindo os **endpoints QRNG reais da produção**. Nenhuma figura mostra token, senha, cookie ou cabeçalho de autenticação. Em todas, a barra superior exibe `origem efetiva: desconhecida` — a produção **não** classifica as respostas como *live* nesta fase (ver seções 22–23). Detalhes de proveniência das imagens em `docs/images/README.md`.
+
 Este guia **não** cobre: a construção do hardware/FPGA; a bitstream/RTL; a operação interna do broker; procedimentos administrativos. Segurança e auditoria de credenciais estão fora do escopo. **Nenhum token, senha, cookie ou chave** aparece neste guia, nos exemplos ou nas figuras.
 
 ---
 
 ## 5. Visão geral do portal
+
+![Figura 1 — Página inicial (aba "Kapuã"): apresentação da cadeia FPGA → captura → buffer → aplicações, com o widget "Gerar número aleatório" e o botão de download. Barra superior: `ONLINE`, `origem efetiva: desconhecida`, buffer/gerado/consumido.](images/01-home-kapua.png)
 
 O portal é uma aplicação de página única (React) servida por nginx em `https://bongo.dobslit.com`. A navegação principal tem estas seções:
 
@@ -69,6 +73,10 @@ O portal é uma aplicação de página única (React) servida por nginx em `http
 **Barra de Hardware** (topo, sempre visível): estado on-line/off-line, badge de **proveniência** (nunca mostra "live" sem evidência), e — quando disponível — bytes no buffer, gerados e consumidos.
 
 **Banner de fallback** (global): aparece em todas as telas quando a fonte **Pré-coletado** está selecionada, informando quantos bytes restam, que a proveniência não está registrada e que a geração de chave/seed está bloqueada nessa fonte.
+
+![Figura 2 — Aba "⚙ Configurações": escolha da fonte (Remota (SP) / FPGA (Hardware) / Pré-coletado), latência e informações de buffer.](images/02-config-fonte.png)
+
+![Figura 3 — Barra de Hardware (topo, sempre visível): `ONLINE`, fonte, `origem efetiva: desconhecida` (nunca "live" sem evidência), buffer, gerado, consumido, latência.](images/03-barra-hardware.png)
 
 ---
 
@@ -88,6 +96,8 @@ O JWT de sessão autentica **a interface** (gestão de token, playground, uso). 
 ## 7. Criação e gerenciamento de token
 
 O **token pessoal de API** é a credencial para consumir a API de fora do portal (curl, Python, Jupyter, serviços).
+
+![Figura 4 — Aba "Desenvolvedor": tela de login. Após entrar, a sub-aba "Token" permite gerar / regenerar / revogar o token pessoal e acompanhar a cota. O valor completo do token só é mostrado uma vez, na criação.](images/23-desenvolvedor-login.png)
 
 | Ação | Endpoint | Observação |
 |---|---|---|
@@ -117,6 +127,10 @@ O **token pessoal de API** é a credencial para consumir a API de fora do portal
 **Base:** `https://bongo.dobslit.com/qrng/v1`
 **Autenticação:** header `Authorization: Bearer <API_TOKEN>` (token pessoal). Alguns endpoints de consumo também aceitam o JWT de sessão; `/v1/me/*` aceita ambos.
 **Documentação interativa:** Swagger em `/qrng/v1/docs/`, ReDoc em `/qrng/v1/redoc`, OpenAPI JSON em `/qrng/v1/openapi.json`.
+
+![Figura 5 — Swagger UI da API pública em `https://bongo.dobslit.com/qrng/v1/docs/` (acesso aberto, sem sessão do portal).](images/24-swagger.png)
+
+![Figura 6 — ReDoc da mesma especificação em `https://bongo.dobslit.com/qrng/v1/redoc`.](images/25-redoc.png)
 
 ### 8.1 Endpoints
 
@@ -256,6 +270,8 @@ sem BOM · sem bytes extras · hex é [0-9a-f] com 2 chars/byte · uint8 em 0..2
 
 **Importante:** duas **chamadas independentes** à fonte retornam sequências **diferentes** (é o esperado). Nunca prove a equivalência dos formatos comparando quatro chamadas live — use **uma amostra capturada uma única vez** e reserialize/decodifique localmente.
 
+![Figura 7 — Aba "Dados", modo "Raw Binário": seleção de tamanho, "Gerar prévia" e "Baixar arquivo"; prévia dos primeiros 32 bytes em hexadecimal.](images/04-dados-raw.png)
+
 ---
 
 ## 11. Contrato binário e endianness
@@ -293,6 +309,14 @@ Isto equivale a `DataView.getUint32(i, true)` em JavaScript e a `struct.unpack("
 | **Downloads em massa** (`DataExport`) | `…/random?format=raw` | `.bin` | 1 KB – 50 MB |
 | **Kapuã → download 1 MiB** | `…/random?bytes=1048576&format=hex` | `.bin` (hex decodificado no cliente) | 1 MiB |
 
+![Figura 8 — Aba "Dados", modo "Hexadecimal": separador e formato de arquivo (`.txt`/`.json`) configuráveis.](images/05-dados-hex.png)
+
+![Figura 9 — Aba "Dados", modo "Decimal / uint8": cada byte como inteiro 0–255; saída `.csv`/`.txt`/`.json`.](images/06-dados-uint8.png)
+
+![Figura 10 — Aba "Dados", modo "Faixa Personalizada": inteiros em `[min, max]` com/sem repetição, por rejection sampling (sem viés de módulo) ou algoritmo de Floyd F2.](images/07-dados-faixa.png)
+
+![Figura 11 — Aba "Dados", modo "Monte Carlo": floats em `[0, 1)` via `uint32 ÷ 2³²`; consumo de 4 bytes por valor.](images/08-dados-montecarlo.png)
+
 Observações:
 - Os nomes de arquivo gerados pela aba **Dados** hoje usam o prefixo `kuapua_qrng_*` (grafia antiga). **Recomendação (não implantada):** padronizar para `kapua_qrng_*`. Ver seção 29.
 - O download da **Kapuã** usa `format=hex` e decodifica no navegador; os **bytes são idênticos** ao `format=raw`, apenas o transporte difere.
@@ -310,6 +334,10 @@ Todas as visualizações consomem **os mesmos bytes** da fonte selecionada e apl
 - Byte de valor `0` é entropia legítima e **nunca** é trocado por PRNG.
 
 As seções 14–21 detalham cada visualização.
+
+![Figura 12 — "Representações Visuais → Análise Estatística": Scatter, Histograma e Bits (colunas PRNG e QRNG lado a lado) + badges de testes estatísticos do navegador.](images/09-analise-scatter-hist-bits.png)
+
+![Figura 13 — "Análise Estatística → Fluxo em tempo real": partículas / onda / grade hexadecimal alimentadas pelo stream de bytes (`/qrng/api/stream`).](images/10-analise-stream.png)
 
 ---
 
@@ -382,6 +410,8 @@ Esses badges dão um **sinal rápido lado a lado**. **Não** produzem crédito d
 - **Consistência:** o desenho no canvas, o contador `inside / total` e o valor `π̂` vêm **do mesmo laço** — não há divergência entre a tela e o número.
 - **Nota de robustez:** se o buffer viesse curto, `u32[k]` seria `undefined` e o código usa `?? 0` (o ponto vira `(0,0)`, contado como "dentro"). Com `bytes = nPoints·8` isso não ocorre na prática.
 
+![Figura 14 — Aba "Aplicações → π Monte Carlo Quântico": quarto de círculo com pontos dentro (azul) / fora (vermelho), estimativa `π̂`, erro percentual e `inside/total`. Acima, o card "Seed Quântica para IA" com o aviso "GERAÇÃO OPERACIONAL DESABILITADA".](images/16-app-montecarlo-pi.png)
+
 ---
 
 ## 19. Distribuição exponencial
@@ -404,6 +434,8 @@ Esses badges dão um **sinal rápido lado a lado**. **Não** produzem crédito d
 - **LCG Cracker / MT19937 Clone:** demonstrações **didáticas** que recuperam os parâmetros de um LCG (ou clonam o estado de um Mersenne Twister após 624 saídas) — mostram a **previsibilidade do PRNG**, não uma propriedade do QRNG.
 - **Classificação:** todo uso de PRNG aqui é **intencional, para comparação**, e está identificado como tal. Nenhum é apresentado como QRNG.
 
+![Figura 15 — "Visualizações Interativas → Galáxia": PRNG (LCG, esquerda) com estrutura visível em grade vs QRNG (direita) com espiral suave. Rótulo "QRNG · Remota (SP)" e badges (PRNG reprova Chi²/Entropia; QRNG passa).](images/11-viz-galaxia.png)
+
 ---
 
 ## 21. Galaxy spiral, Mandala e Sonificação
@@ -417,6 +449,24 @@ Disponíveis nas **Visualizações Interativas**.
 | **Sonificação** | byte → nota musical (mapeamento de escala); evento `{type:"note", byte}` → `playNote(byte)` | o **ruído de percussão** do sintetizador usa `Math.random()` para gerar a amostra de áudio — isso **não** representa dados, é timbre |
 
 Nas três, `Math.random()` só é usado se o array de bytes estiver **vazio**; o valor `0` é preservado.
+
+![Figura 16 — "Visualizações Interativas → Mandala": padrão radial simétrico (PRNG vs QRNG).](images/12-viz-mandala.png)
+
+![Figura 17 — "Visualizações Interativas → LCG Cracker": demonstração didática que recupera os parâmetros de um gerador linear (opera sobre o PRNG, não sobre o QRNG).](images/13-viz-cracker.png)
+
+![Figura 18 — "Visualizações Interativas → MT19937 Clone": clonagem do estado do Mersenne Twister após 624 saídas (didático).](images/14-viz-mtclone.png)
+
+![Figura 19 — "Visualizações Interativas → Sonificação": mapeamento de bytes para notas; controles de volume e mudo por canal.](images/15-viz-sonificacao.png)
+
+**Outras aplicações da aba "Aplicações"** (todas consomem bytes QRNG e usam rejection sampling onde há inteiros):
+
+![Figura 20 — "Sorteio Auditável": vencedor + comprovante com timestamp, fonte, primeiros bytes e request-id.](images/17-app-sorteio.png)
+
+![Figura 21 — "Jogos e Educação": moeda (LSB de 1 byte) e dado (rejection sampling 1–6), com o byte/bit usado exibido.](images/18-app-jogos.png)
+
+![Figura 22 — "Random Walk Quântico": 2 bits por passo (00=cima, 01=baixo, 10=esquerda, 11=direita); início em verde, posição final em vermelho.](images/19-app-randomwalk.png)
+
+![Figura 23 — "Otimização Estocástica": busca do máximo de f(x) = sin(x) + cos(2x) em [0, 2π] por amostragem `uint32 ÷ 2³² · 2π`.](images/20-app-otimizacao.png)
 
 ---
 
@@ -465,6 +515,8 @@ Cada resposta traz uma **proveniência por resposta** (não uma etiqueta fixa da
 **Onde:** portal → **Teste NIST**. **API:** `https://bongo.dobslit.com/qrng/nist/`.
 
 A página executa a **suíte NIST SP 800-90B** (implementação de referência `sp800-90b-reference`) sobre uma amostra e mostra o resultado. **Não** é um monitor contínuo da fonte.
+
+![Figura 24 — Aba "Teste NIST": estado (motor `sp800-90b-reference`, `PRÓX. AUTOMÁTICO: desativado (sem captura live)`), banner "Captura live indisponível", último resultado, ações "Executar teste agora" / "Upload + teste" e histórico de jobs (IID Passou/Falhou, min-H não-IID, duração).](images/22-nist.png)
 
 **Como usar**
 - **Executar teste agora:** avalia o arquivo mais recente em `NIST_DATA_DIR` no servidor (≥ 1 MB). Escolha o tipo (`IID + não-IID`, `Apenas IID`, `Apenas não-IID`) e o formato (`auto`, `raw/.bin`, `uint32 texto`, `bits 0/1`).
@@ -545,6 +597,8 @@ Estas funcionalidades **não estão disponíveis** hoje (por decisão, enquanto 
 
 - **Geração criptográfica pela API:** `/v1/entropy`, `/v1/random/cryptographic`, `/v1/keys`, `/v1/seed`, `/v1/nonce` — **todas retornam 404** (verificado).
 - **Cards "Chave Quântica" e "Seed para IA"** (aba Aplicações): a geração está **desabilitada** (`blockedOperational = true`); o botão mostra "GERAÇÃO OPERACIONAL DESABILITADA — validação estatística da fonte (restart campaign, health tests SP 800-90B) ainda pendente".
+
+![Figura 25 — Aba "Aplicações": os cards "Gerar Chave Quântica" e "Seed Quântica para IA" com o botão inativo e o aviso "GERAÇÃO OPERACIONAL DESABILITADA".](images/21-app-chave-seed-desabilitada.png)
 - **Lote assíncrono:** `/v1/bulk-random-jobs*` — stub, responde 501.
 - **Captura live no NIST:** `live_capture_configured = false`; sem execuções periódicas.
 - **`live_verified = true`:** não ocorre enquanto a FPGA não carimbar `captured_at`.
@@ -564,6 +618,7 @@ Estas funcionalidades **não estão disponíveis** hoje (por decisão, enquanto 
 9. **Análise Estatística usa `byte/255`** → alcança `1.0`. É intencional e testado; não confundir com o Monte Carlo (`uint32/2³²`, `[0,1)`).
 10. **Rotas de proxy abertas.** `/qrng/api/` e `/qrng/api-fpga/` respondem sem token (achado de auditoria; fechar exige mudança de nginx autorizada).
 11. **Recomendações de texto/UX não implantadas:** nomes de download `kuapua_qrng_*` → `kapua_qrng_*`; `qrng_<n>.bin` → `kapua_qrng_<n>.bin`; badge "Funcional" nos cards desabilitados; banner de fallback mais visível nas Visualizações Interativas. Ver `docs/USER_GUIDE_EVIDENCE_MATRIX.md` (B1–B4).
+12. **Texto da própria interface mais forte que este guia.** A página inicial ainda usa frases como "gerar entropia real", "distribuição uniforme comprovada" e "aleatoriedade fundamentalmente imprevisível", e o gráfico do dispositivo traz a grafia antiga "KUAPOÃ". Este guia adota linguagem mais conservadora (seções 13–14 e 3). **Recomendação:** alinhar os textos da UI ao escopo de alegações comprovadas.
 
 ---
 

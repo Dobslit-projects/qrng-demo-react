@@ -96,6 +96,12 @@ def parse_blocks(text: str):
             blocks.append(("hr",))
             i += 1
             continue
+        # standalone image  ![caption](path)
+        mimg = re.match(r"^!\[(.*?)\]\((.+?)\)\s*$", s)
+        if mimg:
+            blocks.append(("img", mimg.group(1), mimg.group(2)))
+            i += 1
+            continue
         # heading
         m = re.match(r"(#{1,6})\s+(.*)", s)
         if m:
@@ -178,6 +184,12 @@ def to_html(blocks) -> str:
             out.append(f'<div class="{cls}">{"".join(parts)}</div>')
         elif k == "hr":
             out.append("<hr>")
+        elif k == "img":
+            cap, src = b[1], b[2]
+            out.append(
+                f'<figure><img src="{src}" alt="{html.escape(cap)}">'
+                f'<figcaption>{inline_html(cap)}</figcaption></figure>'
+            )
         elif k == "code":
             out.append(f"<pre><code>{html.escape(b[1])}</code></pre>")
         elif k == "quote":
@@ -210,6 +222,9 @@ tr:nth-child(even) td{background:#fafbfc}
 blockquote{border-left:4px solid #0c8ce9;background:#f0f8ff;margin:10px 0;padding:8px 14px;color:#333}
 hr{border:none;border-top:1px solid #ddd;margin:22px 0}
 .center{text-align:center;margin:18px 0}
+figure{margin:14px 0;page-break-inside:avoid}
+figure img{width:100%;border:1px solid #d0d7de;border-radius:6px;display:block}
+figcaption{font-size:10.5px;color:#555;margin-top:4px;font-style:italic}
 .cover{margin:32mm 0;page-break-after:always}
 .cover h1{font-size:40px;border:none;margin-bottom:4px}
 .cover h2{font-size:20px;border:none;color:#0c8ce9;margin-top:0}
@@ -227,8 +242,9 @@ pre{page-break-inside:avoid}
 # ---------- DOCX ----------
 def to_docx(blocks, path):
     from docx import Document
-    from docx.shared import Pt, RGBColor
+    from docx.shared import Pt, RGBColor, Cm
     from docx.enum.text import WD_ALIGN_PARAGRAPH
+    img_base = SRC.parent
 
     doc = Document()
     style = doc.styles["Normal"]
@@ -273,6 +289,16 @@ def to_docx(blocks, path):
                 doc.add_page_break()
         elif k == "hr":
             doc.add_paragraph("—" * 30).alignment = WD_ALIGN_PARAGRAPH.CENTER
+        elif k == "img":
+            cap, src = b[1], b[2]
+            ip = (img_base / src).resolve()
+            p = doc.add_paragraph(); p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            if ip.exists():
+                p.add_run().add_picture(str(ip), width=Cm(16.2))
+            else:
+                p.add_run(f"[imagem ausente: {src}]").italic = True
+            cp = doc.add_paragraph(); cp.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            r = cp.add_run(cap); r.italic = True; r.font.size = Pt(8)
         elif k == "code":
             p = doc.add_paragraph()
             r = p.add_run(b[1]); r.font.name = "Consolas"; r.font.size = Pt(8.5)
