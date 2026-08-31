@@ -244,6 +244,8 @@ print(body["request_id"], body["provenance"], body["provenance_detail"]["live_ve
 
 Há também um script equivalente: **`docs/examples/kapua_api_example.py`**.
 
+Para uma **bateria de análises estatísticas e de uso** sobre bytes reais (χ², monobit, runs, DFT, autocorrelação, KS, compressão, bitmap; e usos: uniforme `u=x/2³²`, Monte Carlo π, dado justo, passeio 2D, colisões de aniversário, semente/KDF), veja **`docs/examples/kapua_qrng_analises.ipynb`** — já vem executado, com gráficos e a tabela‑resumo. Ele também lê `KAPUA_API_TOKEN` do ambiente. Observação honesta: nessa fonte o teste **monobit** costuma acusar um viés de 1º momento pequeno porém mensurável (proporção de 1s ≈ 0,499) — coerente com a caracterização em andamento (seção 29).
+
 ---
 
 ## 10. Formatos Raw, Hex, Base64 e uint8
@@ -689,7 +691,8 @@ Aba **Dados → Raw Binário** ou **downloads em massa** (`format=raw`). Pela AP
 | OpenAPI JSON | `https://bongo.dobslit.com/qrng/v1/openapi.json` |
 | Serviço NIST | `https://bongo.dobslit.com/qrng/nist/` (health: `…/qrng/nist/health`) |
 | Exemplo Python | `docs/examples/kapua_api_example.py` (neste repositório) |
-| Notebook Jupyter | `docs/examples/kapua_jupyter_example.ipynb` |
+| Notebook Jupyter (introdução) | `docs/examples/kapua_jupyter_example.ipynb` |
+| Notebook de análises (χ², monobit, DFT, π, dado, passeio…) | `docs/examples/kapua_qrng_analises.ipynb` |
 | Fluxo de dados das visualizações | `docs/VISUALIZATION_DATA_FLOW.md` |
 | Matriz de evidências | `docs/USER_GUIDE_EVIDENCE_MATRIX.md` |
 | Resultados da aceitação | `docs/_acceptance/ACCEPTANCE_RESULTS.md` |
