@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback, useContext } from "react";
 import { theme, formatBytes } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
+import { useLanguage } from "../../contexts/LanguageContext";
 import { connectQRNGStream, getApiPrefix } from "../../qrngApi";
 import Btn from "../ui/Btn";
 
@@ -9,11 +10,12 @@ const mono = "'IBM Plex Mono', monospace";
 const VIZ_MODES = [
   { id: "waveform", label: "Waveform" },
   { id: "matrix", label: "Matrix" },
-  { id: "particles", label: "Partículas" },
+  { id: "particles", labelKey: "spParticles" },
 ];
 
 export default function StreamPanel() {
   const { isOnline, streamError, setStreamError, qrngSource } = useContext(AppContext);
+  const { t } = useLanguage();
   const [streaming, setStreaming] = useState(false);
   const [stalled, setStalled] = useState(false);
   const [vizMode, setVizMode] = useState("waveform");
@@ -86,7 +88,7 @@ export default function StreamPanel() {
         setStreaming(false);
         setStalled(false);
         if (statsIntervalRef.current) clearInterval(statsIntervalRef.current);
-        setStreamError(err?.message || "Erro desconhecido");
+        setStreamError(err?.message || t("spUnknownError"));
       },
       () => { setStreaming(false); setStalled(false); },
       (isStalled) => setStalled(isStalled),
@@ -102,7 +104,7 @@ export default function StreamPanel() {
         rate: elapsed > 0 ? Math.round(totalBytesRef.current / elapsed) : 0,
       });
     }, 500);
-  }, [isOnline, streamError, setStreamError, qrngSource]);
+  }, [isOnline, streamError, setStreamError, qrngSource, t]);
 
   const stopStream = useCallback(() => {
     if (abortRef.current) abortRef.current();
@@ -265,7 +267,7 @@ export default function StreamPanel() {
           disabled={!canStream}
           small
         >
-          {streaming ? "Parar" : "Iniciar Stream"}
+          {streaming ? t("spStop") : t("spStart")}
         </Btn>
 
         {/* Viz mode pills */}
@@ -284,7 +286,7 @@ export default function StreamPanel() {
                 cursor: "pointer", transition: "all 0.15s",
               }}
             >
-              {m.label}
+              {m.labelKey ? t(m.labelKey) : m.label}
             </button>
           ))}
         </div>
@@ -312,10 +314,10 @@ export default function StreamPanel() {
             fontSize: 10, color: theme.textMuted, fontFamily: mono, marginLeft: "auto",
           }}>
             {canStream
-              ? "Pronto para visualizar bytes quanticos em tempo real"
+              ? t("spReadyRealtime")
               : qrngSource === "pre-collected"
-                ? "Stream indisponivel com dados pre-coletados"
-                : "Backend offline — stream indisponivel"
+                ? t("spUnavailablePrecollected")
+                : t("spBackendOfflineStream")
             }
           </span>
         )}
@@ -333,7 +335,7 @@ export default function StreamPanel() {
             width: 6, height: 6, borderRadius: "50%", background: theme.warning,
             display: "inline-block", animation: "pulse 1.5s infinite",
           }} />
-          Aguardando dados do hardware QRNG...
+          {t("spWaitingHardware")}
         </div>
       )}
       {streamError && !streaming && (
@@ -343,9 +345,9 @@ export default function StreamPanel() {
           borderBottom: `1px solid ${theme.danger}20`,
           display: "flex", alignItems: "center", gap: 10,
         }}>
-          <span>Desconectado: {streamError}</span>
+          <span>{t("spDisconnected")}: {streamError}</span>
           <Btn onClick={() => { setStreamError(null); startStream(); }} color={theme.danger} small>
-            Reconectar
+            {t("spReconnect")}
           </Btn>
         </div>
       )}
@@ -379,10 +381,10 @@ export default function StreamPanel() {
                   já exclui essa fonte, ver linha ~48) -- usar canStream aqui
                   também, não só no texto de status acima. */}
               {canStream
-                ? "Clique em \"Iniciar Stream\" para visualizar"
+                ? t("spClickToStart")
                 : qrngSource === "pre-collected"
-                  ? "Sem stream no modo pre-coletado"
-                  : "Backend offline"
+                  ? t("spNoStreamPrecollected")
+                  : t("spBackendOffline")
               }
             </span>
           </div>

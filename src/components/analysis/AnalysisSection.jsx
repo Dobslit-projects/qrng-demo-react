@@ -3,6 +3,7 @@ import { theme } from "../../theme";
 import { generatePRNGSequence } from "../../prng";
 import { generateQrngSequence, errorMessage } from "../../lib/qrngHelper";
 import { AppContext } from "../../contexts/AppContext";
+import { useLanguage, SOURCE_KEY_MAP } from "../../contexts/LanguageContext";
 import Btn from "../ui/Btn";
 import ScatterCanvas from "./ScatterCanvas";
 import Histogram from "./Histogram";
@@ -13,6 +14,7 @@ const mono = "'IBM Plex Mono', monospace";
 
 export default function AnalysisSection() {
   const { qrngSource, setLatency } = useContext(AppContext);
+  const { t } = useLanguage();
 
   const [inputSeed, setInputSeed] = useState("42");
   const [seed, setSeed] = useState(42);
@@ -52,12 +54,7 @@ export default function AnalysisSection() {
 
   useEffect(() => { generate(); }, []);
 
-  const qrngLabelMap = {
-    remote: "QRNG \u00B7 Remota (SP)",
-    fpga: "QRNG \u00B7 FPGA",
-    "pre-collected": "QRNG \u00B7 Pr\u00e9-coletado",
-  };
-  const qrngLabel = qrngLabelMap[qrngSource] || "QRNG";
+  const qrngLabel = SOURCE_KEY_MAP[qrngSource] ? `QRNG \u00B7 ${t(SOURCE_KEY_MAP[qrngSource])}` : "QRNG";
 
   const prngBytes = useMemo(
     () => new Uint8Array(prngSeq.map((v) => Math.floor(v * 255))),
@@ -92,7 +89,7 @@ export default function AnalysisSection() {
             }}
           />
           <label style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono, letterSpacing: "0.06em", textTransform: "uppercase" }}>
-            Amostras
+            {t("asSamples")}
           </label>
           <select
             value={count}
@@ -110,7 +107,7 @@ export default function AnalysisSection() {
             <option value={10000}>10.000</option>
           </select>
           <Btn onClick={generate} color={theme.quantum} disabled={busy}>
-            {busy ? "Gerando..." : "Gerar"}
+            {busy ? t("asGenerating") : t("asGenerate")}
           </Btn>
         </div>
 
@@ -170,7 +167,7 @@ export default function AnalysisSection() {
                 textTransform: "uppercase", letterSpacing: "0.06em",
                 color: theme.textMuted, marginBottom: 6,
               }}>
-                Distribuição
+                {t("asDistribution")}
               </div>
               <div style={{ height: 100 }}>
                 <Histogram values={prngSeq} color={theme.classical} />
@@ -193,7 +190,7 @@ export default function AnalysisSection() {
                 textTransform: "uppercase", letterSpacing: "0.06em",
                 color: theme.textMuted, marginBottom: 6,
               }}>
-                Bits (64 amostras)
+                {t("asBits64")}
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
                 {prngBits.map((b, i) => (
@@ -253,7 +250,7 @@ export default function AnalysisSection() {
                 textTransform: "uppercase", letterSpacing: "0.06em",
                 color: theme.textMuted, marginBottom: 6,
               }}>
-                Distribuição
+                {t("asDistribution")}
               </div>
               <div style={{ height: 100 }}>
                 <Histogram values={qrngSeq} color={theme.quantum} />
@@ -276,7 +273,7 @@ export default function AnalysisSection() {
                 textTransform: "uppercase", letterSpacing: "0.06em",
                 color: theme.textMuted, marginBottom: 6,
               }}>
-                Bits (64 amostras)
+                {t("asBits64")}
               </div>
               <div style={{ display: "flex", flexWrap: "wrap", gap: 2 }}>
                 {qrngBits.map((b, i) => (
