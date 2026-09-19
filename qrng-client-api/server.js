@@ -1487,10 +1487,18 @@ app.get("/v1/raw", ...randomChain, (req, res) => { res.locals.forceRawFormat = t
 // (admin/auth/tokens/me/upstream-status continuam inacessíveis a quem entra
 // por esse caminho, porque o proxy nunca encaminha para elas).
 
+// Limites do endpoint público elevados (2026-09-19): 20 req/min e 10 MiB/dia
+// eram baixos demais para o uso real do site -- a aba Representações
+// Visuais sozinha reabastece 8192 bytes a cada poucos segundos enquanto
+// aberta, e qualquer sessão de alguns minutos já estourava ambas as cotas
+// mesmo sem uso abusivo. Segue mais generoso que antes mas ainda abaixo do
+// limite autenticado (RATE_LIMIT_PER_IP_MIN=120/min, DAILY_QUOTA=10000
+// req · 100 MiB), preservando a proteção contra abuso que este endpoint
+// dedicado foi criado para substituir (ver comentário acima).
 const PUBLIC_MAX_BYTES_PER_REQUEST   = parseInt(process.env.PUBLIC_MAX_BYTES_PER_REQUEST        || "65536", 10);            // 64 KiB
-const PUBLIC_RATE_LIMIT_PER_IP_MIN   = parseInt(process.env.PUBLIC_RATE_LIMIT_PER_IP_PER_MINUTE  || "20", 10);
-const PUBLIC_DAILY_QUOTA_REQUESTS_IP = parseInt(process.env.PUBLIC_DAILY_QUOTA_REQUESTS_PER_IP   || "500", 10);
-const PUBLIC_DAILY_QUOTA_BYTES_IP    = parseInt(process.env.PUBLIC_DAILY_QUOTA_BYTES_PER_IP      || String(10 * 1024 * 1024), 10); // 10 MiB
+const PUBLIC_RATE_LIMIT_PER_IP_MIN   = parseInt(process.env.PUBLIC_RATE_LIMIT_PER_IP_PER_MINUTE  || "120", 10);
+const PUBLIC_DAILY_QUOTA_REQUESTS_IP = parseInt(process.env.PUBLIC_DAILY_QUOTA_REQUESTS_PER_IP   || "5000", 10);
+const PUBLIC_DAILY_QUOTA_BYTES_IP    = parseInt(process.env.PUBLIC_DAILY_QUOTA_BYTES_PER_IP      || String(50 * 1024 * 1024), 10); // 50 MiB
 
 const publicIpRateLimiter = rateLimit({
   windowMs: 60 * 1000,
