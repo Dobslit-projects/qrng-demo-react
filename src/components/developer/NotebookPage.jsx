@@ -1,5 +1,6 @@
 import { useState, useCallback } from "react";
 import { theme } from "../../theme";
+import { useLanguage } from "../../contexts/LanguageContext";
 import { CLIENT_API } from "../../qrngApi";
 
 const mono = "'IBM Plex Mono', monospace";
@@ -11,40 +12,40 @@ const ENDPOINTS = [
     id: "random",
     method: "GET",
     path: "/random",
-    label: "GET /v1/random — Bytes aleatórios",
+    labelKey: "nbEpRandom",
     params: [
       { key: "bytes",  type: "number", default: 32,    label: "Bytes", min: 1, max: 1048576 },
-      { key: "format", type: "select", default: "hex", label: "Formato", options: ["hex", "base64", "uint8"] },
+      { key: "format", type: "select", default: "hex", labelKey: "nbParamFormat", options: ["hex", "base64", "uint8"] },
     ],
   },
   {
     id: "health",
     method: "GET",
     path: "/health",
-    label: "GET /v1/health — Status do QRNG",
+    labelKey: "nbEpHealth",
     params: [],
   },
   {
     id: "me_token",
     method: "GET",
     path: "/me/token",
-    label: "GET /v1/me/token — Informações do token",
+    labelKey: "nbEpMeToken",
     params: [],
   },
   {
     id: "me_usage",
     method: "GET",
     path: "/me/usage",
-    label: "GET /v1/me/usage — Estatísticas de uso",
+    labelKey: "nbEpMeUsage",
     params: [],
   },
   {
     id: "me_requests",
     method: "GET",
     path: "/me/requests",
-    label: "GET /v1/me/requests — Histórico de chamadas",
+    labelKey: "nbEpMeRequests",
     params: [
-      { key: "limit", type: "number", default: 10, label: "Limite", min: 1, max: 100 },
+      { key: "limit", type: "number", default: 10, labelKey: "nbParamLimit", min: 1, max: 100 },
     ],
   },
 ];
@@ -60,6 +61,7 @@ function makeCell(endpointId = "random") {
 // ── Célula individual ────────────────────────────────────────────────────────
 
 function Cell({ cell, onChange, onRun, onRemove, canRemove }) {
+  const { t } = useLanguage();
   const ep = ENDPOINTS.find((e) => e.id === cell.endpointId);
   const [copied, setCopied] = useState(false);
 
@@ -89,10 +91,10 @@ function Cell({ cell, onChange, onRun, onRemove, canRemove }) {
     : theme.textMuted;
 
   const statusLabel =
-    cell.status === "running" ? "Executando..."
+    cell.status === "running" ? t("nbRunning")
     : cell.status === "ok"    ? `200 OK · ${cell.ms}ms`
-    : cell.status === "error" ? `Erro · ${cell.ms}ms`
-    : "Não executado";
+    : cell.status === "error" ? `${t("nbErrorMs")} · ${cell.ms}ms`
+    : t("nbNotExecuted");
 
   return (
     <div
@@ -134,14 +136,14 @@ function Cell({ cell, onChange, onRun, onRemove, canRemove }) {
           }}
         >
           {ENDPOINTS.map((e) => (
-            <option key={e.id} value={e.id}>{e.label}</option>
+            <option key={e.id} value={e.id}>{t(e.labelKey)}</option>
           ))}
         </select>
 
         {/* Parâmetros */}
         {ep.params.map((p) => (
           <div key={p.key} style={{ display: "flex", alignItems: "center", gap: 5 }}>
-            <span style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>{p.label}:</span>
+            <span style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>{p.labelKey ? t(p.labelKey) : p.label}:</span>
             {p.type === "select" ? (
               <select
                 value={cell.params[p.key] ?? p.default}
@@ -188,7 +190,7 @@ function Cell({ cell, onChange, onRun, onRemove, canRemove }) {
           </span>
           <button
             onClick={handleCopy}
-            title="Copiar como curl"
+            title={t("nbCopyAsCurl")}
             style={{
               padding: "4px 10px",
               borderRadius: 6,
@@ -217,12 +219,12 @@ function Cell({ cell, onChange, onRun, onRemove, canRemove }) {
               cursor: cell.status === "running" ? "default" : "pointer",
             }}
           >
-            {cell.status === "running" ? "..." : "▶ Run"}
+            {cell.status === "running" ? "..." : t("nbRunBtn")}
           </button>
           {canRemove && (
             <button
               onClick={() => onRemove(cell.id)}
-              title="Remover célula"
+              title={t("nbRemoveCellTitle")}
               style={{
                 padding: "4px 8px",
                 borderRadius: 6,
@@ -290,7 +292,7 @@ function Cell({ cell, onChange, onRun, onRemove, canRemove }) {
             textAlign: "center",
           }}
         >
-          Pressione ▶ Run para executar
+          {t("nbPressRunToExecute")}
         </div>
       )}
     </div>
@@ -300,6 +302,7 @@ function Cell({ cell, onChange, onRun, onRemove, canRemove }) {
 // ── NotebookPage ─────────────────────────────────────────────────────────────
 
 export default function NotebookPage() {
+  const { t } = useLanguage();
   const [cells, setCells] = useState([
     { id: 1, endpointId: "random", params: { bytes: 32, format: "hex" }, response: null, status: "idle", ms: null, executedAt: null },
   ]);
@@ -403,11 +406,11 @@ export default function NotebookPage() {
         }}
       >
         <span style={{ fontSize: 11, color: theme.textMuted, fontFamily: mono, whiteSpace: "nowrap" }}>
-          Token:
+          {t("nbTokenLabel")}
         </span>
         <input
           type="password"
-          placeholder="dobslit_qrng_live_... (ou deixe em branco para usar o do localStorage)"
+          placeholder={t("nbTokenPlaceholder")}
           value={tokenInput}
           onChange={(e) => setTokenInput(e.target.value)}
           style={{
@@ -436,7 +439,7 @@ export default function NotebookPage() {
             whiteSpace: "nowrap",
           }}
         >
-          {hasToken ? "● Token pronto" : "⚠ Sem token"}
+          {hasToken ? t("nbTokenReady") : t("nbNoToken")}
         </span>
       </div>
 
@@ -456,7 +459,7 @@ export default function NotebookPage() {
             cursor: "pointer",
           }}
         >
-          + Nova Célula
+          {t("nbNewCellBtn")}
         </button>
         <button
           onClick={runAll}
@@ -473,7 +476,7 @@ export default function NotebookPage() {
             cursor: runningAll ? "default" : "pointer",
           }}
         >
-          {runningAll ? "Executando..." : "▶▶ Executar Todas"}
+          {runningAll ? t("nbRunningAll") : t("nbRunAllBtn")}
         </button>
         <button
           onClick={clearAll}
@@ -488,15 +491,15 @@ export default function NotebookPage() {
             cursor: "pointer",
           }}
         >
-          Limpar resultados
+          {t("nbClearResultsBtn")}
         </button>
         <span style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono, marginLeft: "auto" }}>
-          {cells.length} {cells.length === 1 ? "célula" : "células"}
+          {cells.length} {cells.length === 1 ? t("nbCellSingular") : t("nbCellPlural")}
           {" · "}
           {cells.filter((c) => c.status === "ok").length} OK
           {cells.filter((c) => c.status === "error").length > 0 && (
             <span style={{ color: theme.danger }}>
-              {" · "}{cells.filter((c) => c.status === "error").length} erro
+              {" · "}{cells.filter((c) => c.status === "error").length} {t("nbErrorWord")}
             </span>
           )}
         </span>
@@ -527,10 +530,10 @@ export default function NotebookPage() {
           lineHeight: 1.7,
         }}
       >
-        Todas as chamadas vão para{" "}
+        {t("nbFooterPrefix")}{" "}
         <span style={{ color: theme.quantum }}>bongo.dobslit.com/qrng/v1</span>
-        {" "}com seu token Bearer.
-        O botão <strong style={{ color: theme.textDim }}>curl</strong> copia o comando equivalente para o terminal.
+        {" "}{t("nbFooterMid")}
+        {" "}<strong style={{ color: theme.textDim }}>curl</strong> {t("nbFooterSuffix")}
       </div>
     </div>
   );
