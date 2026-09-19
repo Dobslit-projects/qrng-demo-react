@@ -1,8 +1,9 @@
 import { useMemo } from "react";
 import { theme } from "../../theme";
+import { useLanguage } from "../../contexts/LanguageContext";
 import { monobitTest, runsTest, chiSquareTest, shannonEntropy } from "./statsTests";
 
-function Badge({ test, accentColor }) {
+function Badge({ test, accentColor, t }) {
   const bg = test.passed === null
     ? theme.surfaceAlt
     : test.passed
@@ -29,13 +30,13 @@ function Badge({ test, accentColor }) {
       whiteSpace: "nowrap",
     }}>
       <span style={{ fontWeight: 800, fontSize: 10, color: iconColor }}>{icon}</span>
-      <span style={{ color: theme.textDim, fontWeight: 500 }}>{test.label}</span>
+      <span style={{ color: theme.textDim, fontWeight: 500 }}>{test.label === "Entropia" ? t("statsEntropy") : test.label}</span>
       <span style={{ color: accentColor, fontWeight: 700 }}>{test.value}</span>
     </div>
   );
 }
 
-function SourceRow({ label, bytes, color }) {
+function SourceRow({ label, bytes, color, t }) {
   const tests = useMemo(() => {
     if (!bytes || bytes.length < 20) {
       return [
@@ -62,14 +63,15 @@ function SourceRow({ label, bytes, color }) {
       }}>
         {label}
       </span>
-      {tests.map((t, i) => (
-        <Badge key={i} test={t} accentColor={color} />
+      {tests.map((test, i) => (
+        <Badge key={i} test={test} accentColor={color} t={t} />
       ))}
     </div>
   );
 }
 
 export default function StatsBadges({ prngBytes, qrngBytes }) {
+  const { t } = useLanguage();
   return (
     <div style={{
       display: "flex", flexDirection: "column", gap: 3,
@@ -77,8 +79,8 @@ export default function StatsBadges({ prngBytes, qrngBytes }) {
       background: theme.surface, borderRadius: 8,
       border: `1px solid ${theme.border}`,
     }}>
-      <SourceRow label="PRNG" bytes={prngBytes} color={theme.classical} />
-      <SourceRow label="QRNG" bytes={qrngBytes} color={theme.quantum} />
+      <SourceRow label="PRNG" bytes={prngBytes} color={theme.classical} t={t} />
+      <SourceRow label="QRNG" bytes={qrngBytes} color={theme.quantum} t={t} />
     </div>
   );
 }

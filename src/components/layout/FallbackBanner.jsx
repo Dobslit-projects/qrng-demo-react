@@ -1,6 +1,7 @@
 import { useContext, useState } from "react";
 import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
+import { useLanguage } from "../../contexts/LanguageContext";
 
 /**
  * Item 4 da auditoria: banner global de fallback, visível em TODAS as
@@ -26,6 +27,7 @@ import { AppContext } from "../../contexts/AppContext";
 export default function FallbackBanner() {
   const { isFallbackSelected, precollectedRemaining, precollectedLimit, restartPrecollectedDemo } =
     useContext(AppContext);
+  const { t } = useLanguage();
   const [confirming, setConfirming] = useState(false);
 
   if (!isFallbackSelected) return null;
@@ -51,19 +53,19 @@ export default function FallbackBanner() {
     >
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span style={{ color: exhausted ? theme.danger : theme.warning, fontWeight: 700 }}>
-          {exhausted ? "⚠ BUFFER PRÉ-COLETADO ESGOTADO" : "MODO DEMONSTRAÇÃO — DADOS PRÉ-COLETADOS"}
+          {exhausted ? t("fbExhausted") : t("fbDemoMode")}
         </span>
         <span style={{ color: theme.textMuted }}>
-          {precollectedRemaining} / {precollectedLimit} bytes restantes
-          {low && !exhausted ? " (quase esgotado)" : ""}
-        </span>
-        <span style={{ color: theme.border }}>|</span>
-        <span style={{ color: theme.textMuted }}>
-          Proveniência: <strong style={{ color: theme.textDim }}>não registrada</strong> — não é uma medida ao vivo do hardware
+          {precollectedRemaining} / {precollectedLimit} {t("fbBytesRemaining")}
+          {low && !exhausted ? t("fbAlmostExhausted") : ""}
         </span>
         <span style={{ color: theme.border }}>|</span>
         <span style={{ color: theme.textMuted }}>
-          Geração de chaves/seed operacional bloqueada nesta fonte
+          {t("fbProvenance")}: <strong style={{ color: theme.textDim }}>{t("fbNotRegistered")}</strong> {t("fbNotLiveMeasure")}
+        </span>
+        <span style={{ color: theme.border }}>|</span>
+        <span style={{ color: theme.textMuted }}>
+          {t("fbKeyGenBlocked")}
         </span>
       </div>
 
@@ -71,7 +73,7 @@ export default function FallbackBanner() {
         {confirming ? (
           <>
             <span style={{ color: theme.warning }}>
-              Isso reaproveita os mesmos {precollectedLimit} bytes desde o início — não gera uma amostra nova.
+              {t("fbReuseWarningPrefix")} {precollectedLimit} {t("fbReuseWarningSuffix")}
             </span>
             <button
               onClick={() => { restartPrecollectedDemo(); setConfirming(false); }}
@@ -80,7 +82,7 @@ export default function FallbackBanner() {
                 padding: "4px 10px", fontFamily: "inherit", fontSize: 11, fontWeight: 700, cursor: "pointer",
               }}
             >
-              Confirmar reinício
+              {t("fbConfirmRestart")}
             </button>
             <button
               onClick={() => setConfirming(false)}
@@ -89,7 +91,7 @@ export default function FallbackBanner() {
                 borderRadius: 6, padding: "4px 10px", fontFamily: "inherit", fontSize: 11, cursor: "pointer",
               }}
             >
-              Cancelar
+              {t("fbCancel")}
             </button>
           </>
         ) : (
@@ -100,7 +102,7 @@ export default function FallbackBanner() {
               borderRadius: 6, padding: "4px 10px", fontFamily: "inherit", fontSize: 11, fontWeight: 600, cursor: "pointer",
             }}
           >
-            Reiniciar demonstração
+            {t("fbRestartDemo")}
           </button>
         )}
       </div>

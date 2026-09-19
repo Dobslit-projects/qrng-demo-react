@@ -52,7 +52,7 @@ export function update(state, bytes) {
   return state;
 }
 
-export function draw(ctx, state, w, h, color) {
+export function draw(ctx, state, w, h, color, t) {
   const cr = parseInt(color.slice(1, 3), 16);
   const cg = parseInt(color.slice(3, 5), 16);
   const cb = parseInt(color.slice(5, 7), 16);
@@ -74,7 +74,7 @@ export function draw(ctx, state, w, h, color) {
   ctx.font = "bold 9px 'IBM Plex Mono', monospace";
   ctx.textAlign = "left";
   ctx.fillStyle = `rgba(${cr},${cg},${cb},0.9)`;
-  ctx.fillText("SONIFICACAO \u2014 ESCALA PENTATONICA", 6, 14);
+  ctx.fillText(t ? t("vzSonificationTitle") : "SONIFICACAO \u2014 ESCALA PENTATONICA", 6, 14);
 
   // Note labels + guide lines
   ctx.font = "7px 'IBM Plex Mono', monospace";

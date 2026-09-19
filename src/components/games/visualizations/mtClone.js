@@ -202,7 +202,7 @@ export function update(state, bytes) {
   return state;
 }
 
-export function draw(ctx, state, w, h, color) {
+export function draw(ctx, state, w, h, color, t) {
   const cr = parseInt(color.slice(1, 3), 16);
   const cg = parseInt(color.slice(3, 5), 16);
   const cb = parseInt(color.slice(5, 7), 16);
@@ -212,24 +212,24 @@ export function draw(ctx, state, w, h, color) {
 
   // Conclusion screen — draw and return early
   if (state.concluded) {
-    drawConclusion(ctx, state, w, h, cr, cg, cb);
+    drawConclusion(ctx, state, w, h, cr, cg, cb, t);
     return;
   }
 
   // ── Phase 0 & 1: Collection + Full Grid ──
   if (state.phase <= 1) {
-    drawCollectionHeader(ctx, state, w, cr, cg, cb);
-    drawGrid(ctx, state, w, h, cr, cg, cb);
+    drawCollectionHeader(ctx, state, w, cr, cg, cb, t);
+    drawGrid(ctx, state, w, h, cr, cg, cb, t);
   }
 
   // ── Phase 1: Clone flash ──
   if (state.phase === 1) {
-    drawCloneFlash(ctx, state, w, h, cr, cg, cb);
+    drawCloneFlash(ctx, state, w, h, cr, cg, cb, t);
   }
 
   // ── Phase 2: Mini grid + prediction tile grid + accuracy bar ──
   if (state.phase === 2) {
-    drawPhaseLabel(ctx, state, w, cr, cg, cb);
+    drawPhaseLabel(ctx, state, w, cr, cg, cb, t);
     drawMiniGrid(ctx, state, w, cr, cg, cb);
     drawPredictionGrid(ctx, state, w, h, cr, cg, cb);
     drawAccuracyBar(ctx, state, w, h, cr, cg, cb);
@@ -334,11 +334,11 @@ function drawAccuracyBar(ctx, state, w, h, cr, cg, cb) {
 
 // ── Phase 0/1 visuals ──
 
-function drawCollectionHeader(ctx, state, w, cr, cg, cb) {
+function drawCollectionHeader(ctx, state, w, cr, cg, cb, t) {
   ctx.font = "bold 9px 'IBM Plex Mono', monospace";
   ctx.textAlign = "left";
   ctx.fillStyle = `rgba(${cr},${cg},${cb},0.9)`;
-  ctx.fillText(`COLETANDO SAIDAS: ${state.collectedCount}/${N}`, 10, 16);
+  ctx.fillText(`${t ? t("vzCollectingOutputs") : "COLETANDO SAIDAS"}: ${state.collectedCount}/${N}`, 10, 16);
 
   // Progress bar
   const bx = 10, by = 24, bw = w - 20, bh = 5;
@@ -356,7 +356,7 @@ function drawCollectionHeader(ctx, state, w, cr, cg, cb) {
   ctx.fillText(`${(pct * 100).toFixed(1)}%`, bx + bw, by + bh + 10);
 }
 
-function drawGrid(ctx, state, w, h, cr, cg, cb) {
+function drawGrid(ctx, state, w, h, cr, cg, cb, t) {
   const margin = 12;
   const gy = 46;
   const maxH = h * 0.6;
@@ -401,7 +401,7 @@ function drawGrid(ctx, state, w, h, cr, cg, cb) {
   ctx.font = "7px 'IBM Plex Mono', monospace";
   ctx.textAlign = "center";
   ctx.fillStyle = `rgba(${cr},${cg},${cb},0.35)`;
-  ctx.fillText("ESTADO INTERNO (624 PALAVRAS DE 32 BITS)", w / 2, oy + totalH + 14);
+  ctx.fillText(t ? t("vzInternalState") : "ESTADO INTERNO (624 PALAVRAS DE 32 BITS)", w / 2, oy + totalH + 14);
 
   return oy + totalH;
 }
@@ -437,7 +437,7 @@ function drawMiniGrid(ctx, state, w, cr, cg, cb) {
   }
 }
 
-function drawCloneFlash(ctx, state, w, h, cr, cg, cb) {
+function drawCloneFlash(ctx, state, w, h, cr, cg, cb, t) {
   const progress = state.cloneFlashAge / CLONE_FLASH_DUR;
   const alpha = Math.max(0, 1 - progress * 1.5);
 
@@ -457,13 +457,13 @@ function drawCloneFlash(ctx, state, w, h, cr, cg, cb) {
     ctx.fillStyle = `rgba(255,255,255,${(1 - progress * 1.2) * 0.95})`;
     ctx.shadowColor = `rgba(${cr},${cg},${cb},0.8)`;
     ctx.shadowBlur = 20;
-    ctx.fillText("CLONADO!", 0, 0);
+    ctx.fillText(t ? t("vzCloned") : "CLONADO!", 0, 0);
     ctx.shadowBlur = 0;
     ctx.restore();
   }
 }
 
-function drawPhaseLabel(ctx, state, w, cr, cg, cb) {
+function drawPhaseLabel(ctx, state, w, cr, cg, cb, t) {
   const total = state.matchCount + state.missCount;
   const pct = total > 0 ? state.matchCount / total : 0;
   const isCloned = pct > 0.8;
@@ -471,14 +471,14 @@ function drawPhaseLabel(ctx, state, w, cr, cg, cb) {
   ctx.font = "bold 8px 'IBM Plex Mono', monospace";
   ctx.textAlign = "left";
   ctx.fillStyle = `rgba(${cr},${cg},${cb},0.6)`;
-  ctx.fillText(`PREDICAO ${state.predCount}/${MAX_PREDICTIONS}`, 6, 18);
+  ctx.fillText(`${t ? t("vzPrediction") : "PREDICAO"} ${state.predCount}/${MAX_PREDICTIONS}`, 6, 18);
 
   ctx.textAlign = "right";
   ctx.fillStyle = isCloned ? "rgba(80,255,120,0.7)" : "rgba(220,53,69,0.7)";
-  ctx.fillText(isCloned ? "MT19937 CLONADO" : "CLONE FALHOU", w - 6, 18);
+  ctx.fillText(isCloned ? (t ? t("vzMt19937Cloned") : "MT19937 CLONADO") : (t ? t("vzCloneFailed") : "CLONE FALHOU"), w - 6, 18);
 }
 
-function drawConclusion(ctx, state, w, h, cr, cg, cb) {
+function drawConclusion(ctx, state, w, h, cr, cg, cb, t) {
   const total = state.matchCount + state.missCount;
   const pct = total > 0 ? state.matchCount / total : 0;
   const isCloned = pct > 0.8;
@@ -488,7 +488,7 @@ function drawConclusion(ctx, state, w, h, cr, cg, cb) {
   ctx.font = "bold 8px 'IBM Plex Mono', monospace";
   ctx.textAlign = "left";
   ctx.fillStyle = `rgba(${cr},${cg},${cb},0.6)`;
-  ctx.fillText("EXPERIMENTO CONCLUIDO", 6, 18);
+  ctx.fillText(t ? t("vzExperimentDone") : "EXPERIMENTO CONCLUIDO", 6, 18);
 
   // Draw completed mini grid showing all outcomes
   drawMiniGrid(ctx, state, w, cr, cg, cb);
@@ -515,17 +515,17 @@ function drawConclusion(ctx, state, w, h, cr, cg, cb) {
   // "ACURACIA" label
   ctx.font = `bold ${Math.min(10, w * 0.028)}px 'IBM Plex Mono', monospace`;
   ctx.fillStyle = "rgba(255,255,255,0.35)";
-  ctx.fillText("ACURACIA", cx, contentY + contentH * 0.36);
+  ctx.fillText(t ? t("vzAccuracy") : "ACURACIA", cx, contentY + contentH * 0.36);
 
   // Status
   ctx.font = `bold ${Math.min(13, w * 0.035)}px 'IBM Plex Mono', monospace`;
   ctx.fillStyle = isCloned ? "rgba(80,255,120,0.85)" : "rgba(220,53,69,0.85)";
-  ctx.fillText(isCloned ? "MT19937 CLONADO" : "CLONE FALHOU", cx, contentY + contentH * 0.50);
+  ctx.fillText(isCloned ? (t ? t("vzMt19937Cloned") : "MT19937 CLONADO") : (t ? t("vzCloneFailed") : "CLONE FALHOU"), cx, contentY + contentH * 0.50);
 
   // Match count
   ctx.font = `${Math.min(10, w * 0.026)}px 'IBM Plex Mono', monospace`;
   ctx.fillStyle = "rgba(255,255,255,0.45)";
-  ctx.fillText(`${state.matchCount}/${total} predicoes corretas`, cx, contentY + contentH * 0.62);
+  ctx.fillText(`${state.matchCount}/${total} ${t ? t("vzCorrectPredictions") : "predicoes corretas"}`, cx, contentY + contentH * 0.62);
 
   // Technical info
   ctx.font = `${Math.min(8, w * 0.022)}px 'IBM Plex Mono', monospace`;

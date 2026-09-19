@@ -189,7 +189,7 @@ export function update(state, bytes) {
   return state;
 }
 
-export function draw(ctx, state, w, h, color) {
+export function draw(ctx, state, w, h, color, t) {
   const cr = parseInt(color.slice(1, 3), 16);
   const cg = parseInt(color.slice(3, 5), 16);
   const cb = parseInt(color.slice(5, 7), 16);
@@ -200,19 +200,22 @@ export function draw(ctx, state, w, h, color) {
 
   // Conclusion screen — draw and return early
   if (state.concluded) {
-    drawConclusion(ctx, state, w, h, cr, cg, cb);
+    drawConclusion(ctx, state, w, h, cr, cg, cb, t);
     return;
   }
 
-  const phases = ["OBSERVACAO", "QUEBRANDO O LCG...", "PREDICAO EM TEMPO REAL"];
+  const phases = t
+    ? [t("vzObservation"), t("vzBreakingLcg"), t("vzRealtimePrediction")]
+    : ["OBSERVACAO", "QUEBRANDO O LCG...", "PREDICAO EM TEMPO REAL"];
 
   // ── Top label ──
   ctx.font = "bold 9px 'IBM Plex Mono', monospace";
   ctx.fillStyle = `rgba(${cr},${cg},${cb},0.9)`;
   ctx.textAlign = "left";
+  const faseWord = t ? t("vzPhase") : "FASE";
   const phaseLabel = state.phase === 2
-    ? `FASE 3: PREDICAO (${state.predGrid.length}/${MAX_PREDICTIONS})`
-    : `FASE ${state.phase + 1}: ${phases[state.phase]}`;
+    ? `${faseWord} 3: ${t ? t("vzPrediction") : "PREDICAO"} (${state.predGrid.length}/${MAX_PREDICTIONS})`
+    : `${faseWord} ${state.phase + 1}: ${phases[state.phase]}`;
   ctx.fillText(phaseLabel, 10, 16);
 
   // ── Phase 0: Orbs + Equations ──
@@ -437,7 +440,7 @@ function drawCrackedBanner(ctx, state, w, cr, cg, cb) {
   }
 }
 
-function drawConclusion(ctx, state, w, h, cr, cg, cb) {
+function drawConclusion(ctx, state, w, h, cr, cg, cb, t) {
   const total = state.matchCount + state.missCount;
   const pct = total > 0 ? state.matchCount / total : 0;
   const isGood = pct > 0.8;
@@ -456,7 +459,7 @@ function drawConclusion(ctx, state, w, h, cr, cg, cb) {
   ctx.font = `bold ${Math.min(9, w * 0.025)}px 'IBM Plex Mono', monospace`;
   ctx.textAlign = "center";
   ctx.fillStyle = `rgba(${cr},${cg},${cb},0.6)`;
-  ctx.fillText("EXPERIMENTO CONCLUIDO", cx, 20);
+  ctx.fillText(t ? t("vzExperimentDone") : "EXPERIMENTO CONCLUIDO", cx, 20);
 
   // Big percentage
   ctx.font = `bold ${Math.min(42, w * 0.12)}px 'Space Grotesk', sans-serif`;
@@ -466,17 +469,17 @@ function drawConclusion(ctx, state, w, h, cr, cg, cb) {
   // "ACURACIA" label
   ctx.font = `bold ${Math.min(10, w * 0.028)}px 'IBM Plex Mono', monospace`;
   ctx.fillStyle = "rgba(255,255,255,0.35)";
-  ctx.fillText("ACURACIA", cx, h * 0.42);
+  ctx.fillText(t ? t("vzAccuracy") : "ACURACIA", cx, h * 0.42);
 
   // Status subtitle
   ctx.font = `bold ${Math.min(14, w * 0.038)}px 'IBM Plex Mono', monospace`;
   ctx.fillStyle = isGood ? "rgba(80,255,120,0.85)" : "rgba(220,53,69,0.85)";
-  ctx.fillText(isGood ? "LCG QUEBRADO" : "IMPREVISIVEL", cx, h * 0.53);
+  ctx.fillText(isGood ? (t ? t("vzLcgCracked") : "LCG QUEBRADO") : (t ? t("vzUnpredictable") : "IMPREVISIVEL"), cx, h * 0.53);
 
   // Match count
   ctx.font = `${Math.min(10, w * 0.028)}px 'IBM Plex Mono', monospace`;
   ctx.fillStyle = "rgba(255,255,255,0.45)";
-  ctx.fillText(`${state.matchCount}/${total} predicoes corretas`, cx, h * 0.61);
+  ctx.fillText(`${state.matchCount}/${total} ${t ? t("vzCorrectPredictions") : "predicoes corretas"}`, cx, h * 0.61);
 
   // Formula
   ctx.font = `${Math.min(9, w * 0.024)}px 'IBM Plex Mono', monospace`;

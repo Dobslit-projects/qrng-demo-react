@@ -1,13 +1,14 @@
 import { useContext } from "react";
 import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
+import { useLanguage } from "../../contexts/LanguageContext";
 
 const STEPS = [
-  { label: "Red Pitaya", sub: "FPGA" },
-  { label: "Ruido Q.", sub: "Fotons" },
-  { label: "ADC", sub: "14-bit" },
-  { label: "API REST", sub: null },
-  { label: "Este Demo", sub: "Canvas" },
+  { id: "redpitaya", label: "Red Pitaya", sub: "FPGA" },
+  { id: "noise",     labelKey: "dpNoiseQ", subKey: "dpFotons" },
+  { id: "adc",       label: "ADC", sub: "14-bit" },
+  { id: "api",       label: "API REST", sub: null },
+  { id: "demo",      labelKey: "dpEsteDemo", sub: "Canvas" },
 ];
 
 const keyframes = `
@@ -66,6 +67,7 @@ export default function DataPipeline({ source, latency }) {
   // do buffer QRNG real -- não é "ao vivo" e a animação não deve sugerir
   // isso.
   const { isOnline } = useContext(AppContext);
+  const { t } = useLanguage();
   const isRealSource = isOnline && !(typeof source === "string" && source.startsWith("Math.random()"));
 
   return (
@@ -78,7 +80,7 @@ export default function DataPipeline({ source, latency }) {
     }}>
       <style>{keyframes}</style>
       {STEPS.map((step, i) => {
-        const isApi = step.label === "API REST";
+        const isApi = step.id === "api";
         const isLast = i === STEPS.length - 1;
         const active = isRealSource;
         const color = active ? theme.quantum : theme.textMuted;
@@ -98,7 +100,7 @@ export default function DataPipeline({ source, latency }) {
                 fontFamily: "'IBM Plex Mono', monospace",
                 whiteSpace: "nowrap",
               }}>
-                {step.label}
+                {step.labelKey ? t(step.labelKey) : step.label}
               </div>
               <div style={{
                 fontSize: 7, color: theme.textMuted,
@@ -106,8 +108,8 @@ export default function DataPipeline({ source, latency }) {
                 whiteSpace: "nowrap",
               }}>
                 {isApi
-                  ? (isRealSource ? `${latency || "?"}ms` : "offline")
-                  : (step.sub || "")}
+                  ? (isRealSource ? `${latency || "?"}ms` : t("dpOffline"))
+                  : (step.subKey ? t(step.subKey) : (step.sub || ""))}
               </div>
             </div>
             {!isLast && <Arrow online={active} />}
@@ -122,7 +124,7 @@ export default function DataPipeline({ source, latency }) {
         fontFamily: "'IBM Plex Mono', monospace", fontWeight: 600,
         whiteSpace: "nowrap",
       }}>
-        Fonte: {source}
+        {t("dpSource")}: {source}
       </div>
     </div>
   );

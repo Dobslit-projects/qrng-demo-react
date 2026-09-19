@@ -1,5 +1,6 @@
 import { useContext } from "react";
 import { AppProvider, AppContext } from "./contexts/AppContext";
+import { LanguageProvider } from "./contexts/LanguageContext";
 import { theme, fonts } from "./theme";
 import HardwareStatusBar from "./components/layout/HardwareStatusBar";
 import FallbackBanner from "./components/layout/FallbackBanner";
@@ -48,8 +49,10 @@ function AppContent() {
 
 export default function App() {
   return (
-    <AppProvider>
-      <AppContent />
-    </AppProvider>
+    <LanguageProvider>
+      <AppProvider>
+        <AppContent />
+      </AppProvider>
+    </LanguageProvider>
   );
 }

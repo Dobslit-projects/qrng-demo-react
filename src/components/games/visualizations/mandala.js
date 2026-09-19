@@ -117,7 +117,7 @@ export function update(state, bytes) {
   return state;
 }
 
-export function draw(ctx, state, w, h, color) {
+export function draw(ctx, state, w, h, color, t) {
   const cx = w / 2;
   const cy = h / 2;
   const maxR = Math.min(w, h) * 0.48;
@@ -287,7 +287,7 @@ export function draw(ctx, state, w, h, color) {
   // Coverage text below sparkline
   ctx.fillStyle = color;
   ctx.font = "bold 12px monospace";
-  ctx.fillText(`Cobertura: ${covStr}%`, boxX + 6, boxY + sparkH + textH);
+  ctx.fillText(`${t ? t("vzCoverage") : "Cobertura"}: ${covStr}%`, boxX + 6, boxY + sparkH + textH);
 }
 
 export function bytesPerFrame() {

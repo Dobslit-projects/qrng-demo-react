@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, cleanup, act } from "@testing-library/react";
 import { useContext } from "react";
 import { AppProvider, AppContext } from "./AppContext";
+import { LanguageProvider } from "./LanguageContext";
 import HardwareStatusBar from "../components/layout/HardwareStatusBar";
 import { fetchQrngBytes, resetPrecollectedCursor } from "../lib/qrngHelper";
 
@@ -45,9 +46,11 @@ function renderProbe() {
 
 function renderStatusBar() {
   return render(
-    <AppProvider>
-      <HardwareStatusBar />
-    </AppProvider>,
+    <LanguageProvider>
+      <AppProvider>
+        <HardwareStatusBar />
+      </AppProvider>
+    </LanguageProvider>,
   );
 }
 

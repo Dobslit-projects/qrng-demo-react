@@ -2,6 +2,7 @@ import { useRef, useEffect, useState, useCallback, useContext } from "react";
 import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
 import { fetchQrngBytes, PrecollectedExhaustedError } from "../../lib/qrngHelper";
+import { useLanguage } from "../../contexts/LanguageContext";
 import { lcgNext } from "../../prng";
 import * as galaxy from "./visualizations/galaxySpiral";
 import * as mandala from "./visualizations/mandala";
@@ -15,11 +16,11 @@ import { createAudioEngine } from "../../audioEngine";
 
 const BG = "#0c0e1a";
 const MODES = [
-  { key: "galaxy", label: "Galaxia", mod: galaxy },
-  { key: "mandala", label: "Mandala", mod: mandala },
-  { key: "cracker", label: "LCG Cracker", mod: prngCracker },
-  { key: "mtclone", label: "MT19937 Clone", mod: mtClone },
-  { key: "sonification", label: "Sonifica\u00e7\u00e3o", mod: sonification },
+  { key: "galaxy", labelKey: "qvGalaxy", mod: galaxy },
+  { key: "mandala", labelKey: "qvMandala", mod: mandala },
+  { key: "cracker", labelKey: "qvCracker", mod: prngCracker },
+  { key: "mtclone", labelKey: "qvMtClone", mod: mtClone },
+  { key: "sonification", labelKey: "qvSonification", mod: sonification },
 ];
 
 const STATS_BUFFER_SIZE = 2000;
@@ -46,6 +47,7 @@ function generatePrngBytes(count, seedRef) {
 
 export default function QuantumVisualizer() {
   const { latency, qrngSource: globalSource } = useContext(AppContext);
+  const { t } = useLanguage();
   const [mode, setMode] = useState("galaxy");
   const [qrngSourceLabel, setQrngSourceLabel] = useState("...");
   const [bytesUsed, setBytesUsed] = useState(0);
@@ -86,12 +88,14 @@ export default function QuantumVisualizer() {
   const qrngMutedRef = useRef(false);
   const speedRef = useRef(1);
   const frameAccRef = useRef(0);
+  const tRef = useRef(t); // ref (não dependência do efeito) -- trocar idioma não deve reiniciar a demo em andamento
 
   // Keep refs in sync
   useEffect(() => { modeRef.current = mode; }, [mode]);
   useEffect(() => { prngMutedRef.current = prngMuted; }, [prngMuted]);
   useEffect(() => { qrngMutedRef.current = qrngMuted; }, [qrngMuted]);
   useEffect(() => { speedRef.current = speed; }, [speed]);
+  useEffect(() => { tRef.current = t; }, [t]);
 
   // Fetch QRNG bytes into buffer
   //
@@ -113,12 +117,12 @@ export default function QuantumVisualizer() {
     // Configurações), como as demais páginas centrais fazem -- ver
     // qrngHelper.js. Visitantes sem token pessoal recebiam 401 em toda
     // requisição e caíam permanentemente em "Math.random() -- erro de rede".
-    const labelMap = { remote: "Remota (SP)", fpga: "FPGA" };
+    const labelMap = { remote: t("sourceRemote"), fpga: t("sourceFpga") };
     try {
       if (globalSource === "pre-collected") {
         const { bytes } = await fetchQrngBytes(8192, "pre-collected");
         qrngBufferRef.current.push(...bytes);
-        setQrngSourceLabel("Pré-coletado");
+        setQrngSourceLabel(t("sourcePrecollected"));
       } else {
         const { bytes } = await fetchQrngBytes(8192, globalSource);
         qrngBufferRef.current.push(...bytes);
@@ -130,12 +134,12 @@ export default function QuantumVisualizer() {
       }
       setQrngSourceLabel(
         err instanceof PrecollectedExhaustedError
-          ? "Math.random() — pré-coletado esgotado"
-          : "Math.random() — erro de rede"
+          ? t("qvMathRandomExhausted")
+          : t("qvMathRandomNetError")
       );
     }
     fetchingRef.current = false;
-  }, [globalSource]);
+  }, [globalSource, t]);
 
   // Consume N bytes from QRNG buffer
   const consumeQrng = useCallback((count) => {
@@ -272,8 +276,8 @@ export default function QuantumVisualizer() {
       // Draw
       const pCtx = pc.getContext("2d");
       const qCtx = qc.getContext("2d");
-      mod.draw(pCtx, prngStateRef.current, w, h, theme.classical);
-      mod.draw(qCtx, qrngStateRef.current, w, h, theme.quantum);
+      mod.draw(pCtx, prngStateRef.current, w, h, theme.classical, tRef.current);
+      mod.draw(qCtx, qrngStateRef.current, w, h, theme.quantum, tRef.current);
 
       // Process audio events from visualization modules (rate-limited, per-channel mute)
       const ae = audioEngineRef.current;
@@ -423,7 +427,7 @@ export default function QuantumVisualizer() {
                 transition: "all 0.2s",
               }}
             >
-              {m.label}
+              {t(m.labelKey)}
             </button>
             {mode === m.key && (
               <button
@@ -442,7 +446,7 @@ export default function QuantumVisualizer() {
                   padding: 0, zIndex: 1,
                   transition: "all 0.15s",
                 }}
-                title="Sobre este experimento"
+                title={t("qvAboutExperiment")}
               >
                 i
               </button>
@@ -524,7 +528,7 @@ export default function QuantumVisualizer() {
                 fontFamily: "'IBM Plex Mono', monospace",
                 transition: "all 0.15s",
               }}
-              title={`Velocidade ${s}x`}
+              title={`${t("qvSpeed")} ${s}x`}
             >
               {s === 0.5 ? "\u00BDx" : `${s}x`}
             </button>
@@ -547,7 +551,7 @@ export default function QuantumVisualizer() {
               fontSize: 14, padding: "1px 2px", lineHeight: 1,
               transition: "color 0.15s",
             }}
-            title={audioEnabled ? "Desativar som" : "Ativar som"}
+            title={audioEnabled ? t("qvDisableSound") : t("qvEnableSound")}
           >
             {audioEnabled ? "\uD83D\uDD0A" : "\uD83D\uDD07"}
           </button>
@@ -561,7 +565,7 @@ export default function QuantumVisualizer() {
                   width: 50, height: 3, cursor: "pointer",
                   accentColor: theme.accent,
                 }}
-                title={`Volume: ${audioVolume}%`}
+                title={`${t("qvVolume")}: ${audioVolume}%`}
               />
               <span style={{
                 fontSize: 8, color: theme.textMuted,
@@ -573,14 +577,14 @@ export default function QuantumVisualizer() {
               <button
                 onClick={() => setPrngMuted(m => !m)}
                 style={muteButtonStyle(theme.classical, prngMuted)}
-                title={prngMuted ? "Ativar PRNG" : "Mutar PRNG"}
+                title={prngMuted ? t("qvEnablePrng") : t("qvMutePrng")}
               >
                 P
               </button>
               <button
                 onClick={() => setQrngMuted(m => !m)}
                 style={muteButtonStyle(theme.quantum, qrngMuted)}
-                title={qrngMuted ? "Ativar QRNG" : "Mutar QRNG"}
+                title={qrngMuted ? t("qvEnableQrng") : t("qvMuteQrng")}
               >
                 Q
               </button>
@@ -602,13 +606,13 @@ export default function QuantumVisualizer() {
             cursor: "pointer",
           }}
         >
-          Reiniciar
+          {t("qvReset")}
         </button>
         <span style={{ fontSize: 9, color: theme.textMuted, fontFamily: "'IBM Plex Mono', monospace" }}>
-          {bytesUsed.toLocaleString()} bytes
+          {bytesUsed.toLocaleString()} {t("qvBytes")}
         </span>
         <span style={{ fontSize: 9, color: fps >= 50 ? theme.success : theme.warning, fontFamily: "'IBM Plex Mono', monospace" }}>
-          {fps} fps
+          {fps} {t("qvFps")}
         </span>
       </div>
 

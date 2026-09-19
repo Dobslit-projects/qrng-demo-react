@@ -1,6 +1,7 @@
 import { useContext } from "react";
 import { theme } from "../../theme";
-import { AppContext, SOURCE_LABELS } from "../../contexts/AppContext";
+import { AppContext } from "../../contexts/AppContext";
+import { useLanguage, SOURCE_KEY_MAP } from "../../contexts/LanguageContext";
 
 export default function Footer() {
   // Item 5 da auditoria: isOnline é um flag de "seguro habilitar UI", TAMBÉM
@@ -8,7 +9,8 @@ export default function Footer() {
   // ao hardware / dados em tempo real" abaixo. isLiveData só é true quando
   // uma checagem de rede real confirmou sucesso.
   const { isLiveData, qrngSource } = useContext(AppContext);
-  const sourceLabel = SOURCE_LABELS[qrngSource] || qrngSource;
+  const { t } = useLanguage();
+  const sourceLabel = t(SOURCE_KEY_MAP[qrngSource]) || qrngSource;
 
   return (
     <>
@@ -27,19 +29,17 @@ export default function Footer() {
       >
         {isLiveData ? (
           <>
-            <strong style={{ color: theme.success }}>Conectado ao hardware:</strong>{" "}
-            Os dados QRNG nesta demo vem diretamente da fonte{" "}
-            <strong style={{ color: theme.quantum }}>{sourceLabel}</strong>.
-            A entropia e gerada por medicoes de fenomenos quanticos reais,
-            nao por algoritmos deterministicos.
+            <strong style={{ color: theme.success }}>{t("footerConnectedTitle")}</strong>{" "}
+            {t("footerConnectedPrefix")}{" "}
+            <strong style={{ color: theme.quantum }}>{sourceLabel}</strong>
+            {t("footerConnectedSuffix")}
           </>
         ) : (
           <>
-            <strong style={{ color: theme.warning }}>Modo offline:</strong>{" "}
-            O backend QRNG esta indisponivel. Os dados QRNG exibidos sao de uma{" "}
-            <strong style={{ color: theme.quantum }}>amostra pre-coletada</strong>{" "}
-            (10.000 bytes do Red Pitaya). Embora sejam dados quanticos genuinos,
-            nao estao sendo gerados em tempo real. Conecte ao backend para dados ao vivo.
+            <strong style={{ color: theme.warning }}>{t("footerOfflineTitle")}</strong>{" "}
+            {t("footerOfflinePrefix")}{" "}
+            <strong style={{ color: theme.quantum }}>{t("footerSamplePrecollected")}</strong>{" "}
+            {t("footerOfflineSuffix")}
           </>
         )}
       </div>
@@ -63,7 +63,7 @@ export default function Footer() {
             letterSpacing: "0.06em",
           }}
         >
-          Desenvolvido por DOBSLIT
+          {t("footerDevelopedBy")}
         </span>
       </div>
     </>

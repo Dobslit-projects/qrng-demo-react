@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState, useContext, useCallback } from "react";
 import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
+import { useLanguage } from "../../contexts/LanguageContext";
 import { fetchQrngBytes, readUint32LE, errorMessage } from "../../lib/qrngHelper";
 import { API_ROUTES } from "../../qrngApi";
 
@@ -11,38 +12,30 @@ const grotesk = "'Space Grotesk', sans-serif";
 /* ── Component catalogue ──────────────────────────────────────────────────── */
 
 const COMPONENTS = [
-  { id: 0, step: 1, shortName: "Fonte Quântica", icon: "⚛",
-    name: "Fonte de Entropia Quântica",
-    desc: "A origem da aleatoriedade vem de um processo físico quântico. O sinal capturado carrega flutuações imprevisíveis que não são geradas por algoritmo determinístico.",
-    badge: "Entropia física", color: "#8b5cf6", cx: 138, cy: 124, face: "top" },
-  { id: 1, step: 2, shortName: "ADC", icon: "📡",
-    name: "Conversão Analógico-Digital",
-    desc: "O sinal físico é convertido para dados digitais por um estágio de aquisição. Essa etapa transforma o ruído quântico em amostras digitais que podem ser processadas.",
-    badge: "Amostragem", color: "#06b6d4", cx: 213, cy: 107, face: "top" },
-  { id: 2, step: 3, shortName: "FPGA", icon: "🔧",
-    name: "FPGA / Processamento em Hardware",
-    desc: "A FPGA realiza a captura e o processamento inicial dos dados, permitindo baixa latência e fluxo contínuo de bytes aleatórios.",
-    badge: "Hardware", color: "#3b82f6", cx: 298, cy: 97, face: "top" },
-  { id: 3, step: 4, shortName: "Extrator", icon: "🔀",
-    name: "Extração de Entropia",
-    desc: "O pós-processamento remove vieses e organiza os bits para produzir uma sequência adequada para aplicações criptográficas, simulações e testes estatísticos.",
-    badge: "Pós-processamento", color: "#10b981", cx: 375, cy: 107, face: "top" },
-  { id: 4, step: 5, shortName: "Buffer", icon: "💾",
-    name: "Buffer de Dados",
-    desc: "Os bytes gerados são armazenados em um buffer para consumo pelas aplicações, APIs e interfaces do sistema.",
-    badge: "Buffer", color: "#f59e0b", cx: 448, cy: 120, face: "top" },
-  { id: 5, step: 6, shortName: "API REST", icon: "🔌",
-    name: "API QRNG",
-    desc: "A API disponibiliza os dados aleatórios para aplicações externas, download, geração de chaves, sorteios, simulações e testes.",
-    badge: "Integração", color: "#0c8ce9", cx: 415, cy: 210, face: "front" },
-  { id: 6, step: 7, shortName: "Testes NIST", icon: "🧪",
-    name: "Validação Estatística",
-    desc: "O sistema pode executar análises estatísticas e testes NIST para avaliar a qualidade dos dados gerados.",
-    badge: "Teste NIST", color: "#e11d48", cx: 295, cy: 275, face: "below" },
-  { id: 7, step: 8, shortName: "Aplicações", icon: "🚀",
-    name: "Aplicações",
-    desc: "Os números aleatórios podem ser usados em criptografia, autenticação, Monte Carlo, IA, otimização, jogos, educação e pesquisa.",
-    badge: "Uso prático", color: "#0fa968", cx: 495, cy: 275, face: "below" },
+  { id: 0, step: 1, icon: "⚛",
+    nameKey: "kc0Name", descKey: "kc0Desc", badgeKey: "kc0Badge",
+    color: "#8b5cf6", cx: 138, cy: 124, face: "top" },
+  { id: 1, step: 2, icon: "📡",
+    nameKey: "kc1Name", descKey: "kc1Desc", badgeKey: "kc1Badge",
+    color: "#06b6d4", cx: 213, cy: 107, face: "top" },
+  { id: 2, step: 3, icon: "🔧",
+    nameKey: "kc2Name", descKey: "kc2Desc", badgeKey: "kc2Badge",
+    color: "#3b82f6", cx: 298, cy: 97, face: "top" },
+  { id: 3, step: 4, icon: "🔀",
+    nameKey: "kc3Name", descKey: "kc3Desc", badgeKey: "kc3Badge",
+    color: "#10b981", cx: 375, cy: 107, face: "top" },
+  { id: 4, step: 5, icon: "💾",
+    nameKey: "kc4Name", descKey: "kc4Desc", badgeKey: "kc4Badge",
+    color: "#f59e0b", cx: 448, cy: 120, face: "top" },
+  { id: 5, step: 6, icon: "🔌",
+    nameKey: "kc5Name", descKey: "kc5Desc", badgeKey: "kc5Badge",
+    color: "#0c8ce9", cx: 415, cy: 210, face: "front" },
+  { id: 6, step: 7, icon: "🧪",
+    nameKey: "kc6Name", descKey: "kc6Desc", badgeKey: "kc6Badge",
+    color: "#e11d48", cx: 295, cy: 275, face: "below" },
+  { id: 7, step: 8, icon: "🚀",
+    nameKey: "kc7Name", descKey: "kc7Desc", badgeKey: "kc7Badge",
+    color: "#0fa968", cx: 495, cy: 275, face: "below" },
 ];
 
 /* ── Particle canvas (unchanged) ─────────────────────────────────────────── */
@@ -102,6 +95,7 @@ function QuantumParticles() {
 /* ── SVG Device with interactive hotspots ────────────────────────────────── */
 
 function KapuaDeviceSVG({ selected, onSelect, flowStep, genFlowStep }) {
+  const { t } = useLanguage();
   // Flow lines between consecutive hotspots
   const flowLines = COMPONENTS.slice(0, -1).map((c, i) => ({
     x1: c.cx, y1: c.cy, x2: COMPONENTS[i + 1].cx, y2: COMPONENTS[i + 1].cy,
@@ -282,9 +276,9 @@ function KapuaDeviceSVG({ selected, onSelect, flowStep, genFlowStep }) {
 
       {/* ── "Below" zone labels ── */}
       <text x="295" y="295" textAnchor="middle" fill="#e11d48"
-            fontSize="7.5" fontFamily="IBM Plex Mono, monospace" opacity="0.55">Testes NIST</text>
+            fontSize="7.5" fontFamily="IBM Plex Mono, monospace" opacity="0.55">{t("kapuaSvgNistLabel")}</text>
       <text x="495" y="295" textAnchor="middle" fill="#0fa968"
-            fontSize="7.5" fontFamily="IBM Plex Mono, monospace" opacity="0.55">Aplicações</text>
+            fontSize="7.5" fontFamily="IBM Plex Mono, monospace" opacity="0.55">{t("kapuaSvgAppsLabel")}</text>
 
       {/* ── Hotspots ── */}
       {COMPONENTS.map((c) => {
@@ -294,7 +288,7 @@ function KapuaDeviceSVG({ selected, onSelect, flowStep, genFlowStep }) {
         const isActive = isSel || isGen;
         return (
           <g key={c.id} onClick={() => onSelect(c.id)} style={{ cursor: "pointer" }}>
-            <title>{`${c.step}. ${c.name}`}</title>
+            <title>{`${c.step}. ${t(c.nameKey)}`}</title>
 
             {/* Outer glow (selection or flow complete) */}
             {(isSel || isFlow) && (
@@ -339,6 +333,7 @@ function KapuaDeviceSVG({ selected, onSelect, flowStep, genFlowStep }) {
 /* ── Flow Pipeline (mini step bar) ────────────────────────────────────────── */
 
 function FlowPipeline({ selected, onSelect, flowStep }) {
+  const { t } = useLanguage();
   return (
     <div style={{
       display: "flex", alignItems: "center", gap: 0,
@@ -351,7 +346,7 @@ function FlowPipeline({ selected, onSelect, flowStep }) {
           <div key={c.id} style={{ display: "flex", alignItems: "center" }}>
             <button
               onClick={() => onSelect(c.id)}
-              title={c.name}
+              title={t(c.nameKey)}
               style={{
                 display: "flex", flexDirection: "column", alignItems: "center",
                 gap: 2, padding: "5px 8px", borderRadius: 8, border: "none",
@@ -383,6 +378,7 @@ function FlowPipeline({ selected, onSelect, flowStep }) {
 /* ── Component Info Panel ─────────────────────────────────────────────────── */
 
 function ComponentPanel({ selected, onSelect, onPlayFlow, isFlowPlaying }) {
+  const { t } = useLanguage();
   const c = COMPONENTS[selected];
   if (!c) return null;
   return (
@@ -395,20 +391,20 @@ function ComponentPanel({ selected, onSelect, onPlayFlow, isFlowPlaying }) {
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
         <span style={{ fontSize: 20 }}>{c.icon}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: grotesk }}>{c.name}</div>
+          <div style={{ fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: grotesk }}>{t(c.nameKey)}</div>
           <div style={{ fontSize: 9, color: c.color, fontFamily: mono, letterSpacing: "0.1em" }}>
-            Etapa {c.step} de {COMPONENTS.length}
+            {t("kapuaStepLabel")} {c.step} {t("kapuaOfLabel")} {COMPONENTS.length}
           </div>
         </div>
         <span style={{
           fontSize: 9, fontWeight: 700, fontFamily: mono, letterSpacing: "0.1em",
           padding: "3px 8px", borderRadius: 8,
           color: c.color, background: c.color + "18", border: `1px solid ${c.color}30`,
-        }}>{c.badge}</span>
+        }}>{t(c.badgeKey)}</span>
       </div>
 
       {/* Description */}
-      <p style={{ margin: 0, fontSize: 12, color: "#8ba8cc", lineHeight: 1.65, fontFamily: sans }}>{c.desc}</p>
+      <p style={{ margin: 0, fontSize: 12, color: "#8ba8cc", lineHeight: 1.65, fontFamily: sans }}>{t(c.descKey)}</p>
 
       {/* Navigation */}
       <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
@@ -416,7 +412,7 @@ function ComponentPanel({ selected, onSelect, onPlayFlow, isFlowPlaying }) {
           style={{ padding: "5px 12px", borderRadius: 8, border: `1px solid ${theme.border}40`,
             background: "transparent", color: "#7a90b0", fontSize: 11, fontFamily: mono,
             cursor: selected === 0 ? "not-allowed" : "pointer", opacity: selected === 0 ? 0.4 : 1 }}>
-          ◀ Anterior
+          {t("kapuaPrev")}
         </button>
         <button onClick={() => onSelect(Math.min(COMPONENTS.length - 1, selected + 1))}
           disabled={selected === COMPONENTS.length - 1}
@@ -424,13 +420,13 @@ function ComponentPanel({ selected, onSelect, onPlayFlow, isFlowPlaying }) {
             background: "transparent", color: "#7a90b0", fontSize: 11, fontFamily: mono,
             cursor: selected === COMPONENTS.length - 1 ? "not-allowed" : "pointer",
             opacity: selected === COMPONENTS.length - 1 ? 0.4 : 1 }}>
-          Próximo ▶
+          {t("kapuaNext")}
         </button>
         <button onClick={onPlayFlow}
           style={{ padding: "5px 14px", borderRadius: 8, border: `1px solid ${theme.quantum}50`,
             background: isFlowPlaying ? theme.quantum + "20" : "transparent",
             color: theme.quantum, fontSize: 11, fontFamily: mono, cursor: "pointer" }}>
-          {isFlowPlaying ? "⏹ Parar" : "▶ Ver fluxo completo"}
+          {isFlowPlaying ? t("kapuaStopFlow") : t("kapuaPlayFlow")}
         </button>
       </div>
     </div>
@@ -440,20 +436,20 @@ function ComponentPanel({ selected, onSelect, onPlayFlow, isFlowPlaying }) {
 /* ── Feature cards ────────────────────────────────────────────────────────── */
 
 const FEATURE_CARDS = [
-  { icon: "⚡", title: "Fonte QRNG / FPGA",       desc: "Entropia gerada por fenômenos quânticos em hardware FPGA dedicado." },
-  { icon: "🔬", title: "Entropia Física",           desc: "Aleatoriedade fundamentalmente imprevisível, não algoritmos." },
-  { icon: "🎲", title: "Geração de Números",        desc: "Números e bytes aleatórios com distribuição uniforme comprovada." },
-  { icon: "📦", title: "Download de Dados Brutos",  desc: "Exporte bytes quânticos para uso em simulações, pesquisa e análise." },
-  { icon: "🧪", title: "Testes Estatísticos NIST",  desc: "Validação de entropia via suíte SP 800-90B com resultados detalhados." },
+  { icon: "⚡", titleKey: "kf0Title", descKey: "kf0Desc" },
+  { icon: "🔬", titleKey: "kf1Title", descKey: "kf1Desc" },
+  { icon: "🎲", titleKey: "kf2Title", descKey: "kf2Desc" },
+  { icon: "📦", titleKey: "kf3Title", descKey: "kf3Desc" },
+  { icon: "🧪", titleKey: "kf4Title", descKey: "kf4Desc" },
 ];
 
 /* ── Helper: source display text ──────────────────────────────────────────── */
 
-function sourceLabel(source) {
-  if (!source) return "Kuapoã QRNG";
+function sourceLabel(source, t) {
+  if (!source) return t("kapuaSourceDefault");
   const s = source.toLowerCase();
-  if (s.includes("fpga") || s.includes("hardware")) return "FPGA/Hardware";
-  if (s.includes("fallback")) return "Fallback interno";
+  if (s.includes("fpga") || s.includes("hardware")) return t("kapuaSourceFpga");
+  if (s.includes("fallback")) return t("kapuaSourceFallbackInternal");
   return source;
 }
 
@@ -464,19 +460,20 @@ function sourceLabel(source) {
 // -- ver AppContext.jsx). Cobre os 5 estados de `status` explicitamente em
 // vez de colapsar tudo em isOnline, para não mostrar "● ONLINE" (verde)
 // quando a fonte selecionada é o fallback pré-coletado.
-function statusBadgeInfo(qrngStatus, theme) {
+function statusBadgeInfo(qrngStatus, theme, t) {
   switch (qrngStatus) {
-    case "online":        return { label: "● ONLINE",       color: theme.success };
-    case "checking":      return { label: "○ VERIFICANDO",  color: theme.textMuted };
-    case "pre-collected": return { label: "◐ FALLBACK",     color: theme.warning };
-    case "degraded":      return { label: "◐ DEGRADADO",    color: theme.warning };
-    default:              return { label: "○ OFFLINE",      color: theme.danger };
+    case "online":        return { label: t("kapuaStatusOnline"),   color: theme.success };
+    case "checking":      return { label: t("kapuaStatusChecking"), color: theme.textMuted };
+    case "pre-collected": return { label: t("kapuaStatusFallback"), color: theme.warning };
+    case "degraded":      return { label: t("kapuaStatusDegraded"), color: theme.warning };
+    default:              return { label: t("kapuaStatusOffline"),  color: theme.danger };
   }
 }
 
 export default function KapuaSection() {
   const { setActivePage, qrngSource, status: qrngStatus } = useContext(AppContext);
-  const badge = statusBadgeInfo(qrngStatus, theme);
+  const { t, lang } = useLanguage();
+  const badge = statusBadgeInfo(qrngStatus, theme, t);
 
   /* Device explorer state */
   const [selected,      setSelected]      = useState(0);
@@ -549,7 +546,7 @@ export default function KapuaSection() {
   /* ── Download 1 MiB ── */
   const handleDownload = async () => {
     if (qrngSource === "pre-collected") {
-      setDlError("Fonte pré-coletada tem apenas 10.000 bytes. Use a aba Dados para exportar até 10 KB, ou selecione Remote / FPGA para o download de 1 MiB.");
+      setDlError(t("kapuaDlErrorPrecollected"));
       return;
     }
     setDownloading(true); setDlError(null);
@@ -567,7 +564,7 @@ export default function KapuaSection() {
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement("a"); a.href = url; a.download = "qrng_1MiB.bin";
       document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
-    } catch { setDlError("Backend QRNG offline ou indisponível. Acesse a aba Dados para mais opções.");
+    } catch { setDlError(t("kapuaDlErrorOffline"));
     } finally { setDownloading(false); }
   };
 
@@ -616,15 +613,12 @@ export default function KapuaSection() {
                 <h1 style={{ margin: 0, fontSize: 44, fontWeight: 800, fontFamily: sans,
                   color: "#fff", letterSpacing: "-0.02em", lineHeight: 1.1 }}>Kuapoã</h1>
                 <div style={{ fontSize: 12, color: theme.quantum, fontFamily: mono,
-                  fontWeight: 600, marginTop: 4 }}>Gerador Quântico de Números Aleatórios</div>
+                  fontWeight: 600, marginTop: 4 }}>{t("kapuaSubtitle")}</div>
               </div>
 
               {/* Description */}
               <p style={{ margin: 0, fontSize: 13, color: "#8aaecc", lineHeight: 1.75, fontFamily: sans }}>
-                O Kuapoã é o sistema de geração de números aleatórios quânticos da Dobslit.
-                Ele utiliza uma fonte física quântica, aquisição em hardware e processamento
-                dedicado para gerar entropia real para criptografia, simulações, autenticação,
-                pesquisa e testes estatísticos.
+                {t("kapuaDescP")}
               </p>
 
               {/* Action buttons */}
@@ -635,7 +629,7 @@ export default function KapuaSection() {
                   fontSize: 13, fontWeight: 700, fontFamily: sans,
                   cursor: generating ? "not-allowed" : "pointer", opacity: generating ? 0.7 : 1,
                   boxShadow: `0 4px 18px ${theme.quantum}45`, transition: "all 0.15s", textAlign: "left",
-                }}>{generating ? "⏳ Gerando..." : "🎲 Gerar número aleatório"}</button>
+                }}>{generating ? t("kapuaGenerating") : t("kapuaGenerateBtn")}</button>
 
                 <button onClick={handleDownload} disabled={downloading} style={{
                   padding: "10px 22px", borderRadius: 10,
@@ -643,14 +637,14 @@ export default function KapuaSection() {
                   color: "#c0d8f0", fontSize: 13, fontWeight: 600, fontFamily: sans,
                   cursor: downloading ? "not-allowed" : "pointer", opacity: downloading ? 0.7 : 1,
                   transition: "all 0.15s", textAlign: "left",
-                }}>{downloading ? "⬇ Baixando..." : "⬇ Baixar dados QRNG"}</button>
+                }}>{downloading ? t("kapuaDownloading") : t("kapuaDownloadBtn")}</button>
 
                 <button onClick={handleExplore} style={{
                   padding: "10px 22px", borderRadius: 10,
                   border: `1px solid #ffffff18`, background: "transparent",
                   color: "#7a90b0", fontSize: 13, fontFamily: sans,
                   cursor: "pointer", transition: "all 0.15s", textAlign: "left",
-                }}>🔍 Explorar componentes</button>
+                }}>{t("kapuaExploreBtn")}</button>
               </div>
 
               {/* Number result */}
@@ -660,11 +654,11 @@ export default function KapuaSection() {
                   borderRadius: 10, padding: "12px 14px", fontFamily: mono,
                 }}>
                   <div style={{ fontSize: 9, color: theme.quantum + "99", marginBottom: 4, letterSpacing: "0.1em" }}>
-                    NÚMERO ALEATÓRIO · Fonte: {sourceLabel(randHex.source)}
+                    {t("kapuaRandomNumberLabel")} {sourceLabel(randHex.source, t)}
                     {randHex.latency != null && ` · ${randHex.latency}ms`}
                   </div>
                   <div style={{ fontSize: 24, fontWeight: 700, color: "#fff" }}>
-                    {randHex.value.toLocaleString("pt-BR")}
+                    {randHex.value.toLocaleString(lang === "en" ? "en-US" : "pt-BR")}
                   </div>
                   <div style={{ fontSize: 11, color: "#4d80b8", marginTop: 3 }}>
                     0x{randHex.hex.toUpperCase()}
@@ -717,14 +711,14 @@ export default function KapuaSection() {
           gap: 12, marginBottom: 20,
         }}>
           {FEATURE_CARDS.map((c) => (
-            <div key={c.title} style={{
+            <div key={c.titleKey} style={{
               background: theme.surface, border: `1px solid ${theme.border}`,
               borderRadius: 12, padding: "16px 16px 14px",
               display: "flex", flexDirection: "column", gap: 8,
             }}>
               <span style={{ fontSize: 22 }}>{c.icon}</span>
-              <div style={{ fontSize: 13, fontWeight: 700, fontFamily: grotesk, color: theme.text }}>{c.title}</div>
-              <div style={{ fontSize: 12, color: theme.textDim, lineHeight: 1.55, fontFamily: sans }}>{c.desc}</div>
+              <div style={{ fontSize: 13, fontWeight: 700, fontFamily: grotesk, color: theme.text }}>{t(c.titleKey)}</div>
+              <div style={{ fontSize: 12, color: theme.textDim, lineHeight: 1.55, fontFamily: sans }}>{t(c.descKey)}</div>
             </div>
           ))}
         </div>
@@ -735,14 +729,14 @@ export default function KapuaSection() {
           borderRadius: 12, padding: "14px 18px",
           display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center",
         }}>
-          <span style={{ fontSize: 11, color: theme.textMuted, fontFamily: mono, marginRight: 4 }}>EXPLORAR:</span>
+          <span style={{ fontSize: 11, color: theme.textMuted, fontFamily: mono, marginRight: 4 }}>{t("kapuaExploreLabel")}</span>
           {[
-            { page: "visuals",      label: "Representações Visuais" },
-            { page: "data",         label: "Dados QRNG" },
-            { page: "applications", label: "Aplicações" },
-            { page: "nist",         label: "Teste NIST" },
-            { page: "developer",    label: "Desenvolvedor" },
-          ].map(({ page, label }) => (
+            { page: "visuals",      key: "navVisuals" },
+            { page: "data",         key: "kapuaNavDataQrng" },
+            { page: "applications", key: "navApplications" },
+            { page: "nist",         key: "navNist" },
+            { page: "developer",    key: "navDeveloper" },
+          ].map(({ page, key }) => (
             <button key={page} onClick={() => setActivePage(page)} style={{
               padding: "5px 14px", borderRadius: 20,
               border: `1px solid ${theme.border}`, background: "transparent",
@@ -751,7 +745,7 @@ export default function KapuaSection() {
             }}
               onMouseEnter={e => { e.currentTarget.style.borderColor = theme.quantum; e.currentTarget.style.color = theme.quantum; }}
               onMouseLeave={e => { e.currentTarget.style.borderColor = theme.border; e.currentTarget.style.color = theme.textDim; }}>
-              {label}
+              {t(key)}
             </button>
           ))}
         </div>

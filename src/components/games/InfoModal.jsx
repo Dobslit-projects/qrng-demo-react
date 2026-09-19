@@ -1,11 +1,13 @@
 import { useEffect } from "react";
 import { theme } from "../../theme";
+import { useLanguage } from "../../contexts/LanguageContext";
 import { explanations } from "./explanationData";
 
 /* ── modal ───────────────────────────────────────────────── */
 
 export default function InfoModal({ mode, onClose }) {
-  const data = explanations[mode];
+  const { lang } = useLanguage();
+  const data = explanations[lang][mode];
 
   useEffect(() => {
     const handleKey = (e) => {

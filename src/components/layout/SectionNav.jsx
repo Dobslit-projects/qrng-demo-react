@@ -1,19 +1,21 @@
 import { useContext } from "react";
 import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
+import { useLanguage } from "../../contexts/LanguageContext";
 
 const pages = [
-  { id: "kapua",        label: "Kuapo\u00e3" },
-  { id: "visuals",      label: "Representa\u00e7\u00f5es Visuais" },
-  { id: "data",         label: "Dados" },
-  { id: "applications", label: "Aplica\u00e7\u00f5es" },
-  { id: "nist",         label: "Teste NIST" },
-  { id: "developer",    label: "Desenvolvedor" },
-  { id: "settings",     label: "\u2699 Configura\u00e7\u00f5es" },
+  { id: "kapua",        key: "navKapua" },
+  { id: "visuals",      key: "navVisuals" },
+  { id: "data",         key: "navData" },
+  { id: "applications", key: "navApplications" },
+  { id: "nist",         key: "navNist" },
+  { id: "developer",    key: "navDeveloper" },
+  { id: "settings",     key: "navSettings" },
 ];
 
 export default function SectionNav() {
   const { activePage, setActivePage } = useContext(AppContext);
+  const { t } = useLanguage();
 
   return (
     <div
@@ -53,7 +55,7 @@ export default function SectionNav() {
             flexShrink: 0,
           }}
         >
-          {p.label}
+          {t(p.key)}
         </button>
       ))}
     </div>
