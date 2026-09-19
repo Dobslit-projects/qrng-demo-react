@@ -1,7 +1,7 @@
 import { useRef, useEffect, useState, useCallback, useContext } from "react";
 import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
-import { fetchQrngBytesViaToken, fetchQrngBytes, PrecollectedExhaustedError } from "../../lib/qrngHelper";
+import { fetchQrngBytes, PrecollectedExhaustedError } from "../../lib/qrngHelper";
 import { lcgNext } from "../../prng";
 import * as galaxy from "./visualizations/galaxySpiral";
 import * as mandala from "./visualizations/mandala";
@@ -107,11 +107,12 @@ export default function QuantumVisualizer() {
   const refillBuffer = useCallback(async () => {
     if (fetchingRef.current || qrngBufferRef.current.length > 6000) return;
     fetchingRef.current = true;
-    // NOTA (auditoria item 3/4): globalSource "remote" vs "fpga" não produz
-    // rotas de rede diferentes hoje -- fetchQrngBytesViaToken sempre usa o
-    // client-api autenticado (/qrng/v1/), independente da fonte escolhida
-    // em Configurações. O rótulo abaixo é apenas cosmético; ver relatório
-    // de auditoria sobre unificar isso com o restante do app.
+    // Bug corrigido: este componente chamava fetchQrngBytesViaToken (rota
+    // autenticada /qrng/v1/, exige JWT pessoal) em vez de fetchQrngBytes
+    // (rota pública /qrng/api* que respeita a fonte escolhida em
+    // Configurações), como as demais páginas centrais fazem -- ver
+    // qrngHelper.js. Visitantes sem token pessoal recebiam 401 em toda
+    // requisição e caíam permanentemente em "Math.random() -- erro de rede".
     const labelMap = { remote: "Remota (SP)", fpga: "FPGA" };
     try {
       if (globalSource === "pre-collected") {
@@ -119,7 +120,7 @@ export default function QuantumVisualizer() {
         qrngBufferRef.current.push(...bytes);
         setQrngSourceLabel("Pré-coletado");
       } else {
-        const { bytes } = await fetchQrngBytesViaToken(8192);
+        const { bytes } = await fetchQrngBytes(8192, globalSource);
         qrngBufferRef.current.push(...bytes);
         setQrngSourceLabel(labelMap[globalSource] || globalSource);
       }

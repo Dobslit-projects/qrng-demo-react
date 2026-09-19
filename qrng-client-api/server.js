@@ -290,14 +290,14 @@ const internalAdminOpenapiSpec = buildInternalAdminSpec();
 app.get("/v1/openapi.json", (_req, res) => res.json(publicOpenapiSpec));
 
 app.use("/v1/docs", swaggerUi.serve, swaggerUi.setup(publicOpenapiSpec, {
-  customSiteTitle: "Kapuã QRNG API — Docs",
+  customSiteTitle: "Kuapoã QRNG API — Docs",
 }));
 
 app.get("/v1/redoc", (_req, res) => {
   res.type("html").send(`<!doctype html>
 <html>
   <head>
-    <title>Kapuã QRNG API — ReDoc</title>
+    <title>Kuapoã QRNG API — ReDoc</title>
     <meta charset="utf-8"/>
     <meta name="viewport" content="width=device-width, initial-scale=1">
   </head>
@@ -328,7 +328,7 @@ app.get("/v1/internal/admin-openapi.json", requireAuth, requireAdmin, (_req, res
 });
 
 app.use("/v1/internal/docs", requireAuth, requireAdmin, swaggerUi.serve, swaggerUi.setup(internalAdminOpenapiSpec, {
-  customSiteTitle: "Kapuã QRNG API — Docs Internas (Admin)",
+  customSiteTitle: "Kuapoã QRNG API — Docs Internas (Admin)",
 }));
 
 // ── Rate limiting — global por IP ─────────────────────────────────────────────

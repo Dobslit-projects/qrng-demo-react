@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Definição base da especificação OpenAPI do Kapuã QRNG.
+ * Definição base da especificação OpenAPI do Kuapoã QRNG.
  *
  * A especificação é GERADA a partir do código real: swagger-jsdoc escaneia
  * os blocos de comentário `@openapi` posicionados diretamente acima de cada
@@ -33,10 +33,10 @@ const path = require("path");
 const definition = {
   openapi: "3.0.3",
   info: {
-    title: "Kapuã QRNG — API Pública",
+    title: "Kuapoã QRNG — API Pública",
     version: "1.0.0",
     description:
-      "API pública do gerador quântico de números aleatórios (QRNG) do Kapuã/Dobslit. " +
+      "API pública do gerador quântico de números aleatórios (QRNG) do Kuapoã/Dobslit. " +
       "Fonte física: FPGA Red Pitaya, stream uint32 little-endian, sem conditioning " +
       "(confirmado no código-fonte do pipeline físico). " +
       "Bytes brutos são servidos sem processamento adicional; a avaliação de min-entropia " +
@@ -319,7 +319,7 @@ function buildPublicSpec() {
     ...full,
     info: {
       ...full.info,
-      title: "Kapuã QRNG — API Pública",
+      title: "Kuapoã QRNG — API Pública",
     },
     servers: full.servers.filter((s) => !s.url.includes("127.0.0.1")),
     tags: full.tags.filter((t) => t.name !== "Admin"),
@@ -338,7 +338,7 @@ function buildInternalAdminSpec() {
     ...full,
     info: {
       ...full.info,
-      title: "Kapuã QRNG — API Administrativa Interna",
+      title: "Kuapoã QRNG — API Administrativa Interna",
       description:
         "Documentação da API administrativa (role=admin). NÃO É pública -- " +
         "requer sessão JWT com role=admin (ver bearerAuthJWT). Servida apenas " +

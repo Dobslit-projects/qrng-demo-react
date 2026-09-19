@@ -17,9 +17,9 @@ test.describe("navegação pública", () => {
     expect(errors).toEqual([]);
   });
 
-  test("abas públicas navegáveis (Kapuã, Representações Visuais, Dados, Aplicações, Teste NIST)", async ({ page }) => {
+  test("abas públicas navegáveis (Kuapoã, Representações Visuais, Dados, Aplicações, Teste NIST)", async ({ page }) => {
     await page.goto("/qrng/", { waitUntil: "domcontentloaded" });
-    for (const name of ["Representações Visuais", "Dados", "Aplicações", "Teste NIST", "Kapuã"]) {
+    for (const name of ["Representações Visuais", "Dados", "Aplicações", "Teste NIST", "Kuapoã"]) {
       await nav(page, name);
       await expect(page.locator("body")).toBeVisible();
       await page.waitForTimeout(300);
@@ -28,7 +28,7 @@ test.describe("navegação pública", () => {
 });
 
 test.describe("Swagger / ReDoc em navegador real", () => {
-  test("Swagger UI renderiza a spec (título Kapuã aparece na página)", async ({ page }) => {
+  test("Swagger UI renderiza a spec (título Kuapoã aparece na página)", async ({ page }) => {
     const errors = [];
     page.on("pageerror", (e) => errors.push(e.message));
     await page.goto("/qrng/v1/docs/", { waitUntil: "domcontentloaded" });

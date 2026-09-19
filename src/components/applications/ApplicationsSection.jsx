@@ -2,7 +2,7 @@ import { useState, useContext, useRef, useEffect } from "react";
 import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
 import {
-  fetchQrngBytes, bytesToUint32Array,
+  fetchQrngBytes, fetchQrngBytesInChunks, bytesToUint32Array,
   uint32ToFloat, uniformIntFromBytes, errorMessage,
 } from "../../lib/qrngHelper";
 import Btn from "../ui/Btn";
@@ -39,7 +39,7 @@ function SourceBadge({ source, latencyMs }) {
   if (!source && !latencyMs) return null;
   return (
     <span style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>
-      {source ? `⚛ ${source}` : "⚛ Kapuã QRNG"}
+      {source ? `⚛ ${source}` : "⚛ Kuapoã QRNG"}
       {latencyMs != null ? ` · ${latencyMs}ms` : ""}
     </span>
   );
@@ -169,7 +169,7 @@ function KeyCard({ source }) {
         </div>
       </div>
       <p style={{ margin: 0, fontSize: 12, color: theme.textDim, fontFamily: sans }}>
-        Gere chaves e sementes criptográficas a partir de entropia física fornecida pelo Kapuã.
+        Gere chaves e sementes criptográficas a partir de entropia física fornecida pelo Kuapoã.
       </p>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         {keyPresets.map(p => <SizeBtn key={p.bytes} label={p.label} active={size === p.bytes} onClick={() => { setSize(p.bytes); setHex(""); setMeta(null); }} />)}
@@ -228,7 +228,7 @@ function AISeedCard({ source }) {
       </div>
       <p style={{ margin: 0, fontSize: 12, color: theme.textDim, fontFamily: sans }}>
         Modelos de IA usam aleatoriedade em inicialização de pesos, divisão de datasets e experimentos.
-        O Kapuã fornece seeds baseadas em entropia física para experimentos mais robustos e reprodutíveis.
+        O Kuapoã fornece seeds baseadas em entropia física para experimentos mais robustos e reprodutíveis.
       </p>
       <Btn onClick={generate} color={theme.quantum} disabled={busy || blockedByFallback}>{busy ? "Gerando..." : "Gerar seed para IA"}</Btn>
       {blockedByFallback && <ErrMsg msg="GERAÇÃO OPERACIONAL DESABILITADA — validação estatística da fonte (restart campaign, health tests SP 800-90B) ainda pendente." />}
@@ -284,7 +284,7 @@ function MonteCarloCard({ source }) {
     setBusy(true); setErr(""); setResult(null);
     try {
       const bytesNeeded = nPoints * 8;
-      const r = await fetchQrngBytes(bytesNeeded, source);
+      const r = await fetchQrngBytesInChunks(bytesNeeded, source);
       const u32s = bytesToUint32Array(r.bytes);
 
       let inside = 0;
@@ -343,7 +343,7 @@ function MonteCarloCard({ source }) {
       </div>
       <p style={{ margin: 0, fontSize: 12, color: theme.textDim, fontFamily: sans }}>
         Estime π usando pontos gerados por entropia quântica e visualize o comportamento estatístico da amostragem.
-        Cada ponto usa 8 bytes do Kapuã.
+        Cada ponto usa 8 bytes do Kuapoã.
       </p>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         {[1000, 10000, 100000].map(n => (
@@ -394,7 +394,7 @@ function RaffleCard({ source }) {
   };
 
   const voucher = result
-    ? `Sorteio Kapuã/Dobslit | Vencedor: ${result.winner} | Participantes: ${result.total} | Timestamp: ${result.ts} | Source: ${result.meta?.source ?? "Kapuã QRNG"} | Bytes: ${result.meta?.hex?.slice(0, 16)}... | Req: ${result.meta?.requestId ?? "n/a"}`
+    ? `Sorteio Kuapoã/Dobslit | Vencedor: ${result.winner} | Participantes: ${result.total} | Timestamp: ${result.ts} | Source: ${result.meta?.source ?? "Kuapoã QRNG"} | Bytes: ${result.meta?.hex?.slice(0, 16)}... | Req: ${result.meta?.requestId ?? "n/a"}`
     : "";
 
   const copyVoucher = async () => {
@@ -443,7 +443,7 @@ function RaffleCard({ source }) {
             <div style={{ fontSize: 9, color: theme.textMuted, fontFamily: mono, marginBottom: 6 }}>COMPROVANTE</div>
             <div style={{ fontSize: 10, color: "#5b96cc", fontFamily: mono, lineHeight: 1.6, wordBreak: "break-all" }}>
               {`Timestamp: ${result.ts}`}<br />
-              {`Source: ${result.meta?.source ?? "Kapuã QRNG"}`}<br />
+              {`Source: ${result.meta?.source ?? "Kuapoã QRNG"}`}<br />
               {`Bytes: ${result.meta?.hex?.slice(0, 32)}...`}<br />
               {result.meta?.requestId && `Req-ID: ${result.meta.requestId}`}
             </div>
@@ -498,7 +498,7 @@ function GamesCard({ source }) {
         <Badge color={theme.quantum}>QRNG</Badge>
       </div>
       <p style={{ margin: 0, fontSize: 12, color: theme.textDim, fontFamily: sans }}>
-        Experimente moeda e dado alimentados por entropia quântica. Cada resultado usa bytes do Kapuã/backend.
+        Experimente moeda e dado alimentados por entropia quântica. Cada resultado usa bytes do Kuapoã/backend.
       </p>
       <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
         {/* Coin */}
@@ -624,7 +624,7 @@ function RandomWalkCard({ source }) {
         <Badge color={theme.quantum}>QRNG</Badge>
       </div>
       <p style={{ margin: 0, fontSize: 12, color: theme.textDim, fontFamily: sans }}>
-        Cada passo usa 2 bits do Kapuã: 00=cima, 01=baixo, 10=esquerda, 11=direita.
+        Cada passo usa 2 bits do Kuapoã: 00=cima, 01=baixo, 10=esquerda, 11=direita.
         Verde = início · Vermelho = posição final.
       </p>
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
@@ -736,9 +736,9 @@ export default function ApplicationsSection() {
 
         {/* Intro */}
         <div style={{ ...card, background: "linear-gradient(135deg, #0a1628, #0d1f3c)", border: `1px solid ${theme.quantum}25` }}>
-          <div style={{ fontSize: 18, fontWeight: 800, fontFamily: grotesk, color: "#fff" }}>Aplicações Kapuã</div>
+          <div style={{ fontSize: 18, fontWeight: 800, fontFamily: grotesk, color: "#fff" }}>Aplicações Kuapoã</div>
           <p style={{ margin: 0, fontSize: 13, color: "#aac4e8", lineHeight: 1.75, fontFamily: sans }}>
-            Explore demonstrações práticas da aleatoriedade quântica do Kapuã. Todas as aplicações
+            Explore demonstrações práticas da aleatoriedade quântica do Kuapoã. Todas as aplicações
             usam bytes fornecidos pelo QRNG/backend da Dobslit — incluindo o fallback interno quando a
             FPGA não estiver disponível. Nenhuma aplicação usa serviços externos de aleatoriedade.
           </p>

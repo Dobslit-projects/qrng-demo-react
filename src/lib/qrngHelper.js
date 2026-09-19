@@ -16,7 +16,7 @@ import { QRNG_PRECOLLECTED, QRNG_PRECOLLECTED_PROVENANCE } from "../qrngFallback
  * consolidação (mudar QUAL rota cada consumidor usa é uma decisão de
  * segurança/arquitetura separada, fora do escopo de um refactor mecânico):
  *   - fetchQrngBytes(count, source): usada pelas páginas centrais
- *     (Representações Visuais, Dados, Kapuã) — respeita a fonte escolhida
+ *     (Representações Visuais, Dados, Kuapoã) — respeita a fonte escolhida
  *     em Configurações (remote/fpga/pre-collected) via API_ROUTES.
  *   - fetchQrngBytesViaToken(count): usada pelas aplicações da aba
  *     "Aplicações" (Dado, Moeda, Loteria, Bitmap, Seed, Monte Carlo Pi,
@@ -134,7 +134,7 @@ function decodeQrngJsonResponse(json, t0) {
 
 /**
  * Busca N bytes da fonte QRNG ativa (Configurações: remote/fpga/pre-collected).
- * Usada pelas páginas centrais (Representações Visuais, Dados, Kapuã).
+ * Usada pelas páginas centrais (Representações Visuais, Dados, Kuapoã).
  */
 export async function fetchQrngBytes(byteCount, source = "remote") {
   if (source === "pre-collected") {
@@ -224,6 +224,45 @@ export async function fetchQrngRawBytesViaToken(byteCount) {
     throw new Error(body.message || body.error || `QRNG API error ${r.status}`);
   }
   return decodeRawResponse(await r.arrayBuffer(), r, t0);
+}
+
+// ─── Requisições grandes em lotes (evita 413 REQUEST_TOO_LARGE) ────────────
+//
+// O endpoint público (/qrng/api*) limita bytes por requisição
+// (PUBLIC_MAX_BYTES_PER_REQUEST no servidor, padrão 64 KiB) -- pedir mais do
+// que isso numa única chamada (ex.: Monte Carlo com 100.000 pontos = 800.000
+// bytes) resultava no erro 413 REQUEST_TOO_LARGE exposto cru na UI. As duas
+// funções abaixo dividem pedidos grandes em lotes sequenciais de no máximo
+// `chunkSize` bytes e concatenam o resultado, preservando a mesma fonte;
+// pré-coletado (limite fixo PRECOLLECTED_LIMIT) é repassado sem lote.
+const SAFE_CHUNK_BYTES = 65536; // <= PUBLIC_MAX_BYTES_PER_REQUEST padrão do servidor
+
+async function fetchInChunks(fetchFn, byteCount, source, chunkSize) {
+  if (source === "pre-collected" || byteCount <= chunkSize) {
+    return fetchFn(byteCount, source);
+  }
+  const out = new Uint8Array(byteCount);
+  let offset = 0;
+  let latencyMs = 0;
+  let last = null;
+  while (offset < byteCount) {
+    const n = Math.min(chunkSize, byteCount - offset);
+    last = await fetchFn(n, source);
+    out.set(last.bytes, offset);
+    offset += n;
+    latencyMs += last.latencyMs;
+  }
+  return { ...last, bytes: out, hex: bytesToHex(out), latencyMs };
+}
+
+/** Como fetchQrngBytes, mas divide pedidos grandes em lotes <= chunkSize (evita 413 REQUEST_TOO_LARGE). */
+export async function fetchQrngBytesInChunks(byteCount, source = "remote", chunkSize = SAFE_CHUNK_BYTES) {
+  return fetchInChunks(fetchQrngBytes, byteCount, source, chunkSize);
+}
+
+/** Como fetchQrngRawBytes, mas divide pedidos grandes em lotes <= chunkSize (evita 413 REQUEST_TOO_LARGE). */
+export async function fetchQrngRawBytesInChunks(byteCount, source = "remote", chunkSize = SAFE_CHUNK_BYTES) {
+  return fetchInChunks(fetchQrngRawBytes, byteCount, source, chunkSize);
 }
 
 // ─── Conversões derivadas (bytes → hex / uint32 / float / int) ─────────────

@@ -5,6 +5,9 @@
 }
 
 html, body, #root {
-  height: 100vh;
+  height: 100vh; /* fallback para navegadores sem suporte a dvh */
+  height: 100dvh; /* viewport dinâmica -- evita corte de conteúdo no mobile
+                     quando a barra de endereço recolhe/expande (100vh fixo
+                     ficava maior que a área visível e travava a rolagem) */
   overflow: hidden;
 }

@@ -117,7 +117,7 @@ test.describe("faixa personalizada", () => {
 });
 
 test.describe("docs", () => {
-  test("OpenAPI 3.x, título Kapuã, RandomResponse.provenance required, sem rotas /admin", async ({ request }) => {
+  test("OpenAPI 3.x, título Kuapoã, RandomResponse.provenance required, sem rotas /admin", async ({ request }) => {
     const s = await (await request.get(`/qrng/v1/openapi.json`)).json();
     expect(s.openapi).toMatch(/^3\./);
     expect(s.info.title).toContain("Kapu");

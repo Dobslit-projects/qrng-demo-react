@@ -102,7 +102,7 @@ test.describe("OpenAPI, Swagger, ReDoc", () => {
     const errors = [];
     page.on("pageerror", (e) => errors.push(e.message));
     await page.goto("/qrng/v1/docs/");
-    await expect(page).toHaveTitle(/Kapuã/);
+    await expect(page).toHaveTitle(/Kuapoã/);
     expect(errors).toEqual([]);
   });
 

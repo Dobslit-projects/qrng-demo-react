@@ -1,7 +1,7 @@
 import { useState, useContext } from "react";
 import { theme, formatBytes } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
-import { fetchQrngBytes, fetchQrngRawBytes, readUint32LE, PRECOLLECTED_LIMIT } from "../../lib/qrngHelper";
+import { fetchQrngBytesInChunks, fetchQrngRawBytesInChunks, readUint32LE, PRECOLLECTED_LIMIT } from "../../lib/qrngHelper";
 import Btn from "../ui/Btn";
 
 const MONO = "'IBM Plex Mono', monospace";
@@ -312,8 +312,8 @@ export default function DataSection() {
       // exatos). Demais modos: JSON hex (rejection sampling etc. operam sobre
       // os bytes decodificados). Ver qrngHelper.js item 2.
       const result  = snap.mode === "raw"
-        ? await fetchQrngRawBytes(needed, qrngSource)
-        : await fetchQrngBytes(needed, qrngSource);
+        ? await fetchQrngRawBytesInChunks(needed, qrngSource)
+        : await fetchQrngBytesInChunks(needed, qrngSource);
       const { bytes } = result;
       const latencyMs = result.latencyMs;
       const source    = result.source ?? (qrngSource === "pre-collected" ? "pré-coletado" : "qrng");
@@ -324,15 +324,15 @@ export default function DataSection() {
       let filename;
 
       if (snap.mode === "raw") {
-        filename = `kuapua_qrng_raw_${formatBytes(snap.dlSize).replace(" ", "")}.bin`;
+        filename = `kuapoa_qrng_raw_${formatBytes(snap.dlSize).replace(" ", "")}.bin`;
 
       } else if (snap.mode === "hex") {
-        filename = `kuapua_qrng_hex_${snap.dlSize}bytes.${snap.hexFmt}`;
+        filename = `kuapoa_qrng_hex_${snap.dlSize}bytes.${snap.hexFmt}`;
 
       } else if (snap.mode === "uint8") {
         numbers = Array.from(bytes);
         bytesConsumed = bytes.length;
-        filename = `kuapua_qrng_uint8_${snap.dlSize}bytes.${snap.u8Fmt}`;
+        filename = `kuapoa_qrng_uint8_${snap.dlSize}bytes.${snap.u8Fmt}`;
 
       } else if (snap.mode === "range") {
         const res = snap.rAllowRepeats
@@ -340,12 +340,12 @@ export default function DataSection() {
           : genWithoutRepeats(bytes, snap.rMin, snap.rMax, snap.rCount);
         numbers = snap.rSort ? [...res.nums].sort((a, b) => a - b) : res.nums;
         bytesConsumed = res.bytesConsumed;
-        filename = `kuapua_qrng_range_${snap.rMin}_${snap.rMax}_${snap.rCount}nums.${snap.rFmt}`;
+        filename = `kuapoa_qrng_range_${snap.rMin}_${snap.rMax}_${snap.rCount}nums.${snap.rFmt}`;
 
       } else if (snap.mode === "montecarlo") {
         numbers = genMonteCarlo(bytes, snap.mcCount);
         bytesConsumed = numbers.length * 4;
-        filename = `kuapua_qrng_montecarlo_${snap.mcCount}.${snap.mcFmt}`;
+        filename = `kuapoa_qrng_montecarlo_${snap.mcCount}.${snap.mcFmt}`;
       }
 
       setResultData({ bytes, numbers, meta: { ...snap, bytesConsumed, source, latencyMs, filename } });

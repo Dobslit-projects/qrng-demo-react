@@ -20,7 +20,7 @@ function AppContent() {
   return (
     <div
       style={{
-        height: "100vh",
+        height: "100%", // preenche #root (index.css já resolve 100vh/100dvh do mobile)
         overflow: "hidden",
         display: "flex",
         flexDirection: "column",
@@ -33,7 +33,7 @@ function AppContent() {
       <HardwareStatusBar />
       <FallbackBanner />
       <SectionNav />
-      <div style={{ flex: 1, overflow: "auto", padding: NO_PADDING_PAGES.has(activePage) ? 0 : "12px 16px" }}>
+      <div style={{ flex: 1, overflow: "auto", WebkitOverflowScrolling: "touch", padding: NO_PADDING_PAGES.has(activePage) ? 0 : "12px 16px" }}>
         {activePage === "kapua"        && <KapuaSection />}
         {activePage === "visuals"      && <VisuaisSection />}
         {activePage === "data"         && <DataSection />}

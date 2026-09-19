@@ -3,7 +3,7 @@ import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
 
 const pages = [
-  { id: "kapua",        label: "Kapu\u00e3" },
+  { id: "kapua",        label: "Kuapo\u00e3" },
   { id: "visuals",      label: "Representa\u00e7\u00f5es Visuais" },
   { id: "data",         label: "Dados" },
   { id: "applications", label: "Aplica\u00e7\u00f5es" },
@@ -25,6 +25,12 @@ export default function SectionNav() {
         gap: 4,
         justifyContent: "center",
         flexShrink: 0,
+        // Em telas estreitas os 7 rótulos (sem quebra de linha) não cabem na
+        // largura visível; sem rolagem horizontal, os botões que ultrapassam
+        // a borda ficam fora da área tocável -- pareciam "não responder" no
+        // mobile. Agora a barra rola horizontalmente em vez de estourar.
+        overflowX: "auto",
+        WebkitOverflowScrolling: "touch",
       }}
     >
       {pages.map((p) => (
@@ -44,6 +50,7 @@ export default function SectionNav() {
             transition: "all 0.2s ease",
             boxShadow: activePage === p.id ? "0 1px 4px rgba(0,0,0,0.08)" : "none",
             whiteSpace: "nowrap",
+            flexShrink: 0,
           }}
         >
           {p.label}
