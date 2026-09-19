@@ -1,10 +1,12 @@
 import { useState } from "react";
 import { theme } from "../../theme";
+import { useLanguage } from "../../contexts/LanguageContext";
 import { authLogin, authRegister } from "../../qrngApi";
 
 const mono = "'IBM Plex Mono', monospace";
 
 export default function AuthPage({ onAuth }) {
+  const { t } = useLanguage();
   const [mode, setMode]         = useState("login"); // "login" | "register"
   const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
@@ -19,8 +21,8 @@ export default function AuthPage({ onAuth }) {
     if (!email.trim() || !password) return;
 
     if (mode === "register") {
-      if (password !== confirm) return setError("As senhas não coincidem.");
-      if (password.length < 8) return setError("A senha deve ter pelo menos 8 caracteres.");
+      if (password !== confirm) return setError(t("authPasswordMismatch"));
+      if (password.length < 8) return setError(t("authPasswordTooShort"));
     }
 
     setLoading(true);
@@ -34,15 +36,15 @@ export default function AuthPage({ onAuth }) {
         onAuth({ email: res.data.email, role: res.data.role });
       } else {
         const msgs = {
-          invalid_credentials: "E-mail ou senha incorretos.",
-          email_taken:         "Este e-mail já está cadastrado.",
-          weak_password:       "A senha deve ter pelo menos 8 caracteres.",
-          missing_fields:      "Preencha e-mail e senha.",
+          invalid_credentials: t("authInvalidCredentials"),
+          email_taken:         t("authEmailTaken"),
+          weak_password:       t("authPasswordTooShort"),
+          missing_fields:      t("authMissingFields"),
         };
-        setError(msgs[res.data.error] || res.data.message || "Erro desconhecido.");
+        setError(msgs[res.data.error] || res.data.message || t("authUnknownError"));
       }
     } catch {
-      setError("Não foi possível conectar ao servidor.");
+      setError(t("authConnectionError"));
     } finally {
       setLoading(false);
     }
@@ -70,12 +72,12 @@ export default function AuthPage({ onAuth }) {
         }}
       >
         <div style={{ fontSize: 15, fontWeight: 700, color: theme.text, fontFamily: mono, marginBottom: 6 }}>
-          QRNG API — Área do Desenvolvedor
+          {t("devAreaTitle")}
         </div>
         <div style={{ fontSize: 11, color: theme.textDim, lineHeight: 1.7 }}>
           {mode === "login"
-            ? "Faça login para acessar seu token e os logs de uso."
-            : "Crie uma conta para obter acesso à API de aleatoriedade quântica."}
+            ? t("authLoginPrompt")
+            : t("authRegisterPrompt")}
         </div>
       </div>
 
@@ -101,7 +103,7 @@ export default function AuthPage({ onAuth }) {
                 transition: "all 0.15s",
               }}
             >
-              {m === "login" ? "Entrar" : "Criar conta"}
+              {m === "login" ? t("authLogin") : t("authCreateAccount")}
             </button>
           ))}
         </div>
@@ -111,7 +113,7 @@ export default function AuthPage({ onAuth }) {
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            placeholder="E-mail"
+            placeholder={t("authEmailPlaceholder")}
             required
             autoComplete="email"
             style={inputStyle}
@@ -120,7 +122,7 @@ export default function AuthPage({ onAuth }) {
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            placeholder="Senha"
+            placeholder={t("authPasswordPlaceholder")}
             required
             autoComplete={mode === "login" ? "current-password" : "new-password"}
             style={inputStyle}
@@ -130,7 +132,7 @@ export default function AuthPage({ onAuth }) {
               type="password"
               value={confirm}
               onChange={(e) => setConfirm(e.target.value)}
-              placeholder="Confirmar senha"
+              placeholder={t("authConfirmPasswordPlaceholder")}
               required
               autoComplete="new-password"
               style={inputStyle}
@@ -160,18 +162,18 @@ export default function AuthPage({ onAuth }) {
               marginTop: 4,
             }}
           >
-            {loading ? "Aguarde..." : mode === "login" ? "Entrar" : "Criar conta"}
+            {loading ? t("authWait") : mode === "login" ? t("authLogin") : t("authCreateAccount")}
           </button>
         </form>
 
         {mode === "login" && (
           <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono, textAlign: "center", lineHeight: 1.6 }}>
-            Sem conta?{" "}
+            {t("authNoAccount")}{" "}
             <span
               onClick={() => { setMode("register"); setError(null); }}
               style={{ color: theme.quantum, cursor: "pointer", textDecoration: "underline" }}
             >
-              Cadastre-se
+              {t("authSignUp")}
             </span>
           </div>
         )}

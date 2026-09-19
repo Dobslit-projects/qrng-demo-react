@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { theme, formatBytes } from "../../theme";
+import { useLanguage } from "../../contexts/LanguageContext";
 import { devGetRequests } from "../../qrngApi";
 
 const mono = "'IBM Plex Mono', monospace";
@@ -24,10 +25,10 @@ function StatusBadge({ code }) {
   );
 }
 
-function formatDate(iso) {
+function formatDate(iso, lang) {
   if (!iso) return "-";
   const d = new Date(iso);
-  return d.toLocaleString("pt-BR", {
+  return d.toLocaleString(lang === "en" ? "en-US" : "pt-BR", {
     day: "2-digit", month: "2-digit",
     hour: "2-digit", minute: "2-digit", second: "2-digit",
   });
@@ -69,6 +70,7 @@ function exportCsv(rows) {
 }
 
 export default function RequestLogsTable({ requests }) {
+  const { t, lang } = useLanguage();
   const [exporting, setExporting] = useState(false);
 
   async function handleExport() {
@@ -92,7 +94,7 @@ export default function RequestLogsTable({ requests }) {
         }}
       >
         <span style={{ fontSize: 14, fontWeight: 700, color: theme.text, fontFamily: mono }}>
-          Chamadas Recentes
+          {t("rltRecentCalls")}
         </span>
         <div
           style={{
@@ -106,7 +108,7 @@ export default function RequestLogsTable({ requests }) {
             borderRadius: 8,
           }}
         >
-          Nenhuma chamada registrada ainda.
+          {t("rltNoCallsYet")}
         </div>
       </div>
     );
@@ -126,7 +128,7 @@ export default function RequestLogsTable({ requests }) {
     >
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12 }}>
         <span style={{ fontSize: 14, fontWeight: 700, color: theme.text, fontFamily: mono }}>
-          Chamadas Recentes
+          {t("rltRecentCalls")}
         </span>
         <button
           onClick={handleExport}
@@ -144,7 +146,7 @@ export default function RequestLogsTable({ requests }) {
             whiteSpace: "nowrap",
           }}
         >
-          {exporting ? "Exportando..." : "Exportar CSV"}
+          {exporting ? t("rltExporting") : t("rltExportCsv")}
         </button>
       </div>
 
@@ -159,7 +161,7 @@ export default function RequestLogsTable({ requests }) {
         >
           <thead>
             <tr>
-              {["request_id", "endpoint", "bytes", "formato", "status", "tempo", "data"].map((h) => (
+              {["request_id", "endpoint", "bytes", t("rltFormat"), "status", t("rltTime"), t("rltDate")].map((h) => (
                 <th
                   key={h}
                   style={{
@@ -206,7 +208,7 @@ export default function RequestLogsTable({ requests }) {
                   {r.duration_ms != null ? `${r.duration_ms}ms` : "—"}
                 </td>
                 <td style={{ padding: "7px 10px", color: theme.textMuted, whiteSpace: "nowrap" }}>
-                  {formatDate(r.created_at)}
+                  {formatDate(r.created_at, lang)}
                 </td>
               </tr>
             ))}

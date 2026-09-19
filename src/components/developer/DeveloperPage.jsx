@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { theme } from "../../theme";
+import { useLanguage } from "../../contexts/LanguageContext";
 import { authMe, devGetToken, devGetUsage, devGetRequests, devGetUpstreamStatus } from "../../qrngApi";
 import AuthPage from "./AuthPage";
 import TokenCard from "./TokenCard";
@@ -13,28 +14,29 @@ const mono = "'IBM Plex Mono', monospace";
 const BASE_URL = "https://bongo.dobslit.com/qrng/v1";
 
 function DocsCard() {
+  const { t } = useLanguage();
   const [copied, setCopied] = useState(null);
   const token = localStorage.getItem("qrng_api_token") || "SEU_TOKEN";
 
   const examples = [
     {
       id: "random",
-      label: "Gerar bytes aleatórios (hex)",
+      label: t("devExRandomHex"),
       code: `curl "${BASE_URL}/random?bytes=32&format=hex" \\\n  -H "Authorization: Bearer ${token}"`,
     },
     {
       id: "base64",
-      label: "Gerar bytes aleatórios (base64)",
+      label: t("devExRandomBase64"),
       code: `curl "${BASE_URL}/random?bytes=64&format=base64" \\\n  -H "Authorization: Bearer ${token}"`,
     },
     {
       id: "health",
-      label: "Status do QRNG",
+      label: t("devExHealth"),
       code: `curl "${BASE_URL}/health" \\\n  -H "Authorization: Bearer ${token}"`,
     },
     {
       id: "usage",
-      label: "Consultar uso do token",
+      label: t("devExUsage"),
       code: `curl "${BASE_URL}/me/usage" \\\n  -H "Authorization: Bearer ${token}"`,
     },
   ];
@@ -59,16 +61,16 @@ function DocsCard() {
         }}
       >
         <span style={{ fontSize: 14, fontWeight: 700, color: theme.text, fontFamily: mono }}>
-          Endpoints disponíveis
+          {t("devEndpointsAvailable")}
         </span>
         {[
-          ["GET",  "/v1/random",          "?bytes=N&format=hex|base64|uint8", "Bytes aleatórios (máx. 1 MiB)"],
-          ["GET",  "/v1/health",          "", "Status do QRNG upstream"],
-          ["GET",  "/v1/me/token",        "", "Informações do seu token"],
-          ["GET",  "/v1/me/usage",        "", "Estatísticas de uso"],
-          ["GET",  "/v1/me/requests",     "?limit=20", "Histórico de chamadas"],
-          ["POST", "/v1/me/token/rotate", "", "Regenerar token"],
-          ["POST", "/v1/me/token/revoke", "", "Revogar token"],
+          ["GET",  "/v1/random",          "?bytes=N&format=hex|base64|uint8", t("devEpRandomDesc")],
+          ["GET",  "/v1/health",          "", t("devEpHealthDesc")],
+          ["GET",  "/v1/me/token",        "", t("devEpTokenDesc")],
+          ["GET",  "/v1/me/usage",        "", t("devEpUsageDesc")],
+          ["GET",  "/v1/me/requests",     "?limit=20", t("devEpRequestsDesc")],
+          ["POST", "/v1/me/token/rotate", "", t("devEpRotateDesc")],
+          ["POST", "/v1/me/token/revoke", "", t("devEpRevokeDesc")],
         ].map(([method, path, params, desc]) => (
           <div
             key={path + method}
@@ -107,7 +109,7 @@ function DocsCard() {
         }}
       >
         <span style={{ fontSize: 14, fontWeight: 700, color: theme.text, fontFamily: mono }}>
-          Exemplos de uso
+          {t("devUsageExamplesTitle")}
         </span>
         {examples.map((ex) => (
           <div key={ex.id} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -131,7 +133,7 @@ function DocsCard() {
                   fontSize: 10, fontFamily: mono, cursor: "pointer",
                 }}
               >
-                {copied === ex.id ? "Copiado!" : "Copiar"}
+                {copied === ex.id ? t("apCopied") : t("apCopy")}
               </button>
             </div>
           </div>
@@ -144,18 +146,18 @@ function DocsCard() {
           padding: "14px 18px", fontSize: 11, color: theme.textDim, fontFamily: mono, lineHeight: 1.7,
         }}
       >
-        <strong style={{ color: theme.quantum }}>Autenticação:</strong> Chamadas machine-to-machine
-        usam o header{" "}
+        <strong style={{ color: theme.quantum }}>{t("devAuthTitle")}</strong> {t("devAuthDescPrefix")}{" "}
         <code style={{ color: theme.quantum, background: theme.quantum + "14", padding: "1px 6px", borderRadius: 4 }}>
           Authorization: Bearer &lt;api_token&gt;
         </code>
-        . O token de API não expira, mas pode ser regenerado ou revogado na aba Token.
+        . {t("devAuthDescSuffix")}
       </div>
     </div>
   );
 }
 
 export default function DeveloperPage() {
+  const { t } = useLanguage();
   const [authChecked, setAuthChecked] = useState(false);
   const [user, setUser]               = useState(null); // { id, email, role }
   const [activeTab, setActiveTab]     = useState("token");
@@ -198,14 +200,14 @@ export default function DeveloperPage() {
         setUser(null);
         setTokenInfo(null);
       } else {
-        setApiError("Não foi possível carregar informações do token.");
+        setApiError(t("devTokenLoadError"));
       }
     } catch {
-      setApiError("Servidor de tokens indisponível.");
+      setApiError(t("devTokenServerDown"));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [t]);
 
   const loadUsage = useCallback(async () => {
     try {
@@ -258,8 +260,8 @@ export default function DeveloperPage() {
   const TABS = [
     { id: "token",    label: "Token" },
     { id: "notebook", label: "Notebook" },
-    { id: "uso",      label: "Uso" },
-    { id: "logs",     label: "Chamadas" },
+    { id: "uso",      label: t("devTabUsage") },
+    { id: "logs",     label: t("devTabCalls") },
     { id: "docs",     label: "Docs" },
     ...(user?.role === "admin" ? [{ id: "admin", label: "Admin" }] : []),
   ];
@@ -271,7 +273,7 @@ export default function DeveloperPage() {
   if (!authChecked) {
     return (
       <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center" }}>
-        <div style={{ fontSize: 12, color: theme.textMuted, fontFamily: mono }}>Verificando sessão...</div>
+        <div style={{ fontSize: 12, color: theme.textMuted, fontFamily: mono }}>{t("devCheckingSession")}</div>
       </div>
     );
   }
@@ -303,7 +305,7 @@ export default function DeveloperPage() {
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 8 }}>
           <div>
             <div style={{ fontSize: 16, fontWeight: 700, color: theme.text, fontFamily: mono }}>
-              QRNG API — Área do Desenvolvedor
+              {t("devAreaTitle")}
             </div>
             <div style={{ fontSize: 11, color: theme.textDim, marginTop: 3 }}>
               {user.email}
@@ -319,10 +321,10 @@ export default function DeveloperPage() {
               const s     = upstreamStatus?.current?.status;
               const color = s === "up" ? theme.success : s === "down" ? theme.danger : theme.textMuted;
               const label = s === "up"
-                ? `● FPGA Online${upstreamStatus.current.responseMs != null ? ` (${upstreamStatus.current.responseMs}ms)` : ""}`
-                : s === "down" ? "● FPGA Offline" : "● FPGA …";
+                ? `${t("devFpgaOnline")}${upstreamStatus.current.responseMs != null ? ` (${upstreamStatus.current.responseMs}ms)` : ""}`
+                : s === "down" ? t("devFpgaOffline") : t("devFpgaChecking");
               const title = s === "up" && upstreamStatus.uptime_24h_pct != null
-                ? `Uptime 24h: ${upstreamStatus.uptime_24h_pct}%`
+                ? `${t("devUptime24h")}: ${upstreamStatus.uptime_24h_pct}%`
                 : undefined;
               return (
                 <span
@@ -357,7 +359,7 @@ export default function DeveloperPage() {
                 color: theme.textMuted, fontFamily: mono, fontSize: 10, cursor: "pointer",
               }}
             >
-              Sair
+              {t("devLogout")}
             </button>
           </div>
         </div>
@@ -365,22 +367,22 @@ export default function DeveloperPage() {
 
       {/* Tabs */}
       <div style={{ display: "flex", gap: 4, marginBottom: 12, flexShrink: 0 }}>
-        {TABS.map((t) => (
+        {TABS.map((tabItem) => (
           <button
-            key={t.id}
-            onClick={() => setActiveTab(t.id)}
+            key={tabItem.id}
+            onClick={() => setActiveTab(tabItem.id)}
             style={{
               padding: "7px 16px",
               borderRadius: 8,
-              border: activeTab === t.id ? `1px solid ${theme.border}` : "1px solid transparent",
-              background: activeTab === t.id ? theme.surface : "transparent",
-              color: activeTab === t.id ? theme.text : theme.textMuted,
+              border: activeTab === tabItem.id ? `1px solid ${theme.border}` : "1px solid transparent",
+              background: activeTab === tabItem.id ? theme.surface : "transparent",
+              color: activeTab === tabItem.id ? theme.text : theme.textMuted,
               fontSize: 11, fontWeight: 600, fontFamily: mono,
               cursor: "pointer", transition: "all 0.15s",
-              boxShadow: activeTab === t.id ? "0 1px 4px rgba(0,0,0,0.08)" : "none",
+              boxShadow: activeTab === tabItem.id ? "0 1px 4px rgba(0,0,0,0.08)" : "none",
             }}
           >
-            {t.label}
+            {tabItem.label}
           </button>
         ))}
       </div>
@@ -400,8 +402,8 @@ export default function DeveloperPage() {
           >
             <span>
               {quotaPct >= 0.95
-                ? `Cota quase esgotada — ${tokenInfo.requests_today}/${tokenInfo.quota_daily} req hoje (${Math.round(quotaPct * 100)}%). Resetará à meia-noite UTC.`
-                : `Atenção: ${Math.round(quotaPct * 100)}% da cota diária utilizada (${tokenInfo.requests_today}/${tokenInfo.quota_daily} req).`}
+                ? t("devQuotaCritical", { n: tokenInfo.requests_today, m: tokenInfo.quota_daily, pct: Math.round(quotaPct * 100) })
+                : t("devQuotaWarning", { n: tokenInfo.requests_today, m: tokenInfo.quota_daily, pct: Math.round(quotaPct * 100) })}
             </span>
             <button
               onClick={() => setQuotaBannerDismissed(true)}
@@ -426,7 +428,7 @@ export default function DeveloperPage() {
 
         {loading && (
           <div style={{ padding: 20, textAlign: "center", color: theme.textMuted, fontSize: 12, fontFamily: mono }}>
-            Carregando...
+            {t("devLoadingGeneric")}
           </div>
         )}
 
@@ -440,12 +442,12 @@ export default function DeveloperPage() {
           tokenInfo?.has_token ? (
             usage ? <UsageCard usage={usage} /> : (
               <div style={{ padding: 20, textAlign: "center", color: theme.textMuted, fontSize: 12, fontFamily: mono }}>
-                Carregando estatísticas...
+                {t("devLoadingStats")}
               </div>
             )
           ) : (
             <div style={{ padding: 20, textAlign: "center", color: theme.textMuted, fontSize: 12, fontFamily: mono }}>
-              Gere um token primeiro na aba Token.
+              {t("devGenerateTokenFirst")}
             </div>
           )
         )}
@@ -454,12 +456,12 @@ export default function DeveloperPage() {
           tokenInfo?.has_token ? (
             requests !== null ? <RequestLogsTable requests={requests} /> : (
               <div style={{ padding: 20, textAlign: "center", color: theme.textMuted, fontSize: 12, fontFamily: mono }}>
-                Carregando chamadas...
+                {t("devLoadingCalls")}
               </div>
             )
           ) : (
             <div style={{ padding: 20, textAlign: "center", color: theme.textMuted, fontSize: 12, fontFamily: mono }}>
-              Gere um token primeiro na aba Token.
+              {t("devGenerateTokenFirst")}
             </div>
           )
         )}

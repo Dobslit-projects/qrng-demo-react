@@ -1,4 +1,5 @@
 import { theme, formatBytes } from "../../theme";
+import { useLanguage } from "../../contexts/LanguageContext";
 
 const mono = "'IBM Plex Mono', monospace";
 
@@ -43,9 +44,10 @@ function StatBox({ label, value, sub }) {
 }
 
 function QuotaBar({ used, total, label, formatValue }) {
+  const { t, lang } = useLanguage();
   const pct   = total > 0 ? Math.min(100, (used / total) * 100) : 0;
   const color = pct >= 90 ? theme.danger : pct >= 70 ? theme.warning : theme.success;
-  const fmt   = formatValue || ((v) => v.toLocaleString("pt-BR"));
+  const fmt   = formatValue || ((v) => v.toLocaleString(lang === "en" ? "en-US" : "pt-BR"));
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -78,7 +80,7 @@ function QuotaBar({ used, total, label, formatValue }) {
       </div>
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
         <span style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>
-          {fmt(Math.max(0, total - used))} restantes hoje
+          {fmt(Math.max(0, total - used))} {t("ucRemainingToday")}
         </span>
       </div>
     </div>
@@ -86,6 +88,7 @@ function QuotaBar({ used, total, label, formatValue }) {
 }
 
 export default function UsageCard({ usage }) {
+  const { t, lang } = useLanguage(); // hook antes do early-return abaixo (Rules of Hooks)
   if (!usage) return null;
 
   const {
@@ -112,27 +115,27 @@ export default function UsageCard({ usage }) {
   return (
     <div style={card}>
       <span style={{ fontSize: 14, fontWeight: 700, color: theme.text, fontFamily: mono }}>
-        Uso do Token
+        {t("ucTitle")}
       </span>
 
       {/* Stats de hoje */}
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-        <StatBox label="Requests hoje" value={(requests_today || 0).toLocaleString("pt-BR")} />
-        <StatBox label="Bytes hoje"    value={formatBytes(bytes_today || 0)} />
-        <StatBox label="Requests 7d"   value={(requests_7d || 0).toLocaleString("pt-BR")} sub={formatBytes(bytes_7d || 0)} />
-        <StatBox label="Requests 30d"  value={(requests_30d || 0).toLocaleString("pt-BR")} sub={formatBytes(bytes_30d || 0)} />
+        <StatBox label={t("ucRequestsToday")} value={(requests_today || 0).toLocaleString(lang === "en" ? "en-US" : "pt-BR")} />
+        <StatBox label={t("ucBytesToday")}    value={formatBytes(bytes_today || 0)} />
+        <StatBox label={t("ucRequests7d")}   value={(requests_7d || 0).toLocaleString(lang === "en" ? "en-US" : "pt-BR")} sub={formatBytes(bytes_7d || 0)} />
+        <StatBox label={t("ucRequests30d")}  value={(requests_30d || 0).toLocaleString(lang === "en" ? "en-US" : "pt-BR")} sub={formatBytes(bytes_30d || 0)} />
       </div>
 
       {/* Barra de cota de requests */}
       <QuotaBar
-        label="Cota diária — requests"
+        label={t("ucDailyQuotaRequests")}
         used={requests_today || 0}
         total={quotaReqs}
       />
 
       {/* Barra de cota de bytes */}
       <QuotaBar
-        label="Cota diária — bytes"
+        label={t("ucDailyQuotaBytes")}
         used={bytes_today || 0}
         total={quotaBytes}
         formatValue={formatBytes}
@@ -141,14 +144,14 @@ export default function UsageCard({ usage }) {
       {/* Info adicional */}
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", paddingTop: 4, borderTop: `1px solid ${theme.border}` }}>
         <span style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>
-          Limite por req: {formatBytes(max_bytes_per_request || 1048576)}
+          {t("ucLimitPerReq")}: {formatBytes(max_bytes_per_request || 1048576)}
         </span>
         <span style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>
-          Restam hoje: {remReqs.toLocaleString("pt-BR")} req · {formatBytes(remBytes)}
+          {t("ucRemainingTodayFull")}: {remReqs.toLocaleString(lang === "en" ? "en-US" : "pt-BR")} req · {formatBytes(remBytes)}
         </span>
         {last_used_at && (
           <span style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>
-            Último uso: {new Date(last_used_at).toLocaleString("pt-BR")}
+            {t("ucLastUsedAt")}: {new Date(last_used_at).toLocaleString(lang === "en" ? "en-US" : "pt-BR")}
           </span>
         )}
       </div>

@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { theme } from "../../theme";
+import { useLanguage } from "../../contexts/LanguageContext";
 import { devCreateToken, devRotateToken, devRevokeToken } from "../../qrngApi";
 
 const mono = "'IBM Plex Mono', monospace";
@@ -39,6 +40,7 @@ function ActionBtn({ onClick, color, disabled, children }) {
 }
 
 export default function TokenCard({ tokenInfo, onTokenChange }) {
+  const { t, lang } = useLanguage();
   const [showFull, setShowFull] = useState(false);
   const [newToken, setNewToken] = useState(null);
   const [copied, setCopied]     = useState(false);
@@ -58,17 +60,17 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
         setNewToken(res.data.token);
         onTokenChange();
       } else {
-        setError(res.data.message || "Erro ao criar token.");
+        setError(res.data.message || t("tcCreateError"));
       }
     } catch {
-      setError("Não foi possível conectar ao servidor.");
+      setError(t("tcConnectionError"));
     } finally {
       setLoading(false);
     }
   }
 
   async function handleRotate() {
-    if (!confirm("Regenerar o token irá invalidar o token atual. Continuar?")) return;
+    if (!confirm(t("tcRotateConfirm"))) return;
     setLoading(true);
     setError(null);
     setNewToken(null);
@@ -80,17 +82,17 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
         setNewToken(res.data.token);
         onTokenChange();
       } else {
-        setError(res.data.message || "Erro ao regenerar token.");
+        setError(res.data.message || t("tcRotateError"));
       }
     } catch {
-      setError("Não foi possível conectar ao servidor.");
+      setError(t("tcConnectionError"));
     } finally {
       setLoading(false);
     }
   }
 
   async function handleRevoke() {
-    if (!confirm("Revogar o token irá desativar permanentemente o acesso. Continuar?")) return;
+    if (!confirm(t("tcRevokeConfirm"))) return;
     setLoading(true);
     setError(null);
     setNewToken(null);
@@ -100,10 +102,10 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
         localStorage.removeItem("qrng_api_token");
         onTokenChange();
       } else {
-        setError(res.data.message || "Erro ao revogar token.");
+        setError(res.data.message || t("tcRevokeError"));
       }
     } catch {
-      setError("Não foi possível conectar ao servidor.");
+      setError(t("tcConnectionError"));
     } finally {
       setLoading(false);
     }
@@ -130,7 +132,7 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
       {/* Header */}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
         <span style={{ fontSize: 14, fontWeight: 700, color: theme.text, fontFamily: mono }}>
-          Meu Token de API
+          {t("tcMyApiToken")}
         </span>
         {hasToken && (
           <span
@@ -145,7 +147,7 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
               border: `1px solid ${isActive ? theme.success + "40" : theme.danger + "40"}`,
             }}
           >
-            {isActive ? "● Ativo" : "● Revogado"}
+            {isActive ? t("tcActive") : t("tcRevoked")}
           </span>
         )}
       </div>
@@ -163,7 +165,7 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
             fontFamily: mono,
           }}
         >
-          Guarde seu token agora — ele não será exibido novamente após sair desta página.
+          {t("tcSaveNowWarning")}
         </div>
       )}
 
@@ -195,23 +197,23 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
             }}
           >
             <div style={{ fontSize: 13, fontWeight: 700, color: theme.text, fontFamily: mono, marginBottom: 6 }}>
-              Gere seu token de acesso
+              {t("tcGenerateTitle")}
             </div>
             <div style={{ fontSize: 11, color: theme.textDim, lineHeight: 1.7 }}>
-              Cada conta tem um token único de acesso à API. Use-o no header{" "}
+              {t("tcGenerateDescPrefix")}{" "}
               <code style={{ fontFamily: mono, color: theme.quantum, background: theme.quantum + "14", padding: "1px 5px", borderRadius: 4 }}>
                 Authorization: Bearer
               </code>{" "}
-              em todas as chamadas.
+              {t("tcGenerateDescSuffix")}
             </div>
           </div>
           <div style={{ padding: "14px 22px 12px" }}>
             <div style={{ display: "flex", flexDirection: "column", gap: 7 }}>
               {[
-                ["1 000 req/dia", "Cota diária para chamadas autenticadas"],
-                ["Até 1 MiB por req", "1 048 576 bytes — formatos hex, base64 ou uint8"],
-                ["Token permanente", "Não expira; pode ser regenerado ou revogado a qualquer momento"],
-                ["Logs e estatísticas", "Histórico completo de chamadas e uso agregado"],
+                [t("tcQuota"), t("tcQuotaDesc")],
+                [t("tcMaxSize"), t("tcMaxSizeDesc")],
+                [t("tcPermanentToken"), t("tcPermanentTokenDesc")],
+                [t("tcLogsStats"), t("tcLogsStatsDesc")],
               ].map(([label, desc]) => (
                 <div key={label} style={{ display: "flex", gap: 10, alignItems: "flex-start" }}>
                   <span style={{ color: theme.quantum, fontFamily: mono, fontSize: 11, flexShrink: 0 }}>→</span>
@@ -230,28 +232,28 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
         {!hasToken && (
           <ActionBtn onClick={handleCreate} color={theme.quantum} disabled={loading}>
-            {loading ? "Gerando..." : "Gerar Token"}
+            {loading ? t("tcGenerating") : t("tcGenerateBtn")}
           </ActionBtn>
         )}
         {hasToken && isActive && (
           <>
             <ActionBtn onClick={() => setShowFull((v) => !v)} color={theme.accent} disabled={loading}>
-              {showFull ? "Ocultar" : "Mostrar"}
+              {showFull ? t("tcHide") : t("tcShow")}
             </ActionBtn>
             <ActionBtn onClick={() => handleCopy(copyTarget)} color={theme.success} disabled={!copyTarget || loading}>
-              {copied ? "Copiado!" : "Copiar"}
+              {copied ? t("apCopied") : t("apCopy")}
             </ActionBtn>
             <ActionBtn onClick={handleRotate} color={theme.warning} disabled={loading}>
-              {loading ? "Aguarde..." : "Regenerar"}
+              {loading ? t("tcRegenerating") : t("tcRegenerateBtn")}
             </ActionBtn>
             <ActionBtn onClick={handleRevoke} color={theme.danger} disabled={loading}>
-              Revogar
+              {t("tcRevokeBtn")}
             </ActionBtn>
           </>
         )}
         {hasToken && !isActive && (
           <ActionBtn onClick={handleCreate} color={theme.quantum} disabled={loading}>
-            {loading ? "Gerando..." : "Gerar Novo Token"}
+            {loading ? t("tcGenerating") : t("tcGenerateNewBtn")}
           </ActionBtn>
         )}
       </div>
@@ -261,17 +263,17 @@ export default function TokenCard({ tokenInfo, onTokenChange }) {
         <div style={{ display: "flex", gap: 16, flexWrap: "wrap" }}>
           {tokenInfo.created_at && (
             <span style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>
-              Criado: {new Date(tokenInfo.created_at).toLocaleDateString("pt-BR")}
+              {t("tcCreatedAt")}: {new Date(tokenInfo.created_at).toLocaleDateString(lang === "en" ? "en-US" : "pt-BR")}
             </span>
           )}
           {tokenInfo.last_used_at && (
             <span style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>
-              Último uso: {new Date(tokenInfo.last_used_at).toLocaleString("pt-BR")}
+              {t("tcLastUsedAt")}: {new Date(tokenInfo.last_used_at).toLocaleString(lang === "en" ? "en-US" : "pt-BR")}
             </span>
           )}
           {tokenInfo.name && (
             <span style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>
-              Nome: {tokenInfo.name}
+              {t("tcName")}: {tokenInfo.name}
             </span>
           )}
         </div>
