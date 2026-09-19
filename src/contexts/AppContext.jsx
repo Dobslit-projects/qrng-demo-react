@@ -23,12 +23,6 @@ function loadSource() {
   return "remote";
 }
 
-export const SOURCE_LABELS = {
-  remote: "Remota (SP)",
-  fpga: "FPGA (Hardware)",
-  "pre-collected": "Pré-coletado",
-};
-
 /**
  * Polls health endpoint with hysteresis:
  * - Estado inicial é "checking" (nunca "offline") — evita o falso OFFLINE

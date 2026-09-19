@@ -1,5 +1,6 @@
 import { useContext, useState, useCallback } from "react";
-import { AppContext, SOURCE_LABELS } from "../../contexts/AppContext";
+import { AppContext } from "../../contexts/AppContext";
+import { useLanguage, SOURCE_KEY_MAP } from "../../contexts/LanguageContext";
 import { fetchHealth, API_ROUTES } from "../../qrngApi";
 import { theme, formatBytes } from "../../theme";
 import { QRNG_PRECOLLECTED } from "../../qrngFallbackData";
@@ -8,22 +9,22 @@ const SOURCES = [
   {
     key: "remote",
     icon: "\u{1F4E1}",
-    title: "Servidor Remoto (SP)",
-    desc: "Backend principal via proxy Nginx",
+    titleKey: "settSrc0Title",
+    descKey: "settSrc0Desc",
     route: "/qrng/api",
   },
   {
     key: "fpga",
     icon: "\u{1F52C}",
-    title: "FPGA (Hardware)",
-    desc: "Hardware via SSH tunnel reverso",
+    titleKey: "settSrc1Title",
+    descKey: "settSrc1Desc",
     route: "/qrng/api-fpga",
   },
   {
     key: "pre-collected",
     icon: "\u{1F4BE}",
-    title: "Fallback Local",
-    desc: "Dados pre-coletados em memoria",
+    titleKey: "settSrc2Title",
+    descKey: "settSrc2Desc",
     route: null,
   },
 ];
@@ -44,6 +45,7 @@ function StatusDot({ online, degraded }) {
 }
 
 function SourceCard({ source, isActive, health, latency, onSelect }) {
+  const { t } = useLanguage();
   const [testing, setTesting] = useState(false);
   const [testResult, setTestResult] = useState(null);
 
@@ -89,7 +91,7 @@ function SourceCard({ source, isActive, health, latency, onSelect }) {
           fontFamily: "IBM Plex Mono, monospace",
           letterSpacing: 1,
         }}>
-          ATIVA
+          {t("settActiveBadge")}
         </span>
       )}
 
@@ -103,14 +105,14 @@ function SourceCard({ source, isActive, health, latency, onSelect }) {
             fontSize: 16,
             color: theme.text,
           }}>
-            {source.title}
+            {t(source.titleKey)}
           </div>
           <div style={{
             fontFamily: "IBM Plex Mono, monospace",
             fontSize: 12,
             color: theme.textMuted,
           }}>
-            {source.desc}
+            {t(source.descKey)}
           </div>
         </div>
       </div>
@@ -127,12 +129,12 @@ function SourceCard({ source, isActive, health, latency, onSelect }) {
       }}>
         <span>
           <StatusDot online={online} degraded={degraded} />
-          {online ? "Online" : degraded ? "Degradado (buffer vazio)" : "Offline"}
+          {online ? t("settOnline") : degraded ? t("settDegraded") : t("settOffline")}
         </span>
 
         {!isFallback && source.route && (
           <span style={{ color: theme.textMuted }}>
-            Rota: {source.route}
+            {t("settRoute")}: {source.route}
           </span>
         )}
 
@@ -145,7 +147,7 @@ function SourceCard({ source, isActive, health, latency, onSelect }) {
         )}
 
         {isFallback && (
-          <span>{QRNG_PRECOLLECTED.length} bytes disponiveis</span>
+          <span>{QRNG_PRECOLLECTED.length} {t("settBytesAvailable")}</span>
         )}
       </div>
 
@@ -159,9 +161,9 @@ function SourceCard({ source, isActive, health, latency, onSelect }) {
           fontSize: 12,
           color: theme.textMuted,
         }}>
-          <span>Buffer: {formatBytes(health.buffer_bytes_available)} / {formatBytes(health.buffer_capacity)}</span>
-          <span>Gerado: {formatBytes(health.total_pushed)}</span>
-          <span>Consumido: {formatBytes(health.total_popped)}</span>
+          <span>{t("buffer")}: {formatBytes(health.buffer_bytes_available)} / {formatBytes(health.buffer_capacity)}</span>
+          <span>{t("generated")}: {formatBytes(health.total_pushed)}</span>
+          <span>{t("consumed")}: {formatBytes(health.total_popped)}</span>
         </div>
       )}
 
@@ -183,7 +185,7 @@ function SourceCard({ source, isActive, health, latency, onSelect }) {
               transition: "all 0.15s",
             }}
           >
-            {testing ? "Testando..." : "Testar Conexao"}
+            {testing ? t("settTesting") : t("settTestConnection")}
           </button>
           {testResult && (
             <span style={{
@@ -192,7 +194,7 @@ function SourceCard({ source, isActive, health, latency, onSelect }) {
               fontFamily: "IBM Plex Mono, monospace",
               color: testResult === "ok" ? theme.success : theme.danger,
             }}>
-              {testResult === "ok" ? "Conectado!" : "Falhou"}
+              {testResult === "ok" ? t("settConnected") : t("settFailed")}
             </span>
           )}
         </div>
@@ -202,6 +204,7 @@ function SourceCard({ source, isActive, health, latency, onSelect }) {
 }
 
 export default function SettingsSection() {
+  const { t } = useLanguage();
   const {
     qrngSource, setQrngSource,
     remoteHealth, remoteLatency,
@@ -231,7 +234,7 @@ export default function SettingsSection() {
           color: theme.text,
           margin: 0,
         }}>
-          Configuracoes
+          {t("settTitle")}
         </h2>
         <p style={{
           fontFamily: "IBM Plex Mono, monospace",
@@ -239,7 +242,7 @@ export default function SettingsSection() {
           color: theme.textMuted,
           margin: "6px 0 0",
         }}>
-          Selecione a fonte de dados QRNG utilizada nas analises e visualizacoes.
+          {t("settSubtitle")}
         </p>
       </div>
 
@@ -252,8 +255,8 @@ export default function SettingsSection() {
         textTransform: "uppercase",
         letterSpacing: 1,
       }}>
-        Fonte ativa: <span style={{ color: theme.quantum, fontWeight: 600 }}>
-          {SOURCE_LABELS[qrngSource]}
+        {t("settActiveSource")}: <span style={{ color: theme.quantum, fontWeight: 600 }}>
+          {t(SOURCE_KEY_MAP[qrngSource])}
         </span>
       </div>
 
@@ -282,15 +285,15 @@ export default function SettingsSection() {
         color: theme.textMuted,
         lineHeight: 1.6,
       }}>
-        <strong style={{ color: theme.textDim }}>Como funciona:</strong>
+        <strong style={{ color: theme.textDim }}>{t("settHowItWorks")}</strong>
         <br />
-        A fonte <strong>Remota</strong> conecta ao backend em SP via proxy Nginx.
+        {t("settInfoPrefix")} <strong>{t("settRemoteWord")}</strong> {t("settInfoRemoteSuffix")}
         <br />
-        A fonte <strong>FPGA</strong> conecta ao hardware via SSH tunnel reverso (porta 18002).
+        {t("settInfoPrefix")} <strong>FPGA</strong> {t("settInfoFpgaSuffix")}
         <br />
-        O <strong>Fallback</strong> usa {QRNG_PRECOLLECTED.length} bytes pre-coletados que funcionam offline.
+        {t("settInfoFallbackPrefix")} <strong>Fallback</strong> {t("settInfoFallbackSuffix", { n: QRNG_PRECOLLECTED.length })}
         <br />
-        Se a fonte ativa ficar offline, o app usa automaticamente o fallback.
+        {t("settInfoAutoFallback")}
       </div>
     </div>
   );
