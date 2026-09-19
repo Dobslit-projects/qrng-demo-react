@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { theme } from "../../theme";
+import { useLanguage } from "../../contexts/LanguageContext";
 import {
   nistStatus, nistJobs, nistJob, nistJobLog, nistRun, nistUpload,
 } from "../../qrngApi";
@@ -38,8 +39,9 @@ function StatusBadge({ status }) {
 }
 
 function PassBadge({ passed }) {
+  const { t } = useLanguage();
   if (passed === null || passed === undefined) return <span style={{ color: theme.textMuted, fontSize: 11 }}>—</span>;
-  return <span style={badge(passed ? theme.success : theme.danger)}>{passed ? "Passou" : "Falhou"}</span>;
+  return <span style={badge(passed ? theme.success : theme.danger)}>{passed ? t("nistPassed") : t("nistFailed")}</span>;
 }
 
 // Linha rotulo/valor do modal de detalhe. No escopo do modulo (nao dentro de
@@ -58,15 +60,15 @@ function H({ label, value, dim }) {
 
 // Rotulo humano para sample_origin do job NIST (proveniencia). Forward-compat
 // com a taxonomia do servico NIST corrigido: live | historical | unknown.
-function sampleOriginLabel(origin) {
+function sampleOriginLabel(origin, t) {
   const map = {
-    periodic_live: "Medida periódica da fonte ao vivo",
-    live:          "Captura ao vivo",
-    historical:    "Arquivo histórico",
-    upload:        "Upload manual",
-    unknown:       "Desconhecida",
+    periodic_live: t("nistOriginPeriodicLive"),
+    live:          t("nistOriginLive"),
+    historical:    t("nistOriginHistorical"),
+    upload:        t("nistOriginUpload"),
+    unknown:       t("nistOriginUnknown"),
   };
-  return map[origin] || (origin ? String(origin) : "Desconhecida");
+  return map[origin] || (origin ? String(origin) : t("nistOriginUnknown"));
 }
 
 // Item 4: o serviço está rodando com executor SINTÉTICO (staging fake)?
@@ -77,12 +79,13 @@ function isSyntheticEngine(status) {
 
 // Marcador inline "SINTÉTICO" para valores fake.
 function SyntheticTag() {
+  const { t } = useLanguage();
   return (
     <span style={{
       marginLeft: 6, padding: "1px 6px", borderRadius: 4, fontSize: 9, fontWeight: 700,
       fontFamily: "'IBM Plex Mono', monospace", background: theme.danger + "20", color: theme.danger,
       border: `1px solid ${theme.danger}45`,
-    }}>SINTÉTICO</span>
+    }}>{t("nistSyntheticTag")}</span>
   );
 }
 
@@ -131,11 +134,12 @@ function Sel({ value, onChange, options }) {
   );
 }
 
-const TEST_OPTIONS   = [["both","IID + não-IID"], ["iid","Apenas IID"], ["non_iid","Apenas não-IID"]];
-const FORMAT_OPTIONS = [["auto","Auto (detectar)"], ["raw","Raw/binário (.bin)"], ["u32txt","uint32 texto (.txt)"], ["bits","Bits 0/1 (.txt)"]];
+const getTestOptions = (t) => [["both",t("nistTestBoth")], ["iid",t("nistTestIidOnly")], ["non_iid",t("nistTestNonIidOnly")]];
+const getFormatOptions = (t) => [["auto",t("nistFmtAuto")], ["raw",t("nistFmtRaw")], ["u32txt",t("nistFmtU32txt")], ["bits",t("nistFmtBits")]];
 
 /* ── Detail Modal ───────────────────────────────────────────── */
 function JobModal({ job, log, onClose }) {
+  const { t } = useLanguage();
   const [tab, setTab] = useState("resumo");
 
   if (!job) return null;
@@ -156,7 +160,7 @@ function JobModal({ job, log, onClose }) {
         {/* Header */}
         <div style={{ padding: "16px 20px", borderBottom: `1px solid ${theme.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
           <div>
-            <span style={{ fontSize: 14, fontWeight: 700, fontFamily: mono }}>Job NIST</span>
+            <span style={{ fontSize: 14, fontWeight: 700, fontFamily: mono }}>{t("nistJobTitle")}</span>
             <span style={{ fontSize: 11, color: theme.textMuted, fontFamily: mono, marginLeft: 10 }}>
               {job.id?.slice(0, 8)}
             </span>
@@ -167,7 +171,7 @@ function JobModal({ job, log, onClose }) {
 
         {/* Tabs */}
         <div style={{ display: "flex", gap: 2, padding: "8px 16px", borderBottom: `1px solid ${theme.border}`, background: theme.bg }}>
-          {[["resumo","Resumo"], ["estimadores","Estimadores"], ["log","Log completo"]].map(([id, label]) => (
+          {[["resumo",t("nistTabSummary")], ["estimadores",t("nistTabEstimators")], ["log",t("nistTabFullLog")]].map(([id, label]) => (
             <button key={id} onClick={() => setTab(id)} style={{
               padding: "5px 14px", borderRadius: 6, border: "none",
               background: tab === id ? theme.quantum : "transparent",
@@ -183,57 +187,57 @@ function JobModal({ job, log, onClose }) {
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
               {/* Metadata */}
               <div>
-                <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, fontFamily: mono, marginBottom: 8 }}>ARQUIVO</div>
-                <H label="Nome original"   value={job.original_filename} />
-                <H label="Tipo de teste"   value={job.test_type} />
-                <H label="Formato"         value={job.format_detected || job.format_requested} />
-                <H label="Trigger"         value={job.trigger_type} />
-                <H label="Duração"         value={job.duration_seconds ? `${job.duration_seconds.toFixed(1)}s` : null} />
-                <H label="SHA-256 original" value={job.sha256_original?.slice(0, 16) + "…"} dim />
+                <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, fontFamily: mono, marginBottom: 8 }}>{t("nistFileSection")}</div>
+                <H label={t("nistOriginalName")}   value={job.original_filename} />
+                <H label={t("nistTestTypeLabel")}   value={job.test_type} />
+                <H label={t("nistFormatLabel")}         value={job.format_detected || job.format_requested} />
+                <H label={t("nistTriggerLabel")}         value={job.trigger_type} />
+                <H label={t("nistDurationLabel")}         value={job.duration_seconds ? `${job.duration_seconds.toFixed(1)}s` : null} />
+                <H label={t("nistSha256Label")} value={job.sha256_original?.slice(0, 16) + "…"} dim />
               </div>
 
               {/* IID */}
               {(job.test_type === "iid" || job.test_type === "both") && (
                 <div>
                   <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, fontFamily: mono, marginBottom: 8 }}>
-                    IID — <PassBadge passed={job.iid_passed} />
+                    {t("nistIidLabel")} — <PassBadge passed={job.iid_passed} />
                   </div>
                   <H label="H_original (IID)"          value={job.h_original_iid} />
                   <H label="H_bitstring (IID)"          value={job.h_bitstring_iid} />
                   <H label="min(H_original, 8×H_bit)"  value={job.h_min_iid} />
-                  <H label="Chi-square"                 value={job.chi_square_passed === null ? null : job.chi_square_passed ? "Passou" : "Falhou"} />
-                  <H label="LRS"                        value={job.lrs_passed === null ? null : job.lrs_passed ? "Passou" : "Falhou"} />
-                  <H label="Permutation"                value={job.permutation_passed === null ? null : job.permutation_passed ? "Passou" : "Falhou"} />
+                  <H label="Chi-square"                 value={job.chi_square_passed === null ? null : job.chi_square_passed ? t("nistPassed") : t("nistFailed")} />
+                  <H label="LRS"                        value={job.lrs_passed === null ? null : job.lrs_passed ? t("nistPassed") : t("nistFailed")} />
+                  <H label="Permutation"                value={job.permutation_passed === null ? null : job.permutation_passed ? t("nistPassed") : t("nistFailed")} />
                 </div>
               )}
 
               {/* non-IID — trilhas desambiguadas (item 2) */}
               {(job.test_type === "non_iid" || job.test_type === "both") && (
                 <div style={{ gridColumn: job.test_type === "non_iid" ? "1" : "1 / -1" }}>
-                  <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, fontFamily: mono, marginBottom: 8 }}>NÃO-IID</div>
+                  <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, fontFamily: mono, marginBottom: 8 }}>{t("nistNonIidLabel")}</div>
                   <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
                     <div>
-                      <H label="H_original (por símbolo de 8 bits)" value={job.h_original_non_iid} />
-                      <H label="↳ estimador limitante (original)" value={job.original_limiting_estimator} />
-                      <H label="H_bitstring (por bit)" value={job.h_bitstring_non_iid} />
-                      <H label="↳ estimador limitante (bitstring)" value={job.bitstring_limiting_estimator} />
+                      <H label={t("nistHOriginalSymbol")} value={job.h_original_non_iid} />
+                      <H label={t("nistLimitingEstimatorOriginal")} value={job.original_limiting_estimator} />
+                      <H label={t("nistHBitstringBit")} value={job.h_bitstring_non_iid} />
+                      <H label={t("nistLimitingEstimatorBitstring")} value={job.bitstring_limiting_estimator} />
                     </div>
                     <div>
-                      <H label="conversão bitstring→símbolo" value={job.bitstring_to_symbol_conversion} />
-                      <H label="h_min_non_iid = min(H_original, 8×H_bitstring)" value={job.h_min_non_iid} />
-                      <H label="trilha que limita" value={job.limiting_path} />
-                      <H label="estimador limitante (corresponde a h_min)" value={job.limiting_estimator} />
+                      <H label={t("nistBitstringConversion")} value={job.bitstring_to_symbol_conversion} />
+                      <H label={t("nistHMinNonIid")} value={job.h_min_non_iid} />
+                      <H label={t("nistLimitingPath")} value={job.limiting_path} />
+                      <H label={t("nistLimitingEstimator")} value={job.limiting_estimator} />
                     </div>
                   </div>
                   {job.iid_passed === false && (
                     <div style={{ marginTop: 8, fontSize: 10, color: theme.warning, fontFamily: mono }}>
-                      ⚠ Hipótese IID falhou → o crédito de entropia é <strong>h_min_non_iid</strong>
-                      {" "}({job.h_min_non_iid != null ? job.h_min_non_iid.toFixed(4) : "—"} bits/símbolo de 8 bits). h_min_iid NÃO é usado.
+                      {t("nistIidFailedWarningPrefix")} <strong>h_min_non_iid</strong>
+                      {" "}({job.h_min_non_iid != null ? job.h_min_non_iid.toFixed(4) : "—"} {t("nistIidFailedWarningSuffix")}
                     </div>
                   )}
                   {job.parse_incomplete && (
                     <div style={{ marginTop: 6, fontSize: 10, color: theme.danger, fontFamily: mono }}>
-                      ⚠ Saída do assessment incompleta — algum campo essencial não pôde ser extraído.
+                      {t("nistParseIncomplete")}
                     </div>
                   )}
                 </div>
@@ -252,8 +256,8 @@ function JobModal({ job, log, onClose }) {
           {tab === "estimadores" && (
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 20 }}>
               {[
-                ["TRILHA ORIGINAL (por símbolo de 8 bits)", job.estimators, job.original_limiting_estimator, "bits/símbolo"],
-                ["TRILHA BITSTRING (por bit)", job.bitstring_estimators, job.bitstring_limiting_estimator, "bits/bit"],
+                [t("nistTrackOriginal"), job.estimators, job.original_limiting_estimator, t("nistBitsPerSymbol")],
+                [t("nistTrackBitstring"), job.bitstring_estimators, job.bitstring_limiting_estimator, t("nistBitsPerBit")],
               ].map(([title, est, limName, unit]) => (
                 <div key={title}>
                   <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, fontFamily: mono, marginBottom: 12 }}>{title}</div>
@@ -263,7 +267,7 @@ function JobModal({ job, log, onClose }) {
                         borderBottom: `1px solid ${theme.border}`,
                         background: name === limName ? theme.quantum + "12" : "transparent" }}>
                         <span style={{ fontSize: 11, color: name === limName ? theme.quantum : theme.textDim, fontFamily: mono, fontWeight: name === limName ? 700 : 400 }}>
-                          {name}{name === limName ? " ◀ limita" : ""}
+                          {name}{name === limName ? ` ${t("nistLimits")}` : ""}
                         </span>
                         <span style={{ fontSize: 12, fontWeight: 700, fontFamily: mono, color: theme.quantum }}>
                           {val.toFixed(6)} {unit}
@@ -272,7 +276,7 @@ function JobModal({ job, log, onClose }) {
                     ))
                   ) : (
                     <span style={{ color: theme.textMuted, fontSize: 11, fontFamily: mono }}>
-                      {job.status !== "completed" ? "Aguardando conclusão..." : "—"}
+                      {job.status !== "completed" ? t("nistAwaitingCompletion") : "—"}
                     </span>
                   )}
                 </div>
@@ -305,11 +309,11 @@ function JobModal({ job, log, onClose }) {
                     </div>
                   )}
                   {!log.stdout && !log.stderr && (
-                    <span style={{ color: theme.textMuted, fontSize: 11, fontFamily: mono }}>Log ainda não disponível.</span>
+                    <span style={{ color: theme.textMuted, fontSize: 11, fontFamily: mono }}>{t("nistLogNotAvailable")}</span>
                   )}
                 </>
               ) : (
-                <span style={{ color: theme.textMuted, fontSize: 11, fontFamily: mono }}>Carregando log...</span>
+                <span style={{ color: theme.textMuted, fontSize: 11, fontFamily: mono }}>{t("nistLoadingLog")}</span>
               )}
             </div>
           )}
@@ -321,6 +325,7 @@ function JobModal({ job, log, onClose }) {
 
 /* ── Main Section ───────────────────────────────────────────── */
 export default function NISTSection() {
+  const { t, lang } = useLanguage();
   const [status,       setStatus]       = useState(null);
   const [jobs,         setJobs]         = useState([]);
   const [selectedJob,  setSelectedJob]  = useState(null);
@@ -374,7 +379,7 @@ export default function NISTSection() {
     try {
       const r = await nistRun(testType, format, "latest");
       if (r.job_id) { setActiveJobId(r.job_id); refresh(); }
-      else setError(r.detail || "Erro ao criar job");
+      else setError(r.detail || t("nistCreateJobError"));
     } catch (e) { setError(String(e)); }
     finally { setRunning(false); }
   };
@@ -386,7 +391,7 @@ export default function NISTSection() {
     try {
       const r = await nistUpload(uploadFile, uploadTest, uploadFmt);
       if (r.job_id) { setActiveJobId(r.job_id); refresh(); setUploadFile(null); if (fileRef.current) fileRef.current.value = ""; }
-      else setError(r.detail || "Erro no upload");
+      else setError(r.detail || t("nistUploadError"));
     } catch (e) { setError(String(e)); }
     finally { setUploading(false); }
   };
@@ -402,14 +407,14 @@ export default function NISTSection() {
     finally { setLoadingLog(false); }
   };
 
-  const fmtTs = (ts) => ts ? new Date(ts).toLocaleString("pt-BR") : "—";
+  const fmtTs = (ts) => ts ? new Date(ts).toLocaleString(lang === "en" ? "en-US" : "pt-BR") : "—";
   const fmtN  = (n)  => n != null ? n.toFixed(4) : "—";
   const fmtAge = (seconds) => {
     if (seconds == null) return "—";
     if (seconds < 60) return `${Math.round(seconds)}s`;
     if (seconds < 3600) return `${Math.round(seconds / 60)}min`;
     if (seconds < 86400) return `${(seconds / 3600).toFixed(1)}h`;
-    return `${(seconds / 86400).toFixed(1)} dias`;
+    return `${(seconds / 86400).toFixed(1)} ${t("nistDaysWord")}`;
   };
 
   /* ── render ─────────────────────────────────────────────── */
@@ -420,7 +425,7 @@ export default function NISTSection() {
       {serviceDown && (
         <div style={{ ...card, background: theme.warning + "10", border: `1px solid ${theme.warning}30`,
           color: theme.warning, fontSize: 11, fontFamily: mono }}>
-          ⚠ Serviço NIST não acessível. Verifique se qrng-nist-api está rodando na VM de Recife.
+          {t("nistServiceDownMsg")}
         </div>
       )}
 
@@ -429,13 +434,11 @@ export default function NISTSection() {
         <div data-testid="nist-synthetic-banner" style={{ ...card,
           background: theme.danger + "12", border: `2px solid ${theme.danger}55`,
           color: theme.danger, fontSize: 12, fontWeight: 700, fontFamily: mono, lineHeight: 1.6 }}>
-          RESULTADO SINTÉTICO DE STAGING — NÃO É UM ASSESSMENT SP 800-90B
+          {t("nistSyntheticBanner")}
           <div style={{ fontWeight: 400, fontSize: 11, marginTop: 6, color: theme.textDim }}>
-            Motor: <strong>{status?.service?.assessment_engine}</strong>
+            {t("nistSyntheticBannerPrefix")} <strong>{status?.service?.assessment_engine}</strong>
             {status?.service?.assessment_engine_version ? ` (${status.service.assessment_engine_version})` : ""}.
-            {" "}Os campos IID / non-IID / min-H abaixo são <strong>valores sintéticos determinísticos</strong>
-            para testar parsing e interface — <strong>não</strong> representam avaliação estatística de entropia
-            e <strong>não</strong> constituem conformidade NIST.
+            {" "}{t("nistSyntheticBannerSuffix")}
           </div>
         </div>
       )}
@@ -443,11 +446,11 @@ export default function NISTSection() {
       {/* ── Status card ── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
         {[
-          { label: "Integração",     value: status?.enabled ? "Habilitada" : "Desabilitada", color: status?.enabled ? theme.success : theme.danger },
-          { label: "Motor",          value: status?.service?.assessment_engine || "—", color: isSyntheticEngine(status) ? theme.danger : theme.success },
-          { label: "Próx. automático", value: status?.periodic_enabled === false ? "desativado (sem captura live)" : (status?.next_periodic ? fmtTs(status.next_periodic) : "—"), color: theme.quantum },
-          { label: "Intervalo",      value: status ? `${status.interval_seconds}s` : "—", color: theme.accent },
-          { label: "Fila",           value: status != null ? `${status.queue_depth} job(s)` : "—", color: status?.queue_depth > 0 ? theme.warning : theme.textMuted },
+          { label: t("nistIntegration"),     value: status?.enabled ? t("nistEnabled") : t("nistDisabled"), color: status?.enabled ? theme.success : theme.danger },
+          { label: t("nistEngine"),          value: status?.service?.assessment_engine || "—", color: isSyntheticEngine(status) ? theme.danger : theme.success },
+          { label: t("nistNextAuto"), value: status?.periodic_enabled === false ? t("nistNextAutoDisabled") : (status?.next_periodic ? fmtTs(status.next_periodic) : "—"), color: theme.quantum },
+          { label: t("nistInterval"),      value: status ? `${status.interval_seconds}s` : "—", color: theme.accent },
+          { label: t("nistQueue"),           value: status != null ? `${status.queue_depth} ${t("nistJobsWord")}` : "—", color: status?.queue_depth > 0 ? theme.warning : theme.textMuted },
         ].map(({ label, value, color }) => (
           <div key={label} style={{ ...card, display: "flex", flexDirection: "column", gap: 4 }}>
             <span style={{ fontSize: 10, fontWeight: 700, color: theme.textMuted, fontFamily: mono, textTransform: "uppercase" }}>{label}</span>
@@ -463,22 +466,20 @@ export default function NISTSection() {
           background: theme.textMuted + "12", border: `1px solid ${theme.textMuted}30`,
           fontSize: 11, color: theme.textDim, fontFamily: mono,
         }}>
-          ℹ Captura live indisponível — nenhum mecanismo de captura ao vivo controlada está configurado.
-          Nenhuma execução periódica é agendada ({status.periodic_enabled === false ? "periodic_enabled=false" : "—"});
-          o job periódico não reavalia nenhum arquivo automaticamente. Resultados abaixo (se houver)
-          vêm de upload manual ou execução avulsa sobre um arquivo específico.
+          {t("nistLiveCaptureUnavailablePrefix")} ({status.periodic_enabled === false ? "periodic_enabled=false" : "—"});
+          {" "}{t("nistLiveCaptureUnavailableSuffix")}
         </div>
       )}
 
       {/* ── Last result summary ── */}
       {status?.last_job && (
         <div style={{ ...card }}>
-          <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, fontFamily: mono, marginBottom: 4 }}>ÚLTIMO RESULTADO</div>
+          <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, fontFamily: mono, marginBottom: 4 }}>{t("nistLastResult")}</div>
           <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono, marginBottom: 10, lineHeight: 1.6 }}>
-            Origem: <strong>{sampleOriginLabel(status.last_job.sample_origin)}</strong>.{" "}
+            {t("nistOriginPrefix")} <strong>{sampleOriginLabel(status.last_job.sample_origin, t)}</strong>.{" "}
             {status.last_job.sample_origin === "periodic_live"
-              ? "Medida periódica da fonte ao vivo — veja \"Idade da amostra\" para saber há quanto tempo foi capturada."
-              : "Avaliação de uma amostra específica, não uma medida contínua da saúde atual do stream ao vivo."}
+              ? t("nistOriginPeriodicDetail")
+              : t("nistOriginSpecificDetail")}
           </div>
 
           {/* Aviso destacado quando a amostra testada está desatualizada
@@ -490,59 +491,58 @@ export default function NISTSection() {
               background: theme.warning + "12", border: `1px solid ${theme.warning}35`,
               fontSize: 11, color: theme.warning, fontFamily: mono,
             }}>
-              ⚠ AMOSTRA DESATUALIZADA — capturada há {fmtAge(status.last_job.sample_captured_age_seconds)},
-              mais que o intervalo entre execuções periódicas ({status?.interval_seconds}s). Este resultado
-              não reflete o estado atual da fonte ao vivo.
+              {t("nistStaleWarningPrefix")} {fmtAge(status.last_job.sample_captured_age_seconds)}
+              {" "}{t("nistStaleWarningMid")} ({status?.interval_seconds}s). {t("nistStaleWarningSuffix")}
             </div>
           )}
 
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: 12 }}>
             <div>
-              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>Status</div>
+              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>{t("nistStatusLabel")}</div>
               <StatusBadge status={status.last_job.status} />
             </div>
             <div>
-              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>IID</div>
+              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>{t("nistIidLabel")}</div>
               <PassBadge passed={status.last_job.iid_passed} />
               {status.last_job.synthetic_result && <SyntheticTag />}
             </div>
             <div>
-              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>min-H non-IID</div>
+              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>{t("nistMinHLabel")}</div>
               <span style={{ fontSize: 13, fontWeight: 700, fontFamily: mono, color: theme.quantum }}>
                 {fmtN(status.last_job.h_min_non_iid)} bits
                 {status.last_job.synthetic_result && <SyntheticTag />}
               </span>
             </div>
             <div>
-              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>Arquivo</div>
+              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>{t("nistFileLabel")}</div>
               <span style={{ fontSize: 11, fontFamily: mono, color: theme.textDim }}>
                 {status.last_job.original_filename || "—"}
               </span>
             </div>
             <div>
-              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>Enviado em</div>
+              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>{t("nistSubmittedAt")}</div>
               <span style={{ fontSize: 11, fontFamily: mono, color: theme.textDim }}>
                 {fmtTs(status.last_job.submitted_at)}
               </span>
             </div>
             <div>
-              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>Idade da amostra</div>
+              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>{t("nistSampleAge")}</div>
               <span style={{ fontSize: 11, fontFamily: mono, color: status.last_job.sample_file_is_stale ? theme.warning : theme.textDim }}>
                 {fmtAge(status.last_job.sample_captured_age_seconds)}
               </span>
             </div>
             <div>
-              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>Transporte / origem física</div>
+              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>{t("nistTransportOrigin")}</div>
               <span style={{ fontSize: 11, fontFamily: mono, color: theme.textDim }}>
                 {status.last_job.transport_format}
-                {status.last_job.source_word_width != null ? ` · ${status.last_job.source_word_width}B/palavra` : ""}
+                {status.last_job.source_word_width != null ? ` · ${status.last_job.source_word_width}B/${t("nistPerWord")}` : ""}
                 {status.last_job.sample_conditioned != null
-                  ? ` · ${status.last_job.sample_conditioned ? "condicionado" : "sem conditioning"}`
+                  ? ` · ${status.last_job.sample_conditioned ? t("nistConditioned") : t("nistNotConditioned")}`
                   : ""}
               </span>
             </div>
             <div>
-              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>Símbolo avaliado pelo NIST</div>
+              <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>{t("nistEvaluatedSymbol")}</div>
               <span style={{ fontSize: 11, fontFamily: mono, color: theme.textDim }}>
                 {status.last_job.assessment_symbol_width != null
                   ? `${status.last_job.assessment_symbol_width} bit(s) · ${status.last_job.normalization_method}`
@@ -558,30 +558,30 @@ export default function NISTSection() {
 
         {/* Teste sob demanda */}
         <div style={{ ...card, display: "flex", flexDirection: "column", gap: 12 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, fontFamily: mono }}>Executar teste agora</span>
+          <span style={{ fontSize: 13, fontWeight: 700, fontFamily: mono }}>{t("nistRunNowTitle")}</span>
           <span style={{ fontSize: 11, color: theme.textDim }}>
-            Testa o arquivo mais recente em <code style={{ fontFamily: mono }}>NIST_DATA_DIR</code> (≥ 1 MB).
+            {t("nistRunNowDescPrefix")} <code style={{ fontFamily: mono }}>NIST_DATA_DIR</code> {t("nistRunNowDescSuffix")}
           </span>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <Sel value={testType}  onChange={setTestType}  options={TEST_OPTIONS} />
-            <Sel value={format}    onChange={setFormat}    options={FORMAT_OPTIONS} />
+            <Sel value={testType}  onChange={setTestType}  options={getTestOptions(t)} />
+            <Sel value={format}    onChange={setFormat}    options={getFormatOptions(t)} />
           </div>
           <Btn onClick={handleRun} disabled={running || !!activeJobId || serviceDown} color={theme.quantum}>
-            {running ? "Criando job..." : activeJobId ? "Aguardando job..." : "▶ Executar teste agora"}
+            {running ? t("nistCreatingJob") : activeJobId ? t("nistAwaitingJob") : t("nistRunNowBtn")}
           </Btn>
           {activeJobId && (
             <div style={{ fontSize: 10, color: theme.warning, fontFamily: mono, animation: "pulse 1s infinite" }}>
-              ● Job {activeJobId.slice(0, 8)} em execução...
+              {t("nistJobRunningPrefix")} {activeJobId.slice(0, 8)} {t("nistJobRunningSuffix")}
             </div>
           )}
         </div>
 
         {/* Upload */}
         <div style={{ ...card, display: "flex", flexDirection: "column", gap: 12 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, fontFamily: mono }}>Upload + teste</span>
+          <span style={{ fontSize: 13, fontWeight: 700, fontFamily: mono }}>{t("nistUploadTitle")}</span>
           <span style={{ fontSize: 11, color: theme.textDim }}>
-            Envie um arquivo <code style={{ fontFamily: mono }}>.csv</code>, <code style={{ fontFamily: mono }}>.txt</code> ou <code style={{ fontFamily: mono }}>.bin</code>.
-            Mínimo 1 MB.
+            {t("nistUploadDescPrefix")} <code style={{ fontFamily: mono }}>.csv</code>, <code style={{ fontFamily: mono }}>.txt</code> {lang === "en" ? "or" : "ou"} <code style={{ fontFamily: mono }}>.bin</code>.
+            {" "}{t("nistUploadDescSuffix")}
           </span>
           <input
             ref={fileRef}
@@ -596,15 +596,15 @@ export default function NISTSection() {
             </span>
           )}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-            <Sel value={uploadTest} onChange={setUploadTest} options={TEST_OPTIONS} />
-            <Sel value={uploadFmt}  onChange={setUploadFmt}  options={FORMAT_OPTIONS} />
+            <Sel value={uploadTest} onChange={setUploadTest} options={getTestOptions(t)} />
+            <Sel value={uploadFmt}  onChange={setUploadFmt}  options={getFormatOptions(t)} />
           </div>
           <Btn
             onClick={handleUpload}
             disabled={!uploadFile || uploading || !!activeJobId || serviceDown}
             color={theme.accent}
           >
-            {uploading ? "Enviando..." : "⬆ Enviar e testar"}
+            {uploading ? t("nistSending") : t("nistUploadBtn")}
           </Btn>
         </div>
       </div>
@@ -620,20 +620,20 @@ export default function NISTSection() {
       {/* ── Jobs history ── */}
       <div style={{ ...card }}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
-          <span style={{ fontSize: 13, fontWeight: 700, fontFamily: mono }}>Histórico de jobs</span>
-          <Btn onClick={refresh} color={theme.accent} small>↺ Atualizar</Btn>
+          <span style={{ fontSize: 13, fontWeight: 700, fontFamily: mono }}>{t("nistJobHistory")}</span>
+          <Btn onClick={refresh} color={theme.accent} small>{t("nistRefreshBtn")}</Btn>
         </div>
 
         {jobs.length === 0 ? (
           <div style={{ fontSize: 11, color: theme.textMuted, fontFamily: mono, textAlign: "center", padding: "20px 0" }}>
-            Nenhum job registrado ainda.
+            {t("nistNoJobs")}
           </div>
         ) : (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 11, fontFamily: mono }}>
               <thead>
                 <tr style={{ borderBottom: `2px solid ${theme.border}` }}>
-                  {["Data/hora", "Trigger", "Arquivo", "Teste", "Status", "IID", "min-H non-IID", "Duração", ""].map(h => (
+                  {[t("nistThDate"), t("nistThTrigger"), t("nistThFile"), t("nistThTest"), t("nistThStatus"), t("nistThIid"), t("nistThMinH"), t("nistThDuration"), ""].map(h => (
                     <th key={h} style={{ padding: "8px 10px", textAlign: "left", color: theme.textMuted, fontWeight: 700, whiteSpace: "nowrap" }}>{h}</th>
                   ))}
                 </tr>
@@ -661,7 +661,7 @@ export default function NISTSection() {
                       {j.duration_seconds != null ? `${j.duration_seconds.toFixed(1)}s` : "—"}
                     </td>
                     <td style={{ padding: "8px 10px" }}>
-                      <Btn onClick={() => openJob(j)} color={theme.quantum} small>Ver</Btn>
+                      <Btn onClick={() => openJob(j)} color={theme.quantum} small>{t("nistViewBtn")}</Btn>
                     </td>
                   </tr>
                 ))}
