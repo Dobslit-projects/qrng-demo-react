@@ -499,7 +499,7 @@ const translations = {
 
     // ── AuthPage ──
     authPasswordMismatch: "As senhas não coincidem.",
-    authPasswordTooShort: "A senha deve ter pelo menos 8 caracteres.",
+    authPasswordTooShort: "A senha deve ter pelo menos 12 caracteres.",
     authInvalidCredentials: "E-mail ou senha incorretos.",
     authEmailTaken: "Este e-mail já está cadastrado.",
     authMissingFields: "Preencha e-mail e senha.",
@@ -1126,7 +1126,7 @@ const translations = {
     devGenerateTokenFirst: "Generate a token first in the Token tab.",
 
     authPasswordMismatch: "Passwords do not match.",
-    authPasswordTooShort: "Password must be at least 8 characters.",
+    authPasswordTooShort: "Password must be at least 12 characters.",
     authInvalidCredentials: "Incorrect email or password.",
     authEmailTaken: "This email is already registered.",
     authMissingFields: "Please fill in email and password.",

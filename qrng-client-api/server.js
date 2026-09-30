@@ -57,11 +57,11 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false,
 }));
 
-// Swagger UI e ReDoc precisam de script/estilo inline; o ReDoc é carregado do
-// cdn.redoc.ly, usa Google Fonts e um web worker (blob:). Só estas rotas.
+// Swagger UI e ReDoc precisam de script/estilo inline; o ReDoc (servido
+// daqui, vendor/redoc) usa Google Fonts e um web worker (blob:). Só estas rotas.
 const DOCS_CSP = [
   "default-src 'self'",
-  "script-src 'self' 'unsafe-inline' https://cdn.redoc.ly",
+  "script-src 'self' 'unsafe-inline'",
   "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
   "font-src 'self' data: https://fonts.gstatic.com",
   "img-src 'self' data: https:",
@@ -337,6 +337,10 @@ app.use("/v1/docs", swaggerUi.serve, swaggerUi.setup(publicOpenapiSpec, {
   customSiteTitle: "Kuapoã QRNG API — Docs",
 }));
 
+// URLs RELATIVAS: em produção a API fica atrás de /qrng/v1/ no nginx do
+// host; "/v1/openapi.json" absoluto caía no SPA do portal e o ReDoc não
+// carregava. O bundle do ReDoc é servido daqui (versão fixa, vendor/redoc),
+// não do cdn.redoc.ly "latest", que não permite verificação de integridade.
 app.get("/v1/redoc", (_req, res) => {
   res.type("html").send(`<!doctype html>
 <html>
@@ -346,10 +350,16 @@ app.get("/v1/redoc", (_req, res) => {
     <meta name="viewport" content="width=device-width, initial-scale=1">
   </head>
   <body>
-    <redoc spec-url="/v1/openapi.json"></redoc>
-    <script src="https://cdn.redoc.ly/redoc/latest/bundles/redoc.standalone.js"></script>
+    <redoc spec-url="openapi.json"></redoc>
+    <script src="redoc.standalone.js"></script>
   </body>
 </html>`);
+});
+
+const REDOC_BUNDLE = path.join(__dirname, "vendor", "redoc", "redoc.standalone.js");
+app.get("/v1/redoc.standalone.js", (_req, res) => {
+  res.set("Cache-Control", "public, max-age=86400");
+  res.type("application/javascript").sendFile(REDOC_BUNDLE);
 });
 
 // ── Item 7: documentação da API administrativa, SÓ para admins autenticados ───
@@ -522,7 +532,7 @@ function requireAuth(req, res, next) {
     return res.status(401).json({ error: "MISSING_TOKEN", message: "Faça login primeiro." });
   }
   try {
-    req.user = jwt.verify(auth.slice(7).trim(), JWT_SECRET);
+    req.user = jwt.verify(auth.slice(7).trim(), JWT_SECRET, { algorithms: ["HS256"] });
     next();
   } catch {
     return res.status(401).json({ error: "SESSION_EXPIRED", message: "Sessão expirada. Faça login novamente." });
@@ -560,7 +570,7 @@ function resolveUser(req, res, next) {
   }
   const raw = auth.slice(7).trim();
   try {
-    const payload = jwt.verify(raw, JWT_SECRET);
+    const payload = jwt.verify(raw, JWT_SECRET, { algorithms: ["HS256"] });
     req.user     = payload;
     req.tokenRow = db.prepare("SELECT * FROM api_tokens WHERE user_id = ? AND status = 'active'").get(payload.sub) || null;
     req.authMode = "jwt";
@@ -587,6 +597,36 @@ async function fetchWithTimeout(url, ms) {
 
 // ── Auth: registro e login ────────────────────────────────────────────────────
 
+// Política de senha (2026-09-30): >= 12 caracteres, letra e número, <= 256.
+const PASSWORD_MIN_LENGTH = 12;
+const PASSWORD_MAX_LENGTH = 256;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function passwordProblem(password) {
+  if (typeof password !== "string" || password.length < PASSWORD_MIN_LENGTH) return `Senha mínima: ${PASSWORD_MIN_LENGTH} caracteres.`;
+  if (password.length > PASSWORD_MAX_LENGTH) return `Senha máxima: ${PASSWORD_MAX_LENGTH} caracteres.`;
+  if (!/[a-zA-Z]/.test(password) || !/[0-9]/.test(password)) return "A senha precisa ter letras e números.";
+  return null;
+}
+
+// Limites específicos de autenticação, além do global por IP (120/min):
+// sem eles, 120 tentativas de senha por minuto contra a MESMA conta passavam.
+function authLimitHandler(req, res) {
+  res.status(429).json({ error: "TOO_MANY_ATTEMPTS", message: "Muitas tentativas. Tente novamente mais tarde." });
+}
+const loginLimiterByIp = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 50, standardHeaders: true, legacyHeaders: false, handler: authLimitHandler,
+});
+const loginLimiterByEmail = rateLimit({
+  windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false, handler: authLimitHandler,
+  keyGenerator: (req) => `email:${String((req.body || {}).email || "").trim().toLowerCase()}`,
+});
+const registerLimiterByIp = rateLimit({
+  windowMs: 60 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false, handler: authLimitHandler,
+});
+// bcrypt de um usuário inexistente, para o login levar o mesmo tempo com ou
+// sem conta (a latência não pode revelar e-mails cadastrados).
+const DUMMY_PASSWORD_HASH = bcrypt.hashSync(crypto.randomUUID(), 12);
+
 /**
  * @openapi
  * /auth/register:
@@ -602,7 +642,7 @@ async function fetchWithTimeout(url, ms) {
  *             required: [email, password]
  *             properties:
  *               email: { type: string, format: email }
- *               password: { type: string, minLength: 8 }
+ *               password: { type: string, minLength: 12, maxLength: 256, description: "Letras e números." }
  *     responses:
  *       200:
  *         description: Conta criada.
@@ -610,17 +650,24 @@ async function fetchWithTimeout(url, ms) {
  *           application/json:
  *             schema: { $ref: '#/components/schemas/AuthResponse' }
  *       400:
- *         description: Campos ausentes, senha curta (< 8), ou JSON inválido (error=INVALID_JSON).
+ *         description: Campos ausentes, e-mail inválido, senha fraca (< 12, sem letra/número), ou JSON inválido (error=INVALID_JSON).
  *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
  *       409:
  *         description: E-mail já cadastrado.
  *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
  *       413: { $ref: '#/components/responses/PayloadTooLarge' }
+ *       429:
+ *         description: Muitos cadastros deste IP (20/hora). error=TOO_MANY_ATTEMPTS.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
  */
-app.post("/v1/auth/register", async (req, res) => {
+app.post("/v1/auth/register", registerLimiterByIp, async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password) return res.status(400).json({ error: "MISSING_FIELDS", message: "Email e senha são obrigatórios." });
-  if (password.length < 8) return res.status(400).json({ error: "WEAK_PASSWORD", message: "Senha mínima: 8 caracteres." });
+  if (typeof email !== "string" || email.length > 254 || !EMAIL_RE.test(email.trim())) {
+    return res.status(400).json({ error: "INVALID_EMAIL", message: "E-mail inválido." });
+  }
+  const pwdProblem = passwordProblem(password);
+  if (pwdProblem) return res.status(400).json({ error: "WEAK_PASSWORD", message: pwdProblem });
   const role = ADMIN_EMAIL && email.toLowerCase() === ADMIN_EMAIL ? "admin" : "user";
   const now  = new Date().toISOString();
   try {
@@ -658,12 +705,18 @@ app.post("/v1/auth/register", async (req, res) => {
  *         description: E-mail ou senha incorretos.
  *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
  *       413: { $ref: '#/components/responses/PayloadTooLarge' }
+ *       429:
+ *         description: Muitas tentativas (50/15 min por IP, 10/15 min por e-mail). error=TOO_MANY_ATTEMPTS.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
  */
-app.post("/v1/auth/login", async (req, res) => {
+app.post("/v1/auth/login", loginLimiterByIp, loginLimiterByEmail, async (req, res) => {
   const { email, password } = req.body || {};
-  if (!email || !password) return res.status(400).json({ error: "MISSING_FIELDS" });
+  if (!email || !password || typeof email !== "string" || typeof password !== "string") {
+    return res.status(400).json({ error: "MISSING_FIELDS" });
+  }
   const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email.toLowerCase());
-  if (!user || !(await bcrypt.compare(password, user.password_hash))) {
+  const valid = await bcrypt.compare(password, user ? user.password_hash : DUMMY_PASSWORD_HASH);
+  if (!user || !valid) {
     return res.status(401).json({ error: "INVALID_CREDENTIALS", message: "E-mail ou senha incorretos." });
   }
   const token = jwt.sign({ sub: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: "30d" });

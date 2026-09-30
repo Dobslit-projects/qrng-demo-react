@@ -15,7 +15,8 @@ const js = require("@eslint/js");
 const globals = require("globals");
 
 module.exports = [
-  { ignores: ["node_modules/**", "coverage/**"] },
+  // vendor/: bundles de terceiros versionados como estão (ex.: ReDoc).
+  { ignores: ["node_modules/**", "coverage/**", "vendor/**"] },
 
   {
     files: ["**/*.js"],

@@ -39,7 +39,7 @@ after(() => {
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 describe("Auth — registro e login", () => {
   test("POST /v1/auth/register cria conta e retorna JWT", async () => {
-    const res = await request(app).post("/v1/auth/register").send({ email: "user@test.com", password: "password123" });
+    const res = await request(app).post("/v1/auth/register").send({ email: "user@test.com", password: "password12345" });
     assert.equal(res.status, 200);
     assert.ok(res.body.token);
     assert.equal(res.body.role, "user");
@@ -47,14 +47,14 @@ describe("Auth — registro e login", () => {
   });
 
   test("ADMIN_EMAIL promove conta para admin", async () => {
-    const res = await request(app).post("/v1/auth/register").send({ email: "admin@test.com", password: "adminpass123" });
+    const res = await request(app).post("/v1/auth/register").send({ email: "admin@test.com", password: "adminpass12345" });
     assert.equal(res.status, 200);
     assert.equal(res.body.role, "admin");
     adminJwt = res.body.token;
   });
 
   test("email duplicado retorna 409", async () => {
-    const res = await request(app).post("/v1/auth/register").send({ email: "user@test.com", password: "outrasenha" });
+    const res = await request(app).post("/v1/auth/register").send({ email: "user@test.com", password: "outrasenha123" });
     assert.equal(res.status, 409);
     assert.equal(res.body.error, "EMAIL_TAKEN");
   });
@@ -66,7 +66,7 @@ describe("Auth — registro e login", () => {
   });
 
   test("POST /v1/auth/login retorna JWT com credenciais corretas", async () => {
-    const res = await request(app).post("/v1/auth/login").send({ email: "user@test.com", password: "password123" });
+    const res = await request(app).post("/v1/auth/login").send({ email: "user@test.com", password: "password12345" });
     assert.equal(res.status, 200);
     assert.ok(res.body.token);
   });
@@ -126,8 +126,8 @@ describe("Dual auth — /me/*", () => {
   });
 
   test("usuário sem token retorna has_token=false", async () => {
-    await request(app).post("/v1/auth/register").send({ email: "sem@token.com", password: "senha12345" });
-    const login = await request(app).post("/v1/auth/login").send({ email: "sem@token.com", password: "senha12345" });
+    await request(app).post("/v1/auth/register").send({ email: "sem@token.com", password: "senha1234567" });
+    const login = await request(app).post("/v1/auth/login").send({ email: "sem@token.com", password: "senha1234567" });
     const res   = await request(app).get("/v1/me/token").set("Authorization", `Bearer ${login.body.token}`);
     assert.equal(res.status, 200);
     assert.equal(res.body.has_token, false);

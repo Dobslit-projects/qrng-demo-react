@@ -22,7 +22,7 @@ export default function AuthPage({ onAuth }) {
 
     if (mode === "register") {
       if (password !== confirm) return setError(t("authPasswordMismatch"));
-      if (password.length < 8) return setError(t("authPasswordTooShort"));
+      if (password.length < 12) return setError(t("authPasswordTooShort"));
     }
 
     setLoading(true);

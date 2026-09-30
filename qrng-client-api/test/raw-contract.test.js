@@ -69,7 +69,7 @@ before(async () => {
   const request = require("supertest");
   agent = request(app);
 
-  const reg = await agent.post("/v1/auth/register").send({ email: `raw-${Date.now()}@qa.invalid`, password: "pw-abcdefgh" });
+  const reg = await agent.post("/v1/auth/register").send({ email: `raw-${Date.now()}@qa.invalid`, password: "pw-abcdefgh12" });
   const jwt = reg.body.token;
   const tok = await agent.post("/v1/tokens").set("Authorization", `Bearer ${jwt}`);
   apiToken = tok.body.token;

@@ -117,7 +117,7 @@ describe("Drift: rotas do Express vs paths na spec (item 7)", () => {
   // Endpoints deliberadamente fora do escopo de documentação de contrato
   // (meta-rotas da própria documentação, /metrics de operação interna).
   const EXEMPT = new Set([
-    "/v1/openapi.json", "/v1/docs", "/v1/redoc",
+    "/v1/openapi.json", "/v1/docs", "/v1/redoc", "/v1/redoc.standalone.js",
     "/v1/internal/admin-openapi.json", "/v1/internal/docs",
     "/metrics",
   ]);
@@ -190,23 +190,22 @@ describe("Endpoints de documentação servidos pela aplicação", () => {
     assert.match(res.text, /swagger-ui/i);
   });
 
-  test("GET /v1/redoc carrega o HTML do ReDoc, apontando para /v1/openapi.json (público)", async () => {
+  // URL RELATIVA: atrás do nginx a página é /qrng/v1/redoc, e "/v1/openapi.json"
+  // absoluto caía no SPA do portal (ReDoc quebrado em produção até 2026-09-30).
+  test("GET /v1/redoc carrega o HTML do ReDoc, apontando para openapi.json RELATIVO (público)", async () => {
     const res = await request(app).get("/v1/redoc");
     assert.equal(res.status, 200);
     assert.match(res.text, /<redoc/i);
-    assert.match(res.text, /\/v1\/openapi\.json/);
+    assert.match(res.text, /spec-url="openapi\.json"/);
   });
 
-  // CSP/ativo externo (item 7): registrado explicitamente, não escondido --
-  // ReDoc carrega seu bundle de um CDN externo (cdn.redoc.ly). Isso É uma
-  // dependência de terceiro real (supply-chain, e quebra sob uma CSP restrita
-  // sem exceção para esse host) -- o teste apenas garante que ela é a ÚNICA
-  // dependência externa da página, para não crescer despercebida.
-  test("/v1/redoc não referencia nenhum outro host externo além de cdn.redoc.ly", async () => {
+  // Ativo externo (item 7): desde 2026-09-30 o bundle do ReDoc é servido pela
+  // própria API (vendor/redoc, versão fixa) — a página não depende de nenhum
+  // host externo.
+  test("/v1/redoc não referencia nenhum host externo", async () => {
     const res = await request(app).get("/v1/redoc");
     const externalUrls = res.text.match(/https?:\/\/[^"'\s)]+/g) || [];
-    const unexpected = externalUrls.filter((u) => !u.startsWith("https://cdn.redoc.ly/"));
-    assert.deepEqual(unexpected, [], `host externo inesperado em /v1/redoc: ${unexpected.join(", ")}`);
+    assert.deepEqual(externalUrls, [], `host externo em /v1/redoc: ${externalUrls.join(", ")}`);
   });
 
   // Item 7: documentação administrativa NUNCA pública -- sem header de auth,

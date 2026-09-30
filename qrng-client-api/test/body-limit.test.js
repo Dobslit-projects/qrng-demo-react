@@ -57,9 +57,11 @@ describe("limite de corpo — express.json({ limit: 8kb })", () => {
     const res = await request(app).post("/v1/auth/register")
       .set("Content-Type", "application/json")
       .send(body);
-    // registrou (200) ou e-mail já existe de um run anterior no mesmo processo (409);
-    // o que importa: NÃO foi 413 nem 400 INVALID_JSON.
-    assert.ok([200, 409].includes(res.status), `status inesperado ${res.status}: ${JSON.stringify(res.body)}`);
+    // Chegou à rota e foi validado (a senha de ~8 KB só com "x" viola a
+    // política: > 256 caracteres, sem número → 400 WEAK_PASSWORD).
+    // O que importa: NÃO foi 413 nem 400 INVALID_JSON.
+    assert.equal(res.status, 400, `status inesperado ${res.status}: ${JSON.stringify(res.body)}`);
+    assert.equal(res.body.error, "WEAK_PASSWORD");
   });
 
   test("acima do limite (8193 bytes): 413 REQUEST_BODY_TOO_LARGE estruturado", async () => {

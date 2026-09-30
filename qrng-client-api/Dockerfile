@@ -14,7 +14,7 @@ RUN npm ci --omit=dev
 COPY server.js ./
 COPY lib ./lib
 COPY openapi ./openapi
-COPY test ./test
+COPY vendor ./vendor
 
 # Persistencia do SQLite fora do filesystem do container, igual ao
 # padrao usado no bongosite-auth.

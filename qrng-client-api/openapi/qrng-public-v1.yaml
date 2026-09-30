@@ -445,7 +445,9 @@ paths:
                   format: email
                 password:
                   type: string
-                  minLength: 8
+                  minLength: 12
+                  maxLength: 256
+                  description: Letras e números.
       responses:
         '200':
           description: Conta criada.
@@ -454,7 +456,9 @@ paths:
               schema:
                 $ref: '#/components/schemas/AuthResponse'
         '400':
-          description: Campos ausentes, senha curta (< 8), ou JSON inválido (error=INVALID_JSON).
+          description: >-
+            Campos ausentes, e-mail inválido, senha fraca (< 12, sem letra/número), ou JSON inválido
+            (error=INVALID_JSON).
           content:
             application/json:
               schema:
@@ -467,6 +471,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          description: Muitos cadastros deste IP (20/hora). error=TOO_MANY_ATTEMPTS.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /auth/login:
     post:
       tags:
@@ -502,6 +512,12 @@ paths:
                 $ref: '#/components/schemas/ErrorResponse'
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          description: Muitas tentativas (50/15 min por IP, 10/15 min por e-mail). error=TOO_MANY_ATTEMPTS.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /auth/me:
     get:
       tags:
