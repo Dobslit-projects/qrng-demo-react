@@ -33,6 +33,50 @@ const app = express();
 // privada do bridge: TRUST_PROXY="loopback, uniquelocal".
 app.set("trust proxy", process.env.TRUST_PROXY || "loopback");
 
+// ── Cabeçalhos de segurança (preparação para pentest, 2026-09-30) ────────────
+// helmet: nosniff, frameguard, Referrer-Policy, COOP etc. Ajustes:
+//  - hsts: false — TLS termina no nginx do host, que envia o HSTS uma vez
+//    para o domínio inteiro; repetir aqui duplicaria o cabeçalho.
+//  - CSP estrita para as respostas JSON (nada pode ser carregado/enquadrado);
+//    as páginas de documentação recebem uma CSP própria logo abaixo.
+//  - crossOriginResourcePolicy "cross-origin": a API pública é consumida de
+//    outras origens por desenho (CORS "*" mais abaixo).
+const helmet = require("helmet");
+app.disable("x-powered-by");
+app.use(helmet({
+  hsts: false,
+  contentSecurityPolicy: {
+    useDefaults: false,
+    directives: {
+      "default-src":     ["'none'"],
+      "frame-ancestors": ["'none'"],
+      "base-uri":        ["'none'"],
+    },
+  },
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+  crossOriginEmbedderPolicy: false,
+}));
+
+// Swagger UI e ReDoc precisam de script/estilo inline; o ReDoc é carregado do
+// cdn.redoc.ly, usa Google Fonts e um web worker (blob:). Só estas rotas.
+const DOCS_CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' https://cdn.redoc.ly",
+  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+  "font-src 'self' data: https://fonts.gstatic.com",
+  "img-src 'self' data: https:",
+  "connect-src 'self'",
+  "worker-src 'self' blob:",
+  "child-src 'self' blob:",
+  "frame-ancestors 'self'",
+  "base-uri 'self'",
+  "object-src 'none'",
+].join("; ");
+app.use(["/v1/docs", "/v1/internal/docs", "/v1/redoc"], (_req, res, next) => {
+  res.setHeader("Content-Security-Policy", DOCS_CSP);
+  next();
+});
+
 // ── Limite explícito do corpo da requisição (item 3 da estabilização) ─────────
 //
 // Todo endpoint que lê `req.body` neste serviço recebe JSON pequeno:
