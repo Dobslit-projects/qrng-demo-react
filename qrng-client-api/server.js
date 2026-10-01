@@ -121,6 +121,31 @@ const QRNG_TIMEOUT_MS          = parseInt(process.env.QRNG_REQUEST_TIMEOUT_MS ||
 // Número de falhas consecutivas do poller para marcar upstream como DOWN
 const UPSTREAM_FAIL_THRESHOLD  = parseInt(process.env.UPSTREAM_FAIL_THRESHOLD || "2", 10);
 
+// Quantos bytes pedir ao broker por byte entregue. Com upstream binário
+// (application/octet-stream) 1 byte pedido = 1 byte entregue, então o padrão
+// é 1: tudo que se pede a mais é entropia física retirada do buffer e
+// descartada (antes era 20x fixo — 95% jogado fora, e um único IP dentro da
+// cota pública drenava ~150 MiB/min). Só o formato legado de texto decimal,
+// que perde bytes no parsing, mantém 20 por padrão.
+const UPSTREAM_OVERPROVISION = Math.max(1, parseInt(
+  process.env.UPSTREAM_OVERPROVISION_FACTOR || (process.env.ALLOW_LEGACY_TEXT_UPSTREAM === "true" ? "20" : "1"), 10));
+
+// Fail-closed de fonte parada: quando o /health do broker diz
+// source_status=offline (sem dados novos há > 60 s), a API recusa (503
+// SOURCE_OFFLINE) em vez de servir o que sobrou no buffer sem nenhuma
+// evidência de que a fonte está viva. Desligável com =0.
+const REFUSE_WHEN_SOURCE_OFFLINE = process.env.REFUSE_WHEN_SOURCE_OFFLINE !== "0";
+
+// Promoção a admin pelo e-mail no CADASTRO: desligada por padrão (quem
+// adivinhasse ADMIN_EMAIL antes do dono criava a conta admin). Só staging/CI
+// ligam (=1). Em produção o papel é dado por `node scripts/set-role.js`.
+const ALLOW_ADMIN_EMAIL_BOOTSTRAP = process.env.ALLOW_ADMIN_EMAIL_BOOTSTRAP === "1";
+
+// Retenção de registros de uso (LGPD — minimização): linhas apagadas após N
+// dias; IP truncado (/24 ou /48) e user-agent removido após M dias.
+const USAGE_LOG_RETENTION_DAYS         = parseInt(process.env.USAGE_LOG_RETENTION_DAYS || "90", 10);
+const USAGE_LOG_IP_TRUNCATE_AFTER_DAYS = parseInt(process.env.USAGE_LOG_IP_TRUNCATE_AFTER_DAYS || "7", 10);
+
 // Rótulo da fonte, dirigido por env (item 2 da fase de staging). O DEFAULT
 // reproduz o comportamento anterior de produção.
 const QRNG_SOURCE_LABEL = process.env.QRNG_SOURCE_LABEL || "dobslit-qrng-ufpe-fpga";
@@ -282,6 +307,11 @@ function logRequest(requestId, tokenId, endpoint, bytesRequested, format, status
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(requestId, tokenId, endpoint, bytesRequested, format, statusCode, ip, userAgent, durationMs ?? null, now);
 
+  // Tráfego anônimo (tokenId null) não tem cota em daily_usage — a cota
+  // pública é por IP, em memória. Além disso UNIQUE(token_id, date) não
+  // deduplica NULL: cada requisição anônima criava uma linha nova.
+  if (tokenId == null) return;
+
   db.prepare(`
     INSERT INTO daily_usage (token_id, date, requests_count, bytes_count, errors_count)
     VALUES (?, ?, 1, ?, ?)
@@ -292,6 +322,50 @@ function logRequest(requestId, tokenId, endpoint, bytesRequested, format, status
   `).run(tokenId, today, bytesRequested, statusCode >= 400 ? 1 : 0);
 
   db.prepare("UPDATE api_tokens SET last_used_at = ? WHERE id = ?").run(now, tokenId);
+}
+
+// ── Retenção / minimização dos registros de uso ──────────────────────────────
+
+function truncateIp(ip) {
+  if (typeof ip !== "string" || ip === "") return null;
+  const v4 = ip.replace(/^::ffff:/i, "");
+  const o = v4.split(".");
+  if (o.length === 4 && o.every((p) => /^\d{1,3}$/.test(p))) return `${o[0]}.${o[1]}.${o[2]}.0/24`;
+  if (ip.includes(":")) return ip.split(":").slice(0, 3).join(":") + "::/48";
+  return null;
+}
+
+function purgeUsageLogs(nowMs = Date.now()) {
+  const day = 24 * 60 * 60 * 1000;
+  const cutoff   = new Date(nowMs - USAGE_LOG_RETENTION_DAYS * day).toISOString();
+  const ipCutoff = new Date(nowMs - USAGE_LOG_IP_TRUNCATE_AFTER_DAYS * day).toISOString();
+  const rows = db.prepare(
+    "SELECT id, ip_address FROM api_usage_logs WHERE created_at < ? AND (user_agent IS NOT NULL OR (ip_address IS NOT NULL AND ip_address NOT LIKE '%/%'))"
+  ).all(ipCutoff);
+  const upd = db.prepare("UPDATE api_usage_logs SET ip_address = ?, user_agent = NULL WHERE id = ?");
+  let deleted = 0;
+  db.transaction(() => {
+    deleted = db.prepare("DELETE FROM api_usage_logs WHERE created_at < ?").run(cutoff).changes;
+    for (const r of rows) upd.run(truncateIp(r.ip_address), r.id);
+    db.prepare("DELETE FROM daily_usage WHERE date < ?").run(cutoff.slice(0, 10));
+    db.prepare("DELETE FROM daily_usage WHERE token_id IS NULL").run();
+  })();
+  return { deleted, anonymized: rows.length };
+}
+
+// Remove a conta e tudo que a identifica: tokens e cotas são apagados; os
+// registros de uso ficam só como estatística anônima (sem token, IP ou UA).
+function deleteUserData(userId) {
+  db.transaction(() => {
+    const tokenIds = db.prepare("SELECT id FROM api_tokens WHERE user_id = ?").all(userId).map((t) => t.id);
+    for (const id of tokenIds) {
+      db.prepare("UPDATE api_usage_logs SET token_id = NULL, ip_address = NULL, user_agent = NULL WHERE token_id = ?").run(id);
+      db.prepare("DELETE FROM daily_usage WHERE token_id = ?").run(id);
+      tokenRateMap.delete(id);
+    }
+    db.prepare("DELETE FROM api_tokens WHERE user_id = ?").run(userId);
+    db.prepare("DELETE FROM users WHERE id = ?").run(userId);
+  })();
 }
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
@@ -384,6 +458,95 @@ app.get("/v1/internal/admin-openapi.json", requireAuth, requireAdmin, (_req, res
 app.use("/v1/internal/docs", requireAuth, requireAdmin, swaggerUi.serve, swaggerUi.setup(internalAdminOpenapiSpec, {
   customSiteTitle: "Kuapoã QRNG API — Docs Internas (Admin)",
 }));
+
+// ── GET /v1/public/health — saúde da fonte, sem bytes e sem autenticação ─────
+//
+// Substitui o proxy direto do nginx para o broker (/qrng/api/health →
+// 127.0.0.1:18001/health), que obrigava a manter TODO o prefixo do broker
+// exposto sem autenticação (/stream, /v1/raw de 50 MiB, /random_hex…). O SPA
+// só precisa destes campos para a barra de status. Não devolve `source_file`
+// (caminho interno) e nunca consome bytes. Fica ANTES do rate limit global
+// (tem o próprio) para o polling de status não disputar cota com /random;
+// um cache curto limita a carga no broker a 1 consulta a cada 3 s, por mais
+// clientes que haja.
+const PUBLIC_HEALTH_TTL_MS = parseInt(process.env.PUBLIC_HEALTH_TTL_MS || "3000", 10);
+const PUBLIC_HEALTH_FIELDS = [
+  "buffer_bytes_available", "buffer_capacity", "total_pushed", "total_popped",
+  "source_status", "source_stall_seconds", "stream_format", "sample_width_bytes", "conditioned",
+];
+let publicHealthCache = { at: 0, status: 0, body: null };
+
+const publicHealthLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: parseInt(process.env.PUBLIC_HEALTH_RATE_LIMIT_PER_IP_PER_MINUTE || "60", 10),
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) => res.status(429).json({ error: "RATE_LIMIT_EXCEEDED", message: "Muitas consultas de status. Tente novamente em instantes." }),
+});
+
+/**
+ * @openapi
+ * /public/health:
+ *   get:
+ *     tags: [Health]
+ *     summary: Saúde da fonte QRNG (buffer, estado da fonte) — sem autenticação e sem consumir bytes.
+ *     description: >
+ *       Resumo do /health do broker físico, para painéis de status. Não
+ *       entrega entropia. Resposta com cache de poucos segundos no servidor.
+ *     responses:
+ *       200:
+ *         description: Broker acessível.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 request_id: { type: string }
+ *                 buffer_bytes_available: { type: integer }
+ *                 buffer_capacity: { type: integer }
+ *                 total_pushed: { type: integer }
+ *                 total_popped: { type: integer }
+ *                 source_status: { type: string, enum: [online, degraded, offline] }
+ *                 source_stall_seconds: { type: number, nullable: true }
+ *                 stream_format: { type: string }
+ *                 sample_width_bytes: { type: integer }
+ *                 conditioned: { type: boolean }
+ *                 provenance: { type: string, description: "Origem efetiva (nunca 'live' aqui: esta rota não entrega bytes)." }
+ *                 provenance_detail: { $ref: '#/components/schemas/ProvenanceDetail' }
+ *       429: { $ref: '#/components/responses/RateLimited' }
+ *       503:
+ *         description: Broker inacessível (QRNG_UNAVAILABLE).
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ */
+app.get("/v1/public/health", publicHealthLimiter, attachRequestId, async (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const now = Date.now();
+  if (!publicHealthCache.body || now - publicHealthCache.at > PUBLIC_HEALTH_TTL_MS) {
+    try {
+      const r = await fetchWithTimeout(`${QRNG_UPSTREAM}/health`, Math.min(QRNG_TIMEOUT_MS, 5000));
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const body = {};
+      for (const k of PUBLIC_HEALTH_FIELDS) if (data && data[k] !== undefined) body[k] = data[k];
+      // Mesma regra de /v1/health: sem bytes nesta resposta não há evidência
+      // de caminho live — a proveniência reflete capacidade + saúde atual.
+      const upHdr = lowerHeaders(r.headers);
+      const srcStatus = (data && data.source_status) || upHdr["x-qrng-source-status"];
+      const prov = resolveProvenance({
+        servedFromUpstream: false,
+        upstreamReachable: true,
+        upstreamHeaders: { ...upHdr, ...(srcStatus ? { "x-qrng-source-status": String(srcStatus) } : {}) },
+      });
+      body.provenance = prov.actual_origin;
+      body.provenance_detail = prov;
+      publicHealthCache = { at: now, status: 200, body };
+    } catch {
+      const prov = resolveProvenance({ servedFromUpstream: false });
+      publicHealthCache = { at: now, status: 503, body: { error: "QRNG_UNAVAILABLE", message: "Fonte QRNG indisponível no momento.", provenance: prov.actual_origin, provenance_detail: prov } };
+    }
+  }
+  res.status(publicHealthCache.status).json({ request_id: req.requestId, ...publicHealthCache.body });
+});
 
 // ── Rate limiting — global por IP ─────────────────────────────────────────────
 
@@ -533,10 +696,31 @@ function requireAuth(req, res, next) {
   }
   try {
     req.user = jwt.verify(auth.slice(7).trim(), JWT_SECRET, { algorithms: ["HS256"] });
-    next();
   } catch {
     return res.status(401).json({ error: "SESSION_EXPIRED", message: "Sessão expirada. Faça login novamente." });
   }
+  // O JWT vale 30 dias; a conta pode ter sido excluída nesse meio-tempo.
+  if (!db.prepare("SELECT 1 FROM users WHERE id = ?").get(req.user.sub)) {
+    return res.status(401).json({ error: "SESSION_EXPIRED", message: "Sessão expirada. Faça login novamente." });
+  }
+  next();
+}
+
+// Fail-closed de fonte parada (ver REFUSE_WHEN_SOURCE_OFFLINE). O estado vem
+// do poller de fundo, que lê source_status do /health do broker a cada 60 s.
+function refuseIfSourceOffline(req, res, next) {
+  if (REFUSE_WHEN_SOURCE_OFFLINE && upstreamState.status === "up" && upstreamState.sourceStatus === "offline") {
+    const prov = resolveProvenance({ servedFromUpstream: false });
+    return res.status(503).json({
+      request_id: req.requestId,
+      error: "SOURCE_OFFLINE",
+      message: "A fonte física está parada (sem dados novos há mais de 60 s). Os bytes que restam no buffer não são servidos enquanto ela não voltar.",
+      source_stall_seconds: upstreamState.sourceStallSeconds ?? null,
+      provenance: prov.actual_origin,
+      provenance_detail: prov,
+    });
+  }
+  next();
 }
 
 // Reconsulta o papel no banco em vez de confiar no claim do JWT — mesma
@@ -571,6 +755,9 @@ function resolveUser(req, res, next) {
   const raw = auth.slice(7).trim();
   try {
     const payload = jwt.verify(raw, JWT_SECRET, { algorithms: ["HS256"] });
+    if (!db.prepare("SELECT 1 FROM users WHERE id = ?").get(payload.sub)) {
+      return res.status(401).json({ error: "UNAUTHORIZED", message: "Autenticação necessária." });
+    }
     req.user     = payload;
     req.tokenRow = db.prepare("SELECT * FROM api_tokens WHERE user_id = ? AND status = 'active'").get(payload.sub) || null;
     req.authMode = "jwt";
@@ -668,7 +855,7 @@ app.post("/v1/auth/register", registerLimiterByIp, async (req, res) => {
   }
   const pwdProblem = passwordProblem(password);
   if (pwdProblem) return res.status(400).json({ error: "WEAK_PASSWORD", message: pwdProblem });
-  const role = ADMIN_EMAIL && email.toLowerCase() === ADMIN_EMAIL ? "admin" : "user";
+  const role = ALLOW_ADMIN_EMAIL_BOOTSTRAP && ADMIN_EMAIL && email.toLowerCase() === ADMIN_EMAIL ? "admin" : "user";
   const now  = new Date().toISOString();
   try {
     const hash   = await bcrypt.hash(password, 12);
@@ -748,6 +935,46 @@ app.get("/v1/auth/me", requireAuth, (req, res) => {
   const user = db.prepare("SELECT id, email, role, created_at FROM users WHERE id = ?").get(req.user.sub);
   if (!user) return res.status(404).json({ error: "USER_NOT_FOUND" });
   res.json(user);
+});
+
+/**
+ * @openapi
+ * /auth/me:
+ *   delete:
+ *     tags: [Auth]
+ *     summary: Exclui a própria conta (exige a senha). Tokens são apagados; registros de uso ficam anônimos.
+ *     security: [{ bearerAuthJWT: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [password]
+ *             properties:
+ *               password: { type: string }
+ *     responses:
+ *       200:
+ *         description: Conta excluída.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 deleted: { type: boolean }
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       403:
+ *         description: Senha incorreta (INVALID_PASSWORD).
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ */
+app.delete("/v1/auth/me", requireAuth, async (req, res) => {
+  const { password } = req.body || {};
+  const user = db.prepare("SELECT id, password_hash FROM users WHERE id = ?").get(req.user.sub);
+  if (typeof password !== "string" || !(await bcrypt.compare(password, user.password_hash))) {
+    return res.status(403).json({ error: "INVALID_PASSWORD", message: "Senha incorreta." });
+  }
+  deleteUserData(user.id);
+  res.json({ deleted: true });
 });
 
 // ── POST /v1/tokens ───────────────────────────────────────────────────────────
@@ -1181,6 +1408,39 @@ app.get("/v1/admin/users", requireAuth, requireAdmin, (req, res) => {
   res.json({ users });
 });
 
+/**
+ * @openapi
+ * /admin/users/{id}:
+ *   delete:
+ *     tags: [Admin]
+ *     summary: Exclui a conta de um usuário (atendimento a pedido de exclusão). Requer role=admin.
+ *     security: [{ bearerAuthJWT: [] }]
+ *     parameters:
+ *       - name: id
+ *         in: path
+ *         required: true
+ *         schema: { type: integer }
+ *     responses:
+ *       200:
+ *         description: Conta excluída.
+ *       400:
+ *         description: Tentativa de excluir a própria conta de administrador (CANNOT_DELETE_SELF).
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       403: { $ref: '#/components/responses/Forbidden' }
+ *       404:
+ *         description: Usuário não encontrado.
+ */
+app.delete("/v1/admin/users/:id", requireAuth, requireAdmin, (req, res) => {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id)) return res.status(404).json({ error: "USER_NOT_FOUND" });
+  if (id === Number(req.user.sub)) {
+    return res.status(400).json({ error: "CANNOT_DELETE_SELF", message: "Use outro administrador para remover esta conta." });
+  }
+  if (!db.prepare("SELECT 1 FROM users WHERE id = ?").get(id)) return res.status(404).json({ error: "USER_NOT_FOUND" });
+  deleteUserData(id);
+  res.json({ deleted: true });
+});
+
 // ── GET /v1/health ────────────────────────────────────────────────────────────
 
 /**
@@ -1446,7 +1706,7 @@ async function randomHandler(req, res) {
   }
 
   try {
-    const upBytes = Math.min(bytes * 20, 50 * 1024 * 1024);
+    const upBytes = Math.min(bytes * UPSTREAM_OVERPROVISION, 50 * 1024 * 1024);
     const r = await fetchWithTimeout(`${QRNG_UPSTREAM}/random?bytes=${upBytes}`, QRNG_TIMEOUT_MS);
 
     if (!r.ok) {
@@ -1520,12 +1780,14 @@ async function randomHandler(req, res) {
 
   } catch (err) {
     logRequest(requestId, req.tokenRow.id, "/v1/random", bytes, format, 503, ip, ua, Date.now() - t0);
+    // O motivo real (URL interna do broker, erro de socket) fica só no log.
+    console.error(`[qrng-client-api] upstream indisponível request_id=${requestId}: ${err.message}`);
     const prov = resolveProvenance({ servedFromUpstream: false });
-    res.status(503).json({ request_id: requestId, error: "QRNG_UNAVAILABLE", detail: err.message, provenance: prov.actual_origin, provenance_detail: prov });
+    res.status(503).json({ request_id: requestId, error: "QRNG_UNAVAILABLE", message: "Fonte QRNG indisponível no momento.", provenance: prov.actual_origin, provenance_detail: prov });
   }
 }
 
-const randomChain = [attachRequestId, requireToken, checkTokenRate, parseBytes, checkQuota];
+const randomChain = [attachRequestId, requireToken, checkTokenRate, parseBytes, checkQuota, refuseIfSourceOffline];
 app.get("/v1/random", ...randomChain, randomHandler);
 
 /**
@@ -1773,7 +2035,7 @@ async function publicRandomHandler(req, res) {
   }
 
   try {
-    const upBytes = Math.min(bytes * 20, PUBLIC_MAX_BYTES_PER_REQUEST * 20);
+    const upBytes = bytes * UPSTREAM_OVERPROVISION;
     const r = await fetchWithTimeout(`${QRNG_UPSTREAM}/random?bytes=${upBytes}`, QRNG_TIMEOUT_MS);
 
     if (!r.ok) {
@@ -1848,13 +2110,14 @@ async function publicRandomHandler(req, res) {
 
   } catch (err) {
     logRequest(requestId, null, "/v1/public/random", bytes, format, 503, ip, ua, Date.now() - t0);
-    recordPublicUsage(ip, bytes);
+    recordPublicUsage(ip, 0); // nenhum byte entregue: não desconta da cota de bytes
+    console.error(`[qrng-client-api] upstream indisponível request_id=${requestId}: ${err.message}`);
     const prov = resolveProvenance({ servedFromUpstream: false });
-    res.status(503).json({ request_id: requestId, error: "QRNG_UNAVAILABLE", detail: err.message, provenance: prov.actual_origin, provenance_detail: prov });
+    res.status(503).json({ request_id: requestId, error: "QRNG_UNAVAILABLE", message: "Fonte QRNG indisponível no momento.", provenance: prov.actual_origin, provenance_detail: prov });
   }
 }
 
-const publicRandomChain = [attachRequestId, publicIpRateLimiter, parsePublicBytes, checkPublicQuota];
+const publicRandomChain = [attachRequestId, publicIpRateLimiter, parsePublicBytes, checkPublicQuota, refuseIfSourceOffline];
 app.get("/v1/public/random", ...publicRandomChain, publicRandomHandler);
 
 /**
@@ -2095,17 +2358,22 @@ app.get("/metrics", (req, res) => {
 // Requer UPSTREAM_FAIL_THRESHOLD falhas CONSECUTIVAS para marcar DOWN.
 // Uma única falha transitória não derruba a API.
 
-let upstreamState = { status: "unknown", checkedAt: null, responseMs: null };
+let upstreamState = { status: "unknown", checkedAt: null, responseMs: null, sourceStatus: null, sourceStallSeconds: null };
 let consecutiveFailures = 0;
 
 async function checkUpstream() {
   const t0 = Date.now();
-  let status, responseMs, detail;
+  let status, responseMs, detail, sourceStatus = null, sourceStallSeconds = null;
   try {
     const r = await fetchWithTimeout(`${QRNG_UPSTREAM}/health`, 5000);
     responseMs = Date.now() - t0;
     status = r.ok ? "up" : "down";
     detail = r.ok ? null : `HTTP ${r.status}`;
+    if (r.ok) {
+      const data = await r.json().catch(() => null);
+      if (data && typeof data.source_status === "string") sourceStatus = data.source_status;
+      if (data && typeof data.source_stall_seconds === "number") sourceStallSeconds = data.source_stall_seconds;
+    }
   } catch (err) {
     responseMs = Date.now() - t0;
     status = "down";
@@ -2130,7 +2398,11 @@ async function checkUpstream() {
 
   const now  = new Date().toISOString();
   const prev = upstreamState.status;
-  upstreamState = { status, checkedAt: now, responseMs };
+  const prevSource = upstreamState.sourceStatus;
+  upstreamState = { status, checkedAt: now, responseMs, sourceStatus, sourceStallSeconds };
+  if (status === "up" && prevSource !== sourceStatus) {
+    console.log(`[upstream-health] source_status=${sourceStatus} previous=${prevSource} stall_s=${sourceStallSeconds ?? "N/A"}`);
+  }
 
   if (prev !== status) {
     db.prepare("INSERT INTO upstream_health_log (status, response_ms, detail, checked_at) VALUES (?, ?, ?, ?)").run(status, responseMs ?? null, detail ?? null, now);
@@ -2227,7 +2499,12 @@ if (require.main === module) {
   app.listen(PORT, BIND_ADDR, () => {
     console.log(`QRNG client API  → http://${BIND_ADDR}:${PORT}`);
     console.log(`Database         → ${DB_PATH}`);
-    console.log(`Admin email      → ${ADMIN_EMAIL || "(não configurado)"}`);
+    console.log(`Admin bootstrap  → ${ALLOW_ADMIN_EMAIL_BOOTSTRAP ? `LIGADO (${ADMIN_EMAIL || "sem e-mail"}) — só staging/CI` : "desligado (use scripts/set-role.js)"}`);
+    console.log(`Upstream factor  → ${UPSTREAM_OVERPROVISION}x | recusa com fonte parada: ${REFUSE_WHEN_SOURCE_OFFLINE}`);
+    if (!process.env.DB_PATH) console.warn("AVISO: DB_PATH não definido — usando banco local ao lado do código; num container isso é EFÊMERO.");
+    const purge = purgeUsageLogs();
+    console.log(`Retenção de logs → ${USAGE_LOG_RETENTION_DAYS} d (apagados agora: ${purge.deleted}; anonimizados: ${purge.anonymized})`);
+    setInterval(() => { try { purgeUsageLogs(); } catch (e) { console.error("[purge]", e.message); } }, 24 * 60 * 60 * 1000).unref();
     console.log(`Max bytes/req    → ${MAX_BYTES_PER_REQUEST.toLocaleString()} bytes`);
     console.log(`Rate limit IP    → ${RATE_LIMIT_PER_IP_MIN} req/min`);
     console.log(`Rate limit token → ${RATE_LIMIT_PER_TOKEN_MIN} req/min`);
@@ -2240,4 +2517,4 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, db, interpretUpstreamResponse, UpstreamFormatError };
+module.exports = { app, db, interpretUpstreamResponse, UpstreamFormatError, checkUpstream, purgeUsageLogs, truncateIp };

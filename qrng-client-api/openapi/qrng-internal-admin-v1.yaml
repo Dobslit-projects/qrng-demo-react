@@ -565,3 +565,27 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+  /admin/users/{id}:
+    delete:
+      tags:
+        - Admin
+      summary: Exclui a conta de um usuário (atendimento a pedido de exclusão). Requer role=admin.
+      security:
+        - bearerAuthJWT: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: integer
+      responses:
+        '200':
+          description: Conta excluída.
+        '400':
+          description: Tentativa de excluir a própria conta de administrador (CANNOT_DELETE_SELF).
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          description: Usuário não encontrado.

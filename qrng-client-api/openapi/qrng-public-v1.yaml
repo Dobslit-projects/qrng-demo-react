@@ -425,6 +425,60 @@ components:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
 paths:
+  /public/health:
+    get:
+      tags:
+        - Health
+      summary: Saúde da fonte QRNG (buffer, estado da fonte) — sem autenticação e sem consumir bytes.
+      description: >
+        Resumo do /health do broker físico, para painéis de status. Não entrega entropia. Resposta
+        com cache de poucos segundos no servidor.
+      responses:
+        '200':
+          description: Broker acessível.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  request_id:
+                    type: string
+                  buffer_bytes_available:
+                    type: integer
+                  buffer_capacity:
+                    type: integer
+                  total_pushed:
+                    type: integer
+                  total_popped:
+                    type: integer
+                  source_status:
+                    type: string
+                    enum:
+                      - online
+                      - degraded
+                      - offline
+                  source_stall_seconds:
+                    type: number
+                    nullable: true
+                  stream_format:
+                    type: string
+                  sample_width_bytes:
+                    type: integer
+                  conditioned:
+                    type: boolean
+                  provenance:
+                    type: string
+                    description: 'Origem efetiva (nunca ''live'' aqui: esta rota não entrega bytes).'
+                  provenance_detail:
+                    $ref: '#/components/schemas/ProvenanceDetail'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          description: Broker inacessível (QRNG_UNAVAILABLE).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /auth/register:
     post:
       tags:
@@ -548,6 +602,43 @@ paths:
                     format: date-time
         '401':
           $ref: '#/components/responses/Unauthorized'
+    delete:
+      tags:
+        - Auth
+      summary: >-
+        Exclui a própria conta (exige a senha). Tokens são apagados; registros de uso ficam
+        anônimos.
+      security:
+        - bearerAuthJWT: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - password
+              properties:
+                password:
+                  type: string
+      responses:
+        '200':
+          description: Conta excluída.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  deleted:
+                    type: boolean
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: Senha incorreta (INVALID_PASSWORD).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /tokens:
     post:
       tags:

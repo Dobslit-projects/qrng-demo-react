@@ -1,0 +1,35 @@
+name: Uptime
+
+# Monitor externo sem infraestrutura própria: a cada 30 min confere o portal,
+# as duas APIs e a validade do certificado. Quando falha, o GitHub avisa por
+# e-mail quem mantém o workflow. (Auditoria 2026-10-01, SEC-013.)
+on:
+  schedule:
+    - cron: "*/30 * * * *"
+  workflow_dispatch:
+
+jobs:
+  web:
+    name: Portal, APIs e certificado
+    runs-on: ubuntu-latest
+    steps:
+      - name: Endpoints
+        run: |
+          set -euo pipefail
+          B=https://bongo.dobslit.com
+          check() {
+            code=$(curl -s -o /dev/null -m 20 -w '%{http_code}' "$B$1" || echo 000)
+            echo "$1 -> $code"
+            [ "$code" = "$2" ] || { echo "::error::$1 respondeu $code (esperado $2)"; exit 1; }
+          }
+          check / 200
+          check /api/health 200
+          check /qrng/v1/health/self 200
+          check /qrng/v1/openapi.json 200
+      - name: Certificado TLS (mínimo 14 dias)
+        run: |
+          set -euo pipefail
+          end=$(echo | openssl s_client -connect bongo.dobslit.com:443 -servername bongo.dobslit.com 2>/dev/null | openssl x509 -noout -enddate | cut -d= -f2)
+          days=$(( ( $(date -d "$end" +%s) - $(date +%s) ) / 86400 ))
+          echo "certificado expira em $days dias ($end)"
+          [ "$days" -ge 14 ] || { echo "::error::certificado expira em $days dias"; exit 1; }

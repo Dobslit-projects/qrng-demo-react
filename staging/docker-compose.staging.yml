@@ -43,6 +43,8 @@ services:
       TRUST_PROXY: "2"  # 2 saltos no staging bridge: docker-proxy(gateway) + web nginx. (prod usa "loopback": nginx no mesmo host)
       JWT_SECRET: "staging-only-not-a-secret-e2e"
       ADMIN_EMAIL: "admin@staging.invalid"
+      ALLOW_ADMIN_EMAIL_BOOTSTRAP: "1"   # SÓ staging/CI (produção: scripts/set-role.js)
+      REFUSE_WHEN_SOURCE_OFFLINE: "0"    # os e2e alternam modos do fixture em segundos; o poller é de 60 s
       DB_PATH: "/data/staging.db"
       MAX_JSON_BODY_BYTES: "8kb"
       # limites pequenos p/ exercitar rate limit / cota em testes deterministicos

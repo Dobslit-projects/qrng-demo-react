@@ -12,6 +12,7 @@ process.env.DB_PATH               = testDbPath;
 process.env.NODE_ENV              = "test";
 process.env.JWT_SECRET            = "test-jwt-secret-for-ci";
 process.env.ADMIN_EMAIL           = "admin@test.com";
+process.env.ALLOW_ADMIN_EMAIL_BOOTSTRAP = "1"; // só testes/staging; produção promove via scripts/set-role.js
 process.env.MAX_BYTES_PER_REQUEST = "1048576";
 process.env.DAILY_QUOTA_REQUESTS  = "10000";
 process.env.DAILY_QUOTA_BYTES     = "104857600";

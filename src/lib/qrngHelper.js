@@ -147,7 +147,7 @@ export async function fetchQrngBytes(byteCount, source = "remote") {
   });
   if (!r.ok) {
     const body = await r.json().catch(() => ({}));
-    throw new Error(body.detail || body.error || body.message || `QRNG API error ${r.status}`);
+    throw new Error(body.message || body.error || `QRNG API error ${r.status}`);
   }
   const json = await r.json();
   return decodeQrngJsonResponse(json, t0);
@@ -207,7 +207,7 @@ export async function fetchQrngRawBytes(byteCount, source = "remote") {
   });
   if (!r.ok) {
     const body = await r.json().catch(() => ({}));
-    throw new Error(body.detail || body.error || body.message || `QRNG API error ${r.status}`);
+    throw new Error(body.message || body.error || `QRNG API error ${r.status}`);
   }
   return decodeRawResponse(await r.arrayBuffer(), r, t0);
 }

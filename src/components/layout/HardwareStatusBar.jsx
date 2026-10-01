@@ -36,7 +36,7 @@ function effectiveOrigin({ isFallback, isOnline, health, t }) {
   const d = health?.provenance_detail;
   if (d?.actual_origin) {
     return {
-      label: d.actual_origin,
+      label: d.actual_origin === "unknown" ? t("originUnknown") : d.actual_origin,
       color: d.actual_origin === "live" ? theme.success
            : d.actual_origin === "fallback" ? theme.warning
            : theme.textMuted,

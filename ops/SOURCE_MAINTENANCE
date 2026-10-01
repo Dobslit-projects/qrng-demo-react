@@ -1,0 +1,2 @@
+Fonte física (servidor de Recife + FPGA) desligada para manutenção desde 2026-09-30.
+Apague este arquivo quando a fonte voltar: o workflow "Fonte QRNG" passa a alertar se ela cair.

@@ -1,0 +1,29 @@
+name: Fonte QRNG
+
+# A cada 6 h confere se a fonte física está entregando dados (saúde pública da
+# client-api — não consome entropia). Enquanto existir o arquivo
+# ops/SOURCE_MAINTENANCE a verificação é pulada (manutenção declarada).
+on:
+  schedule:
+    - cron: "17 */6 * * *"
+  workflow_dispatch:
+
+jobs:
+  source:
+    name: Fonte física
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Saúde da fonte
+        run: |
+          set -euo pipefail
+          if [ -f ops/SOURCE_MAINTENANCE ]; then
+            echo "::notice::manutenção declarada em ops/SOURCE_MAINTENANCE — verificação pulada"
+            cat ops/SOURCE_MAINTENANCE
+            exit 0
+          fi
+          body=$(curl -s -m 20 -w '\n%{http_code}' https://bongo.dobslit.com/qrng/v1/public/health)
+          code=$(echo "$body" | tail -1); json=$(echo "$body" | head -n -1)
+          echo "HTTP $code $json"
+          [ "$code" = 200 ] || { echo "::error::broker inacessível (HTTP $code)"; exit 1; }
+          echo "$json" | grep -q '"source_status":"online"' || { echo "::error::fonte não está online"; exit 1; }
