@@ -24,7 +24,9 @@ const server = http.createServer((req, res) => {
     return res.end(JSON.stringify({
       buffer_bytes_available: 1000, buffer_capacity: 2000, total_pushed: 10, total_popped: 5,
       source_file: "/tmp/fifo_qrng", source_status: upstream.sourceStatus, source_stall_seconds: upstream.sourceStatus === "offline" ? 120.5 : 0.1,
-      stream_format: "uint32-le", sample_width_bytes: 4, conditioned: false,
+      stream_format: "uint32-le", sample_width_bytes: 4, conditioned: upstream.qualification ? true : false,
+      ...(upstream.qualification !== undefined ? { qualification: upstream.qualification,
+        qualification_status: upstream.qualification ? "verified_active_bitstream" : "inactive_other_bitstream" } : {}),
     }));
   }
   if (u.pathname === "/random") {
@@ -97,6 +99,27 @@ test("/v1/public/health: campos do broker sem source_file, sem auth, no-store", 
   assert.equal(r.headers["cache-control"], "no-store");
   assert.ok(r.body.provenance_detail, "proveniência presente, como em /v1/health");
   assert.notEqual(r.body.provenance, "live", "sem bytes não há evidência de live");
+});
+
+test("/v1/public/health: passa qualification/qualification_status do broker (Kuapoã doc 135)", async () => {
+  upstream.mode = "online";
+  upstream.qualification = { status: "FORMAL_OPERATIONAL_FINAL", bitstream_sha256: "86e5947f".padEnd(64, "0"),
+    restart_validated: false, sp80090b_full_validation: false, cryptographic_source_ready: false, operational_ready: true };
+  let r = await request(app).get("/v1/public/health");
+  assert.equal(r.status, 200);
+  assert.equal(r.body.conditioned, true);
+  assert.equal(r.body.qualification_status, "verified_active_bitstream");
+  assert.equal(r.body.qualification.status, "FORMAL_OPERATIONAL_FINAL");
+  assert.equal(r.body.qualification.restart_validated, false);
+  assert.equal(r.body.qualification.sp80090b_full_validation, false);
+  upstream.qualification = null;                                   // e.g. guard rolled back: broker withdraws the block
+  r = await request(app).get("/v1/public/health");
+  assert.equal(r.body.qualification, null);
+  assert.equal(r.body.qualification_status, "inactive_other_bitstream");
+  assert.equal(r.body.conditioned, false);
+  delete upstream.qualification;                                   // old broker: fields absent, nothing invented
+  r = await request(app).get("/v1/public/health");
+  assert.equal("qualification" in r.body, false);
 });
 
 test("/v1/public/health com o broker fora: 503 estruturado, sem URL interna", async () => {

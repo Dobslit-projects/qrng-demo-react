@@ -473,6 +473,9 @@ const PUBLIC_HEALTH_TTL_MS = parseInt(process.env.PUBLIC_HEALTH_TTL_MS || "3000"
 const PUBLIC_HEALTH_FIELDS = [
   "buffer_bytes_available", "buffer_capacity", "total_pushed", "total_popped",
   "source_status", "source_stall_seconds", "stream_format", "sample_width_bytes", "conditioned",
+  // Qualificação da fonte (Kuapoã doc 135): o broker só envia um objeto não-nulo enquanto uma sonda recente da placa
+  // confirma que o bitstream qualificado está ATIVO; caso contrário null + qualification_status explicativo.
+  "qualification", "qualification_status",
 ];
 let publicHealthCache = { at: 0, status: 0, body: null };
 
@@ -511,6 +514,8 @@ const publicHealthLimiter = rateLimit({
  *                 stream_format: { type: string }
  *                 sample_width_bytes: { type: integer }
  *                 conditioned: { type: boolean }
+ *                 qualification: { type: object, nullable: true, description: "Qualificação da fonte (bitstream, perfil de health tests, H_original, h_out pré-restart, restart_validated=false, sp80090b_full_validation=false, operational_ready). Não-nulo só com o bitstream qualificado ativo e verificado." }
+ *                 qualification_status: { type: string, description: "verified_active_bitstream | inactive_other_bitstream | unverified_stale_probe | unverified_no_probe | none | ..." }
  *                 provenance: { type: string, description: "Origem efetiva (nunca 'live' aqui: esta rota não entrega bytes)." }
  *                 provenance_detail: { $ref: '#/components/schemas/ProvenanceDetail' }
  *       429: { $ref: '#/components/responses/RateLimited' }
