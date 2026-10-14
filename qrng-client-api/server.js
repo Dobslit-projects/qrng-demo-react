@@ -214,6 +214,25 @@ function setProvenanceHeaders(res, prov) {
   }
 }
 
+// ── Qualificação da fonte por RESPOSTA (Kuapoã Etapa 89E, doc 139) ───────────
+// A fonte de verdade é o BROKER: ele só diz conditioned=true enquanto uma sonda recente da placa confirma que o
+// bitstream qualificado (formal, Toeplitz no FPGA) está ATIVO e passou no hash-gate deste boot. Aqui só se REPASSA,
+// com allowlist de formato. Broker antigo (sem os headers): X-QRNG-Conditioned mantém o "false" conservador de
+// sempre e os demais ficam AUSENTES — nenhuma qualificação é inventada.
+const QUAL_STATUS_RX = /^[a-z_]{1,64}$/;
+const SHA256_HEX_RX = /^[0-9a-f]{64}$/;
+function setSourceQualificationHeaders(res, upHdr) {
+  const uh = upHdr || {};
+  const qs = String(uh["x-qrng-qualification-status"] || "");
+  // "true" só com as DUAS afirmações do broker: conditioned=true E bitstream qualificado verificado ativo
+  const verified = qs === "verified_active_bitstream";
+  const conditioned = String(uh["x-qrng-conditioned"] || "").toLowerCase() === "true" && verified;
+  res.setHeader("X-QRNG-Conditioned", conditioned ? "true" : "false");
+  if (QUAL_STATUS_RX.test(qs)) res.setHeader("X-QRNG-Qualification-Status", qs);
+  const sha = String(uh["x-qrng-bitstream-sha256"] || "").toLowerCase();
+  if (verified && SHA256_HEX_RX.test(sha)) res.setHeader("X-QRNG-Bitstream-SHA256", sha);
+}
+
 /** Objeto plano de headers do upstream em minúsculas (node-fetch Headers). */
 function lowerHeaders(h) {
   const o = {};
@@ -476,6 +495,8 @@ const PUBLIC_HEALTH_FIELDS = [
   // Qualificação da fonte (Kuapoã doc 135): o broker só envia um objeto não-nulo enquanto uma sonda recente da placa
   // confirma que o bitstream qualificado está ATIVO; caso contrário null + qualification_status explicativo.
   "qualification", "qualification_status",
+  // health REAL da fonte (Etapa 89E, doc 139): estado RCT/APT do hardware; só o rótulo, sem o detalhe dos registos
+  "entropy_health",
 ];
 let publicHealthCache = { at: 0, status: 0, body: null };
 
@@ -516,6 +537,7 @@ const publicHealthLimiter = rateLimit({
  *                 conditioned: { type: boolean }
  *                 qualification: { type: object, nullable: true, description: "Qualificação da fonte (bitstream, perfil de health tests, H_original, h_out pré-restart, restart_validated=false, sp80090b_full_validation=false, operational_ready). Não-nulo só com o bitstream qualificado ativo e verificado." }
  *                 qualification_status: { type: string, description: "verified_active_bitstream | inactive_other_bitstream | unverified_stale_probe | unverified_no_probe | none | ..." }
+ *                 entropy_health: { type: string, description: "hw_health_tests_passing | hw_health_alarm | hw_health_unavailable | not_assessed — estado dos health tests RCT/APT do hardware (wrapper lido só em leitura). Não é validação SP 800-90B." }
  *                 provenance: { type: string, description: "Origem efetiva (nunca 'live' aqui: esta rota não entrega bytes)." }
  *                 provenance_detail: { $ref: '#/components/schemas/ProvenanceDetail' }
  *       429: { $ref: '#/components/responses/RateLimited' }
@@ -1661,8 +1683,17 @@ function interpretUpstreamResponse(contentType, rawBuffer, requestedBytes) {
  *             schema: { type: string }
  *             description: "Proveniência da fonte (ex.: dobslit-qrng-ufpe-fpga). Presente em format=raw."
  *           X-QRNG-Conditioned:
- *             schema: { type: string, enum: ['false'] }
- *             description: "Sempre 'false' — bytes não condicionados. Presente em format=raw."
+ *             schema: { type: string, enum: ['true', 'false'] }
+ *             description: "'true' só quando o broker afirma conditioned=true E qualification_status=verified_active_bitstream (bitstream formal com extrator Toeplitz 256→128 no FPGA, verificado ATIVO por sonda da placa); 'false' em qualquer outro caso, inclusive broker antigo. Presente em todos os formatos."
+ *           X-QRNG-Qualification-Status:
+ *             schema: { type: string }
+ *             description: "Repassado do broker quando presente: verified_active_bitstream | inactive_other_bitstream | unverified_stale_probe | unverified_no_probe | none | ..."
+ *           X-QRNG-Bitstream-SHA256:
+ *             schema: { type: string }
+ *             description: "SHA-256 do bitstream qualificado verificado ativo. Ausente salvo verified_active_bitstream."
+ *           X-QRNG-Entropy-Health:
+ *             schema: { type: string, enum: [hw_health_tests_passing, hw_health_alarm, hw_health_unavailable, not_assessed, healthy, degraded, failed] }
+ *             description: "Estado dos health tests RCT/APT do HARDWARE (registos do wrapper lidos só em leitura pela sonda do broker). Não é validação SP 800-90B."
  *         content:
  *           application/json:
  *             schema: { $ref: '#/components/schemas/RandomResponse' }
@@ -1768,7 +1799,7 @@ async function randomHandler(req, res) {
       res.setHeader("Cache-Control", "no-store");
       res.setHeader("X-Request-Id", requestId);
       res.setHeader("X-QRNG-Source", QRNG_SOURCE_LABEL);
-      res.setHeader("X-QRNG-Conditioned", "false");
+      setSourceQualificationHeaders(res, upHdr);
       setProvenanceHeaders(res, prov);
       return res.end(buf); // res.end (não res.send): zero transformação do Buffer
     }
@@ -1781,6 +1812,7 @@ async function randomHandler(req, res) {
     // consumidores — inclusive instrumentação de teste — podem lê-la sem
     // baixar/parsear o corpo. O corpo continua trazendo `provenance_detail`.
     setProvenanceHeaders(res, prov);
+    setSourceQualificationHeaders(res, upHdr);
     res.json({ request_id: requestId, source: QRNG_SOURCE_LABEL, provenance: prov.actual_origin, provenance_detail: prov, bytes, format, random, timestamp: new Date().toISOString() });
 
   } catch (err) {
@@ -1819,7 +1851,7 @@ app.get("/v1/random", ...randomChain, randomHandler);
  *         headers:
  *           X-Request-Id: { schema: { type: string }, description: Identificador da requisição. }
  *           X-QRNG-Source: { schema: { type: string }, description: Proveniência da fonte. }
- *           X-QRNG-Conditioned: { schema: { type: string, enum: ['false'] }, description: Sempre 'false'. }
+ *           X-QRNG-Conditioned: { schema: { type: string, enum: ['true', 'false'] }, description: "'true' só com conditioned=true E verified_active_bitstream do broker; 'false' caso contrário. Ver também X-QRNG-Qualification-Status, X-QRNG-Bitstream-SHA256, X-QRNG-Entropy-Health." }
  *         content:
  *           application/octet-stream:
  *             schema: { type: string, format: binary }
@@ -2000,7 +2032,7 @@ function parsePublicBytes(req, res, next) {
  *         headers:
  *           X-Request-Id: { schema: { type: string }, description: Identificador da requisição (sempre presente). }
  *           X-QRNG-Source: { schema: { type: string }, description: "Proveniência (presente em format=raw)." }
- *           X-QRNG-Conditioned: { schema: { type: string, enum: ['false'] }, description: "Sempre 'false' (presente em format=raw)." }
+ *           X-QRNG-Conditioned: { schema: { type: string, enum: ['true', 'false'] }, description: "'true' só com conditioned=true E verified_active_bitstream do broker; 'false' caso contrário. Ver também X-QRNG-Qualification-Status, X-QRNG-Bitstream-SHA256, X-QRNG-Entropy-Health." }
  *         content:
  *           application/json: { schema: { $ref: '#/components/schemas/RandomResponse' } }
  *           application/octet-stream: { schema: { type: string, format: binary } }
@@ -2100,7 +2132,7 @@ async function publicRandomHandler(req, res) {
       res.setHeader("Content-Type", "application/octet-stream");
       res.setHeader("Content-Length", buf.length);
       res.setHeader("X-QRNG-Source", QRNG_SOURCE_LABEL);
-      res.setHeader("X-QRNG-Conditioned", "false");
+      setSourceQualificationHeaders(res, upHdr);
       setProvenanceHeaders(res, prov);
       return res.end(buf); // corpo = EXATAMENTE N bytes, sem JSON/BOM/prefixo
     }
@@ -2111,6 +2143,7 @@ async function publicRandomHandler(req, res) {
 
     // Paridade com raw: proveniência nos headers também nas respostas JSON.
     setProvenanceHeaders(res, prov);
+    setSourceQualificationHeaders(res, upHdr);
     res.json({ request_id: requestId, source: QRNG_SOURCE_LABEL, provenance: prov.actual_origin, provenance_detail: prov, bytes, format, random, timestamp: new Date().toISOString() });
 
   } catch (err) {
@@ -2147,7 +2180,7 @@ app.get("/v1/public/random", ...publicRandomChain, publicRandomHandler);
  *         headers:
  *           X-Request-Id: { schema: { type: string } }
  *           X-QRNG-Source: { schema: { type: string } }
- *           X-QRNG-Conditioned: { schema: { type: string, enum: ['false'] } }
+ *           X-QRNG-Conditioned: { schema: { type: string, enum: ['true', 'false'] }, description: "'true' só com conditioned=true E verified_active_bitstream do broker; 'false' caso contrário. Ver também X-QRNG-Qualification-Status, X-QRNG-Bitstream-SHA256, X-QRNG-Entropy-Health." }
  *         content:
  *           application/octet-stream: { schema: { type: string, format: binary } }
  *       413: { description: bytes acima de PUBLIC_MAX_BYTES_PER_REQUEST., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }

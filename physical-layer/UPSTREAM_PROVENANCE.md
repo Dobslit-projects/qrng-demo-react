@@ -53,7 +53,10 @@ Emitido em `/random` (binário e hex), `/v1/raw`, `/v1/uint32`, e replicado pelo
 | `X-QRNG-Buffer-Discontinuous` | `true` \| `false` | **eixo BUFFER** — `true` se `X-QRNG-Discontinuities > 0` |
 | `X-QRNG-Discontinuities` | inteiro | **item 3** — contagem acumulada de eventos `reconnect` + `realign` + `drop_oldest` do `WordAligner` |
 | `X-QRNG-Realign-Bytes` | inteiro | **item 2/3** — bytes descartados no total para re-encaixar o grid uint32 após reconexões |
-| `X-QRNG-Conditioned` | `false` | já existente |
+| `X-QRNG-Conditioned` | `true` \| `false` | **Etapa 89E (Kuapoã doc 139)**: `true` só enquanto a sonda da placa confirma o bitstream qualificado ATIVO e no hash-gate deste boot (`qualification_status=verified_active_bitstream`); antes era sempre `false` |
+| `X-QRNG-Qualification-Status` | `verified_active_bitstream` \| `inactive_other_bitstream` \| `unverified_stale_probe` \| `unverified_no_probe` \| `none` | 89A/89E — estado da verificação do bitstream qualificado |
+| `X-QRNG-Bitstream-SHA256` | 64 hex | 89E — só com `verified_active_bitstream`; ausente caso contrário |
+| `X-QRNG-Entropy-Health` | `hw_health_tests_passing` \| `hw_health_alarm` \| `hw_health_unavailable` \| `not_assessed` | 89E — estado dos health tests RCT/APT do HARDWARE (wrapper 0x14/0x0C/0x04 lidos só em leitura); `not_assessed` sem sonda. Não é validação SP 800-90B |
 
 ## Itens 2/3/6 — alinhamento de palavra + descontinuidade
 

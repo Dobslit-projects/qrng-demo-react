@@ -189,7 +189,7 @@ function decodeRawResponse(buf, r, t0) {
     hex: bytesToHex(bytes),
     source:      r.headers.get("x-qrng-source") || null,
     requestId:   r.headers.get("x-request-id") || null,
-    conditioned: r.headers.get("x-qrng-conditioned"), // string "false" quando presente
+    conditioned: r.headers.get("x-qrng-conditioned"), // "true" só com bitstream qualificado verificado ativo (broker); senão "false"
     timestamp:   new Date().toISOString(),
     latencyMs:   Math.round(performance.now() - t0),
   };

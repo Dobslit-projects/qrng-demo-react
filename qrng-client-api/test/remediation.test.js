@@ -27,13 +27,15 @@ const server = http.createServer((req, res) => {
       stream_format: "uint32-le", sample_width_bytes: 4, conditioned: upstream.qualification ? true : false,
       ...(upstream.qualification !== undefined ? { qualification: upstream.qualification,
         qualification_status: upstream.qualification ? "verified_active_bitstream" : "inactive_other_bitstream" } : {}),
+      ...(upstream.entropyHealth !== undefined ? { entropy_health: upstream.entropyHealth,
+        entropy_health_detail: { wrapper_state: "HEALTHY", boot_id: "secret-ish" } } : {}),
     }));
   }
   if (u.pathname === "/random") {
     const n = Number(u.searchParams.get("bytes"));
     upstream.randomCalls.push(n);
     const buf = Buffer.alloc(n, 0xab);
-    res.writeHead(200, { "content-type": "application/octet-stream", "content-length": buf.length });
+    res.writeHead(200, { "content-type": "application/octet-stream", "content-length": buf.length, ...(upstream.randomHeaders || {}) });
     return res.end(buf);
   }
   res.writeHead(404); res.end();
@@ -120,6 +122,90 @@ test("/v1/public/health: passa qualification/qualification_status do broker (Kua
   delete upstream.qualification;                                   // old broker: fields absent, nothing invented
   r = await request(app).get("/v1/public/health");
   assert.equal("qualification" in r.body, false);
+});
+
+// ── Etapa 89E (Kuapoã doc 139): qualificação/health repassados do broker nos endpoints de bytes ──────────────────
+const SHA_FORMAL = "86e5947fcac710794d205162543451ab3ca98d952c7b206212e6431609f9d111";
+const BROKER_QUALIFIED = { "x-qrng-conditioned": "true", "x-qrng-qualification-status": "verified_active_bitstream",
+  "x-qrng-bitstream-sha256": SHA_FORMAL, "x-qrng-entropy-health": "hw_health_tests_passing" };
+
+test("89E: /v1/public/random raw e hex repassam conditioned/qualificação/sha/entropy do broker", async () => {
+  upstream.mode = "online"; upstream.randomHeaders = BROKER_QUALIFIED;
+  try {
+    for (const fmt of ["raw", "hex"]) {
+      const r = await request(app).get(`/v1/public/random?bytes=16&format=${fmt}`);
+      assert.equal(r.status, 200, fmt);
+      assert.equal(r.headers["x-qrng-conditioned"], "true", fmt);
+      assert.equal(r.headers["x-qrng-qualification-status"], "verified_active_bitstream", fmt);
+      assert.equal(r.headers["x-qrng-bitstream-sha256"], SHA_FORMAL, fmt);
+      assert.equal(r.headers["x-qrng-entropy-health"], "hw_health_tests_passing", fmt);
+    }
+  } finally { delete upstream.randomHeaders; }
+});
+
+test("89E: /v1/random (token) raw repassa a qualificação", async () => {
+  upstream.mode = "online"; upstream.randomHeaders = BROKER_QUALIFIED;
+  try {
+    const a = await newAccount("q89e@example.com");
+    const r = await request(app).get("/v1/random?bytes=8&format=raw").set("Authorization", `Bearer ${a.apiToken}`);
+    assert.equal(r.status, 200);
+    assert.equal(r.headers["x-qrng-conditioned"], "true");
+    assert.equal(r.headers["x-qrng-bitstream-sha256"], SHA_FORMAL);
+  } finally { delete upstream.randomHeaders; }
+});
+
+test("89E: conditioned=true do broker SEM verified_active_bitstream → false, sem sha", async () => {
+  upstream.mode = "online";
+  upstream.randomHeaders = { "x-qrng-conditioned": "true", "x-qrng-qualification-status": "inactive_other_bitstream",
+    "x-qrng-bitstream-sha256": SHA_FORMAL };
+  try {
+    const r = await request(app).get("/v1/public/random?bytes=16&format=raw");
+    assert.equal(r.headers["x-qrng-conditioned"], "false");
+    assert.equal(r.headers["x-qrng-qualification-status"], "inactive_other_bitstream");
+    assert.equal(r.headers["x-qrng-bitstream-sha256"], undefined);
+  } finally { delete upstream.randomHeaders; }
+});
+
+test("89E: broker antigo (sem headers) → Conditioned false, nada inventado", async () => {
+  upstream.mode = "online"; delete upstream.randomHeaders;
+  const r = await request(app).get("/v1/public/random?bytes=16&format=raw");
+  assert.equal(r.headers["x-qrng-conditioned"], "false");
+  assert.equal(r.headers["x-qrng-qualification-status"], undefined);
+  assert.equal(r.headers["x-qrng-bitstream-sha256"], undefined);
+  assert.equal(r.headers["x-qrng-entropy-health"], "not_assessed");
+});
+
+test("89E: valores fora do formato são descartados (allowlist)", async () => {
+  upstream.mode = "online";
+  upstream.randomHeaders = { "x-qrng-conditioned": "TRUE-ish", "x-qrng-qualification-status": "Verified Active!",
+    "x-qrng-bitstream-sha256": "zz", "x-qrng-entropy-health": "hw_health_great" };
+  try {
+    const r = await request(app).get("/v1/public/random?bytes=16&format=raw");
+    assert.equal(r.headers["x-qrng-conditioned"], "false");
+    assert.equal(r.headers["x-qrng-qualification-status"], undefined);
+    assert.equal(r.headers["x-qrng-bitstream-sha256"], undefined);
+    assert.equal(r.headers["x-qrng-entropy-health"], "not_assessed");
+  } finally { delete upstream.randomHeaders; }
+});
+
+test("89E: hw_health_alarm do broker é repassado e derruba o rótulo live", async () => {
+  upstream.mode = "online"; upstream.randomHeaders = { ...BROKER_QUALIFIED, "x-qrng-entropy-health": "hw_health_alarm" };
+  try {
+    const r = await request(app).get("/v1/public/random?bytes=16&format=raw");
+    assert.equal(r.headers["x-qrng-entropy-health"], "hw_health_alarm");
+    assert.notEqual(r.headers["x-qrng-provenance"], "live");
+  } finally { delete upstream.randomHeaders; }
+});
+
+test("89E: /v1/public/health publica entropy_health do broker, mas não o detalhe dos registos", async () => {
+  upstream.mode = "online"; upstream.entropyHealth = "hw_health_tests_passing";
+  try {
+    await new Promise((r) => setTimeout(r, 3100));   // TTL do cache público (3 s)
+    const r = await request(app).get("/v1/public/health");
+    assert.equal(r.status, 200);
+    assert.equal(r.body.entropy_health, "hw_health_tests_passing");
+    assert.equal("entropy_health_detail" in r.body, false);
+  } finally { delete upstream.entropyHealth; }
 });
 
 test("/v1/public/health com o broker fora: 503 estruturado, sem URL interna", async () => {

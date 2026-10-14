@@ -71,6 +71,13 @@ antes. O nome do commit "rodando" em cada componente:
 - **Sem condicionamento**: nenhum whitening, XOR, Von Neumann ou DRBG em
   nenhuma camada auditada (server_api.py declara `CONDITIONED=false`;
   nenhum código de condicionamento foi encontrado ou introduzido).
+- **Atualização 2026-10-14 (Kuapoã docs 135/139)**: o parágrafo acima descreve o
+  estado da auditoria. Desde o deploy do bitstream formal 86e5947f a saída é
+  condicionada por um extrator Toeplitz 256→128 **no FPGA**; o broker publica
+  `x-qrng-conditioned: true` só enquanto a sonda confirma esse bitstream ativo
+  (`qualification_status=verified_active_bitstream`) e `x-qrng-entropy-health`
+  com o estado dos health tests RCT/APT do hardware. Sem alegação de conformidade
+  SP 800-90B completa (restart não validado).
 - **Unidade de amostra para avaliação estatística**: byte (8 bits), por
   decomposição little-endian da palavra uint32 -- `assessment_symbol_width=8`.
   Esta é uma decisão sobre *como avaliar*, não uma alegação de que os 4

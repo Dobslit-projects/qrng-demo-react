@@ -26,7 +26,13 @@
 
 const MODES = ["live", "replay", "fixture", "historical"];
 const NON_LIVE_MODES = ["replay", "fixture", "historical"];
-const ENTROPY_STATES = ["not_assessed", "healthy", "degraded", "failed"];
+// Etapa 89E (Kuapoã doc 139): o broker passa a publicar o estado REAL dos health tests do hardware (RCT/APT no FPGA),
+// lido só em leitura do wrapper: hw_health_tests_passing | hw_health_alarm | hw_health_unavailable. "not_assessed"
+// continua sendo o padrão (broker antigo, sem sonda). Valores fora desta lista viram "not_assessed" — nada é inventado.
+const ENTROPY_STATES = ["not_assessed", "healthy", "degraded", "failed",
+                        "hw_health_tests_passing", "hw_health_alarm", "hw_health_unavailable"];
+// estados que DERRUBAM o rótulo live (um health test do hardware em alarme)
+const ENTROPY_BLOCKING = ["failed", "hw_health_alarm"];
 
 /**
  * @param {object} o
@@ -128,7 +134,7 @@ function resolveProvenance(o) {
     // item 5: um health test em estado "failed" DERRUBA o rótulo live.
     //   "not_assessed"/"healthy"/"degraded" NÃO bloqueiam (live = proveniência,
     //   não é validação de entropia).
-    const entropyOk = entropyHealth !== "failed";
+    const entropyOk = !ENTROPY_BLOCKING.includes(entropyHealth);
     if (o.servedFromUpstream && transportHealth === "healthy" && bufferHealth === "healthy"
         && ageOk && entropyOk && shaVerified !== false
         && (haveCaptureEvidence || (allowNoEvidence && envelopeUsable))) {
@@ -179,4 +185,4 @@ function resolveProvenance(o) {
   };
 }
 
-module.exports = { resolveProvenance, MODES, NON_LIVE_MODES, ENTROPY_STATES };
+module.exports = { resolveProvenance, MODES, NON_LIVE_MODES, ENTROPY_STATES, ENTROPY_BLOCKING };

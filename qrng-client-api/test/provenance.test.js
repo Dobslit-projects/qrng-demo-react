@@ -340,6 +340,31 @@ test("item 5: X-QRNG-Entropy-Health=degraded NÃO derruba live (só failed derru
   assert.equal(p.actual_origin, "live");
 });
 
+// ── Etapa 89E (Kuapoã doc 139): estados reais do hardware (RCT/APT no FPGA, lidos do wrapper pelo broker)
+test("89E: hw_health_alarm DERRUBA live (como failed)", () => {
+  const p = resolveProvenance({ ...base, servedFromUpstream: true,
+    upstreamHeaders: { "x-qrng-provenance-version": "1", "x-qrng-captured-at": fresh,
+      "x-qrng-source-status": "online", "x-qrng-entropy-health": "hw_health_alarm" } });
+  assert.equal(p.entropy_health, "hw_health_alarm");
+  assert.notEqual(p.actual_origin, "live");
+});
+
+test("89E: hw_health_tests_passing e hw_health_unavailable NÃO derrubam live (live = proveniência)", () => {
+  for (const st of ["hw_health_tests_passing", "hw_health_unavailable"]) {
+    const p = resolveProvenance({ ...base, servedFromUpstream: true,
+      upstreamHeaders: { "x-qrng-provenance-version": "1", "x-qrng-captured-at": fresh,
+        "x-qrng-source-status": "online", "x-qrng-entropy-health": st } });
+    assert.equal(p.entropy_health, st);
+    assert.equal(p.actual_origin, "live", st);
+  }
+});
+
+test("89E: valor desconhecido de X-QRNG-Entropy-Health vira not_assessed (nada é inventado)", () => {
+  const p = resolveProvenance({ ...base, servedFromUpstream: true,
+    upstreamHeaders: { "x-qrng-captured-at": fresh, "x-qrng-source-status": "online", "x-qrng-entropy-health": "hw_health_great" } });
+  assert.equal(p.entropy_health, "not_assessed");
+});
+
 test("item 5: os três eixos são independentes — transporte degraded, buffer discontinuous, entropy failed", () => {
   const p = resolveProvenance({ ...base, servedFromUpstream: true,
     upstreamHeaders: {
