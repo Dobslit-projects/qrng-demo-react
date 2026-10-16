@@ -409,7 +409,7 @@ export function errorMessage(err) {
   const msg = err?.message || "";
   if (!msg) return "Backend QRNG indisponível. Verifique a conexão e tente novamente.";
   if (msg.includes("QRNG_UNAVAILABLE"))
-    return "QRNG indisponível no momento (túnel FPGA offline). Tente novamente em alguns segundos ou use a fonte Pré-coletada.";
+    return "QRNG indisponível no momento (fonte Kuapoã offline). Tente novamente em alguns segundos ou use a fonte Pré-coletada.";
   if (msg.includes("502") || msg.includes("503"))
     return "Backend QRNG inacessível (502/503). O serviço pode estar reiniciando. Tente novamente em breve.";
   if (msg.includes("504") || msg.includes("timeout") || msg.toLowerCase().includes("timeout"))

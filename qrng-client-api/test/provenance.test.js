@@ -387,3 +387,76 @@ test("item 5: X-QRNG-Discontinuities > 0 -> buffer_health discontinuous", () => 
   assert.equal(p.buffer_health, "discontinuous");
   assert.notEqual(p.actual_origin, "live");
 });
+
+// ── 2026-10-15: evidência da sonda do hardware + contador cumulativo de gaps ──
+const HW_OK = { "x-qrng-source-status": "online", "x-qrng-entropy-health": "hw_health_tests_passing",
+                "x-qrng-qualification-status": "verified_active_bitstream" };
+
+test("2026-10-15: /random com sonda do hardware (RCT/APT passando + bitstream verificado + received_at fresco) -> live, live_verified, live_evidence=hw_health_probe", () => {
+  const p = resolveProvenance({ ...base, servedFromUpstream: true,
+    upstreamHeaders: { ...HW_OK, "x-qrng-received-at": fresh, "x-qrng-capture-id": "cap_1" } });
+  assert.equal(p.actual_origin, "live");
+  assert.equal(p.live_verified, true);
+  assert.equal(p.live_evidence, "hw_health_probe");
+  assert.equal(p.qualification_status, "verified_active_bitstream");
+  assert.equal(p.captured_at, null, "captured_at continua null: a evidência é a sonda, não um carimbo por bloco");
+});
+
+test("2026-10-15: captured_at prevalece como evidência (live_evidence=captured_at)", () => {
+  const p = resolveProvenance({ ...base, servedFromUpstream: true,
+    upstreamHeaders: { ...HW_OK, "x-qrng-captured-at": fresh, "x-qrng-received-at": fresh } });
+  assert.equal(p.actual_origin, "live");
+  assert.equal(p.live_evidence, "captured_at");
+});
+
+test("2026-10-15: sonda incompleta NÃO é evidência (sem qualification verified / sem health passing / sem frescor)", () => {
+  const cases = [
+    { ...HW_OK, "x-qrng-qualification-status": "unverified_no_probe", "x-qrng-received-at": fresh },
+    { ...HW_OK, "x-qrng-entropy-health": "hw_health_unavailable", "x-qrng-received-at": fresh },
+    { ...HW_OK, "x-qrng-entropy-health": "not_assessed", "x-qrng-received-at": fresh },
+    { ...HW_OK },                                   // sem received_at nem stall
+    { ...HW_OK, "x-qrng-received-at": old },        // amostra de 6 h
+  ];
+  for (const h of cases) {
+    const p = resolveProvenance({ ...base, servedFromUpstream: true, upstreamHeaders: h });
+    assert.equal(p.actual_origin, "unknown", JSON.stringify(h));
+    assert.equal(p.live_verified, false);
+    assert.equal(p.live_evidence, "none");
+  }
+});
+
+test("2026-10-15: hw_health_alarm continua derrubando live mesmo com bitstream verificado", () => {
+  const p = resolveProvenance({ ...base, servedFromUpstream: true,
+    upstreamHeaders: { ...HW_OK, "x-qrng-entropy-health": "hw_health_alarm", "x-qrng-received-at": fresh } });
+  assert.equal(p.actual_origin, "unknown");
+});
+
+test("2026-10-15: resposta de STATUS (/health) com a sonda + stall 0 s -> live verificada; stall de 1 h -> unknown", () => {
+  const ok = resolveProvenance({ ...base, servedFromUpstream: false, upstreamReachable: true,
+    upstreamHeaders: { ...HW_OK, "x-qrng-source-stall-seconds": "0" } });
+  assert.equal(ok.actual_origin, "live");
+  assert.equal(ok.live_verified, true);
+  assert.equal(ok.live_evidence, "hw_health_probe");
+  const stale = resolveProvenance({ ...base, servedFromUpstream: false, upstreamReachable: true,
+    upstreamHeaders: { ...HW_OK, "x-qrng-source-stall-seconds": "3600" } });
+  assert.equal(stale.actual_origin, "unknown");
+  const noProbe = resolveProvenance({ ...base, servedFromUpstream: false, upstreamReachable: true,
+    upstreamHeaders: { "x-qrng-source-status": "online", "x-qrng-source-stall-seconds": "0" } });
+  assert.equal(noProbe.actual_origin, "unknown", "broker sem sonda: status não vira live sozinho");
+});
+
+test("2026-10-15: X-QRNG-Discontinuities é CUMULATIVO — com baseline, só avanço marca gap", () => {
+  const hdr = (n) => ({ ...HW_OK, "x-qrng-received-at": fresh, "x-qrng-discontinuities": String(n), "x-qrng-buffer-discontinuous": n > 0 ? "true" : "false" });
+  // 256 gaps antigos, nenhum novo desde a resposta anterior -> bloco contínuo, live
+  const same = resolveProvenance({ ...base, servedFromUpstream: true, upstreamHeaders: hdr(256), discontinuitiesBaseline: 256 });
+  assert.equal(same.buffer_health, "healthy");
+  assert.equal(same.actual_origin, "live");
+  assert.equal(same.discontinuities, 256);
+  // avançou 256 -> 257 desde a resposta anterior -> este bloco é descontínuo, não live
+  const bumped = resolveProvenance({ ...base, servedFromUpstream: true, upstreamHeaders: hdr(257), discontinuitiesBaseline: 256 });
+  assert.equal(bumped.buffer_health, "discontinuous");
+  assert.equal(bumped.actual_origin, "unknown");
+  // sem baseline: comportamento antigo (qualquer contador > 0 = discontinuous)
+  const legacy = resolveProvenance({ ...base, servedFromUpstream: true, upstreamHeaders: hdr(256) });
+  assert.equal(legacy.buffer_health, "discontinuous");
+});

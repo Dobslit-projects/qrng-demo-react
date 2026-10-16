@@ -36,7 +36,9 @@ function effectiveOrigin({ isFallback, isOnline, health, t }) {
   const d = health?.provenance_detail;
   if (d?.actual_origin) {
     return {
-      label: d.actual_origin === "unknown" ? t("originUnknown") : d.actual_origin,
+      label: d.actual_origin === "unknown" ? t("originUnknown")
+           : d.actual_origin === "live" ? t("originLive")
+           : d.actual_origin,
       color: d.actual_origin === "live" ? theme.success
            : d.actual_origin === "fallback" ? theme.warning
            : theme.textMuted,
@@ -44,7 +46,7 @@ function effectiveOrigin({ isFallback, isOnline, health, t }) {
     };
   }
   const p = health?.provenance;
-  if (p) return { label: p, color: p === "live" ? theme.success : theme.textMuted, verified: false };
+  if (p) return { label: p === "live" ? t("originLive") : p === "unknown" ? t("originUnknown") : p, color: p === "live" ? theme.success : theme.textMuted, verified: false };
   // sem contrato de proveniência disponível nesta rota de health
   if (!isOnline) return { label: t("originUnavailable"), color: theme.danger, verified: false };
   return { label: t("originUnknown"), color: theme.textMuted, verified: false };
@@ -94,29 +96,16 @@ export default function HardwareStatusBar() {
         <span style={{ color: theme.textMuted }} data-testid="effective-origin">
           {t("effectiveOrigin")}:{" "}
           <strong style={{ color: origin.color }}>{origin.label}</strong>
-          {origin.label === "live" && !origin.verified && (
+          {health?.provenance_detail?.actual_origin === "live" && !origin.verified && (
             <span style={{ color: theme.warning }}>&nbsp;{t("notVerified")}</span>
           )}
         </span>
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 16, color: theme.textDim }}>
-        {!isFallback && isOnline && health && (
-          <>
-            <span>
-              {t("buffer")}: <strong style={{ color: theme.text }}>{formatBytes(health.buffer_bytes_available)}</strong>
-              {" / "}{formatBytes(health.buffer_capacity)}
-            </span>
-            <span style={{ color: theme.border }}>|</span>
-            <span>
-              {t("generated")}: <strong style={{ color: theme.text }}>{formatBytes(health.total_pushed)}</strong>
-            </span>
-            <span style={{ color: theme.border }}>|</span>
-            <span>
-              {t("consumed")}: <strong style={{ color: theme.text }}>{formatBytes(health.total_popped)}</strong>
-            </span>
-          </>
-        )}
+        {/* Buffer/Gerado/Consumido são contadores GLOBAIS do broker (todos os
+            clientes, desde o boot) — não dizem nada ao visitante; ficam só em
+            Configurações › fonte. */}
         {isFallback && (
           <span style={{ color: theme.warning }}>
             {t("precollectedRemainingLabel")}: {formatBytes(precollectedRemaining)} {t("remainingOf")} {formatBytes(precollectedLimit)}

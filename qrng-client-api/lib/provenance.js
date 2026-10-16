@@ -58,6 +58,21 @@ const ENTROPY_BLOCKING = ["failed", "hw_health_alarm"];
  *        `X-QRNG-Block-SHA256`. `null` = não checado; `false` = DIVERGIU
  *        (integridade quebrada) -> nunca "live"; `true` = confere.
  * @param {number}  [o.now]                Date.now() injetável p/ teste
+ * @param {number|null} [o.discontinuitiesBaseline]
+ *        2026-10-15: `X-QRNG-Discontinuities` do broker é um contador CUMULATIVO
+ *        de realinhamentos desde o boot do broker (não "este bloco tem gap").
+ *        Quando o chamador informa o valor visto na resposta ANTERIOR, o bloco
+ *        só é "discontinuous" se o contador AVANÇOU desde então; sem baseline,
+ *        vale o comportamento antigo (qualquer contador > 0 = discontinuous).
+ *
+ * Evidência de caminho físico (2026-10-15, Kuapoã doc 139): o broker publica
+ * `X-QRNG-Entropy-Health=hw_health_tests_passing` (RCT/APT lidos dos registradores
+ * do FPGA) e `X-QRNG-Qualification-Status=verified_active_bitstream` (SHA-256 do
+ * bitstream em execução conferido pela sonda da placa). Essa leitura do hardware,
+ * combinada ao frescor (`received_at`/stall), passa a valer como evidência de
+ * captura física -> actual_origin="live", live_verified=true, live_evidence=
+ * "hw_health_probe". `captured_at` (carimbo por bloco do RTL) continua sendo a
+ * evidência mais forte quando existir (live_evidence="captured_at").
  */
 const KNOWN_ENVELOPE_VERSIONS = ["1"];
 
@@ -99,12 +114,22 @@ function resolveProvenance(o) {
     const t = Date.parse(freshnessAt);
     if (!Number.isNaN(t)) sampleAgeMs = now - t;
   }
+  // respostas de STATUS (/health) não trazem received_at por bloco; o broker
+  // informa há quantos segundos a fonte parou de empurrar bytes.
+  const stallSeconds = uh["x-qrng-source-stall-seconds"] != null ? Number(uh["x-qrng-source-stall-seconds"]) : null;
+  const statusFresh = Number.isFinite(stallSeconds) && stallSeconds * 1000 <= maxAgeMs;
 
   // ── eixo 2: BUFFER (ring buffer / contiguidade do stream) ──────────────────
   const discontHeader = uh["x-qrng-buffer-discontinuous"] === "true";
   const discontCount = uh["x-qrng-discontinuities"] != null ? Number(uh["x-qrng-discontinuities"]) : null;
+  const baseline = Number.isFinite(o.discontinuitiesBaseline) ? o.discontinuitiesBaseline : null;
   let bufferHealth = "unknown";
   if (o.insufficientEntropy) bufferHealth = "degraded";
+  else if (baseline !== null && Number.isFinite(discontCount)) {
+    // contador cumulativo: só é gap NESTE bloco se avançou desde a resposta anterior
+    if (discontCount > baseline) bufferHealth = "discontinuous";
+    else if (o.servedFromUpstream) bufferHealth = "healthy";
+  }
   else if (discontHeader || (Number.isFinite(discontCount) && discontCount > 0)) bufferHealth = "discontinuous";
   else if (shaVerified === false) bufferHealth = "discontinuous";  // item 9 regra 6
   else if (o.servedFromUpstream) bufferHealth = "healthy";
@@ -112,13 +137,15 @@ function resolveProvenance(o) {
   // ── eixo 3: ENTROPIA (RCT/APT). NUNCA inferido dos outros dois. ────────────
   let entropyHealth = String(uh["x-qrng-entropy-health"] || "").toLowerCase();
   if (!ENTROPY_STATES.includes(entropyHealth)) entropyHealth = "not_assessed";
-  // "not_assessed" é o padrão: os health tests não rodam no caminho live ainda.
+  // "not_assessed" é o padrão (broker sem sonda do hardware).
+  const qualificationStatus = String(uh["x-qrng-qualification-status"] || "").toLowerCase() || null;
 
   // compat: source_health == transport_health
   const sourceHealth = transportHealth;
 
   let actualOrigin = "unknown";
   let liveVerified = false;
+  let liveEvidence = "none";
 
   if (fallbackUsed) {
     actualOrigin = "fallback";
@@ -130,24 +157,32 @@ function resolveProvenance(o) {
     // e a integridade do bloco não tiver divergido (regra 6).
     // item 4: haveCaptureEvidence exige `captured_at` (carimbo FÍSICO) — o
     //   `received_at` sozinho dá frescor mas NÃO "live_verified".
-    const haveCaptureEvidence = capturedAt !== null && envelopeUsable && shaVerified !== false;
-    // item 5: um health test em estado "failed" DERRUBA o rótulo live.
-    //   "not_assessed"/"healthy"/"degraded" NÃO bloqueiam (live = proveniência,
-    //   não é validação de entropia).
+    // evidência do caminho físico vinda da sonda do hardware (ver cabeçalho):
+    // health tests RCT/APT passando no FPGA + bitstream qualificado verificado
+    // ativo + amostra/status fresco.
+    const hwEvidence = entropyHealth === "hw_health_tests_passing"
+      && qualificationStatus === "verified_active_bitstream"
+      && ((sampleAgeMs !== null && ageOk) || statusFresh);
+    const haveCaptureEvidence = (capturedAt !== null || hwEvidence) && envelopeUsable && shaVerified !== false;
+    // item 5: um health test em estado "failed"/"hw_health_alarm" DERRUBA o rótulo
+    //   live. "not_assessed"/"healthy"/"degraded" NÃO bloqueiam (live =
+    //   proveniência, não é validação de entropia).
     const entropyOk = !ENTROPY_BLOCKING.includes(entropyHealth);
     if (o.servedFromUpstream && transportHealth === "healthy" && bufferHealth === "healthy"
         && ageOk && entropyOk && shaVerified !== false
         && (haveCaptureEvidence || (allowNoEvidence && envelopeUsable))) {
       actualOrigin = "live";
-      liveVerified = haveCaptureEvidence;           // só "verificado" com captured_at FÍSICO
+      liveVerified = haveCaptureEvidence;           // só "verificado" com evidência física
+      liveEvidence = capturedAt !== null ? "captured_at" : hwEvidence ? "hw_health_probe" : "none";
     } else if (!o.servedFromUpstream && o.upstreamReachable && transportHealth === "healthy"
-               && ageOk && entropyOk && allowNoEvidence) {
-      // resposta de STATUS (/health) numa instância live saudável — só conta
-      // como "live" quando explicitamente permitido sem evidência de captura.
+               && ageOk && entropyOk && (haveCaptureEvidence || allowNoEvidence)) {
+      // resposta de STATUS (/health) numa instância live saudável: "live" com a
+      // evidência da sonda do hardware, ou quando explicitamente permitido sem ela.
       actualOrigin = "live";
-      liveVerified = false;
+      liveVerified = haveCaptureEvidence;
+      liveEvidence = capturedAt !== null ? "captured_at" : hwEvidence ? "hw_health_probe" : "none";
     } else {
-      // sem evidência suficiente (ex.: server_api.py não carimba captured_at)
+      // sem evidência suficiente (broker sem sonda do hardware e sem captured_at)
       actualOrigin = "unknown";
     }
   }
@@ -156,6 +191,7 @@ function resolveProvenance(o) {
   if (fallbackUsed) { actualOrigin = "fallback"; liveVerified = false; }
   if (NON_LIVE_MODES.includes(mode) && actualOrigin === "live") actualOrigin = mode;
   if (actualOrigin !== "live") liveVerified = false;
+  if (!liveVerified) liveEvidence = "none";
 
   return {
     configured_source: o.configuredSource || "unknown",
@@ -174,6 +210,8 @@ function resolveProvenance(o) {
     capture_id: captureId,
     fallback_used: fallbackUsed,
     live_verified: liveVerified,
+    live_evidence: liveEvidence,            // captured_at | hw_health_probe | none
+    qualification_status: qualificationStatus,
     // item 9 — envelope de proveniência
     provenance_version: provVersion,
     envelope_usable: envelopeUsable,

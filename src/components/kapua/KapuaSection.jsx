@@ -2,8 +2,7 @@ import { useRef, useEffect, useState, useContext, useCallback } from "react";
 import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
 import { useLanguage } from "../../contexts/LanguageContext";
-import { fetchQrngBytes, readUint32LE, errorMessage } from "../../lib/qrngHelper";
-import { API_ROUTES } from "../../qrngApi";
+import { fetchQrngBytes, fetchQrngRawBytesInChunks, readUint32LE, errorMessage } from "../../lib/qrngHelper";
 
 const mono  = "'IBM Plex Mono', monospace";
 const sans  = "'Outfit', sans-serif";
@@ -543,7 +542,12 @@ export default function KapuaSection() {
     }
   };
 
-  /* ── Download 1 MiB ── */
+  /* ── Download 1 MiB ──
+     O endpoint público aceita no máximo 64 KiB por requisição (HTTP 413 acima
+     disso) — antes o botão pedia 1 MiB de uma vez e qualquer erro virava
+     "backend offline". Agora baixa em lotes binários de 64 KiB (16 pedidos) e
+     mostra a mensagem real da API quando algo falha. */
+  const DOWNLOAD_BYTES = 1048576;
   const handleDownload = async () => {
     if (qrngSource === "pre-collected") {
       setDlError(t("kapuaDlErrorPrecollected"));
@@ -551,26 +555,22 @@ export default function KapuaSection() {
     }
     setDownloading(true); setDlError(null);
     try {
-      const apiPrefix = API_ROUTES[qrngSource] || API_ROUTES.remote;
-      const response = await fetch(`${apiPrefix}/random?bytes=1048576&format=hex`, {
-        signal: AbortSignal.timeout(60000),
-      });
-      if (!response.ok) throw new Error(`API error: ${response.status}`);
-      const json = await response.json();
-      const hex  = json.random || json.hex || "";
-      const raw  = new Uint8Array(hex.length / 2);
-      for (let i = 0; i < raw.length; i++) raw[i] = parseInt(hex.substr(i * 2, 2), 16);
-      const blob = new Blob([raw], { type: "application/octet-stream" });
+      const r = await fetchQrngRawBytesInChunks(DOWNLOAD_BYTES, qrngSource);
+      if (r.bytes.length !== DOWNLOAD_BYTES) throw new Error(`${r.bytes.length}/${DOWNLOAD_BYTES} bytes`);
+      const blob = new Blob([r.bytes], { type: "application/octet-stream" });
       const url  = URL.createObjectURL(blob);
-      const a    = document.createElement("a"); a.href = url; a.download = "qrng_1MiB.bin";
+      const a    = document.createElement("a"); a.href = url; a.download = "kuapoa_qrng_1MiB.bin";
       document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
-    } catch { setDlError(t("kapuaDlErrorOffline"));
+    } catch (e) { setDlError(`${t("kapuaDlErrorPrefix")} ${errorMessage(e)}`);
     } finally { setDownloading(false); }
   };
 
+  /* "Explorar componentes": leva ao diagrama e reproduz o fluxo completo
+     (etapa 1 → 8). Antes só rolava a página — em telas largas o diagrama já
+     está visível e o botão parecia não fazer nada. */
   const handleExplore = () => {
     exploreRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
-    setSelected(0); setFlowStep(-1); setIsFlowPlaying(false);
+    if (!isFlowPlaying) playFlow();
   };
 
   return (

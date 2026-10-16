@@ -182,9 +182,37 @@ function upstreamHealthLabel() {
  * poller, idade máxima) na função pura de ./lib/provenance.
  * @param {object} o  ver lib/provenance.resolveProvenance (sem os campos de instância)
  */
+// `X-QRNG-Discontinuities` do broker é cumulativo desde o boot do broker; sem
+// isto, UM realinhamento antigo rotularia todos os blocos seguintes como
+// "discontinuous" (foi o que aconteceu em produção: 256 desde 14/10 em todas as
+// respostas). Guardamos o último valor visto e só marcamos gap quando ele avança.
+let lastUpstreamDiscontinuities = null;
+function discontinuitiesBaselineFrom(uh) {
+  if (!uh || uh["x-qrng-discontinuities"] == null) return undefined;
+  const c = Number(uh["x-qrng-discontinuities"]);
+  if (!Number.isFinite(c)) return undefined;
+  // contador zerou (broker reiniciou) ou primeira resposta: a baseline é o próprio valor
+  const baseline = (lastUpstreamDiscontinuities === null || c < lastUpstreamDiscontinuities) ? c : lastUpstreamDiscontinuities;
+  lastUpstreamDiscontinuities = c;
+  return baseline;
+}
+
+// Respostas de STATUS (/health do broker) trazem a sonda do hardware no JSON,
+// não em headers: traduz os campos para o mesmo contrato que /random usa.
+function statusHeadersFromHealthJson(data, upHdr) {
+  const h = { ...(upHdr || {}) };
+  if (!data || typeof data !== "object") return h;
+  if (data.source_status != null)        h["x-qrng-source-status"]        = String(data.source_status);
+  if (data.entropy_health != null)       h["x-qrng-entropy-health"]       = String(data.entropy_health);
+  if (data.qualification_status != null) h["x-qrng-qualification-status"] = String(data.qualification_status);
+  if (data.source_stall_seconds != null) h["x-qrng-source-stall-seconds"] = String(data.source_stall_seconds);
+  return h;
+}
+
 function resolveProvenance(o) {
   return _resolveProvenance({
     ...o,
+    discontinuitiesBaseline: discontinuitiesBaselineFrom(o.upstreamHeaders),
     instanceMode: QRNG_INSTANCE_MODE,
     configuredSource: QRNG_CONFIGURED_SOURCE,
     pollerSourceHealth: upstreamHealthLabel(),
@@ -538,7 +566,7 @@ const publicHealthLimiter = rateLimit({
  *                 qualification: { type: object, nullable: true, description: "Qualificação da fonte (bitstream, perfil de health tests, H_original, h_out pré-restart, restart_validated=false, sp80090b_full_validation=false, operational_ready). Não-nulo só com o bitstream qualificado ativo e verificado." }
  *                 qualification_status: { type: string, description: "verified_active_bitstream | inactive_other_bitstream | unverified_stale_probe | unverified_no_probe | none | ..." }
  *                 entropy_health: { type: string, description: "hw_health_tests_passing | hw_health_alarm | hw_health_unavailable | not_assessed — estado dos health tests RCT/APT do hardware (wrapper lido só em leitura). Não é validação SP 800-90B." }
- *                 provenance: { type: string, description: "Origem efetiva (nunca 'live' aqui: esta rota não entrega bytes)." }
+ *                 provenance: { type: string, description: "Origem efetiva: 'live' só com a sonda do hardware (entropy_health=hw_health_tests_passing + qualification_status=verified_active_bitstream + fonte fresca); senão 'unknown'." }
  *                 provenance_detail: { $ref: '#/components/schemas/ProvenanceDetail' }
  *       429: { $ref: '#/components/responses/RateLimited' }
  *       503:
@@ -555,14 +583,14 @@ app.get("/v1/public/health", publicHealthLimiter, attachRequestId, async (req, r
       const data = await r.json();
       const body = {};
       for (const k of PUBLIC_HEALTH_FIELDS) if (data && data[k] !== undefined) body[k] = data[k];
-      // Mesma regra de /v1/health: sem bytes nesta resposta não há evidência
-      // de caminho live — a proveniência reflete capacidade + saúde atual.
+      // Mesma regra de /v1/health: sem bytes nesta resposta, "live" só com a
+      // evidência da sonda do hardware (entropy_health + qualification_status
+      // + frescor) vinda do JSON do broker.
       const upHdr = lowerHeaders(r.headers);
-      const srcStatus = (data && data.source_status) || upHdr["x-qrng-source-status"];
       const prov = resolveProvenance({
         servedFromUpstream: false,
         upstreamReachable: true,
-        upstreamHeaders: { ...upHdr, ...(srcStatus ? { "x-qrng-source-status": String(srcStatus) } : {}) },
+        upstreamHeaders: statusHeadersFromHealthJson(data, upHdr),
       });
       body.provenance = prov.actual_origin;
       body.provenance_detail = prov;
@@ -1498,14 +1526,13 @@ app.get("/v1/health", attachRequestId, requireToken, checkTokenRate, async (req,
     const r    = await fetchWithTimeout(`${QRNG_UPSTREAM}/health`, QRNG_TIMEOUT_MS);
     const data = await r.json();
     const upHdr = lowerHeaders(r.headers);
-    // /health não entrega bytes de amostra -> não há evidência de caminho live
-    // NESTA resposta; a proveniência aqui reflete a CAPACIDADE + saúde atual,
-    // com actual_origin nunca "live" (só /random pode provar live).
-    const srcStatus = (data && data.source_status) || upHdr["x-qrng-source-status"];
+    // /health não entrega bytes de amostra: "live" aqui só com a evidência da
+    // sonda do hardware (entropy_health + qualification_status + frescor) que o
+    // broker publica no JSON.
     const prov = resolveProvenance({
       servedFromUpstream: false,
       upstreamReachable: true,
-      upstreamHeaders: { ...upHdr, ...(srcStatus ? { "x-qrng-source-status": String(srcStatus) } : {}) },
+      upstreamHeaders: statusHeadersFromHealthJson(data, upHdr),
     });
     logRequest(requestId, req.tokenRow.id, "/v1/health", 0, null, 200, ip, ua, Date.now() - t0);
     res.json({ request_id: requestId, status: "ok", api: "dobslit-qrng-client-api", source: QRNG_SOURCE_LABEL, provenance: prov.actual_origin, provenance_detail: prov, upstream: data });
