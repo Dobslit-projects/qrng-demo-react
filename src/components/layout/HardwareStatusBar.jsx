@@ -68,6 +68,8 @@ export default function HardwareStatusBar() {
         display: "flex",
         alignItems: "center",
         justifyContent: "space-between",
+        flexWrap: "wrap",
+        rowGap: 4,
         fontFamily: "'IBM Plex Mono', monospace",
         fontSize: 11,
         boxShadow: "0 1px 4px rgba(0,0,0,0.06)",
@@ -122,7 +124,8 @@ export default function HardwareStatusBar() {
         {latency !== null ? (
           <>
             <span style={{ color: theme.textMuted }}>{t("latency")}:</span>
-            <strong style={{ color: latency < 100 ? theme.success : latency < 500 ? theme.warning : theme.danger }}>
+            {/* o caminho passa por um túnel até o laboratório: 0,5–2 s é o normal, não um problema */}
+            <strong style={{ color: latency < 1000 ? theme.success : latency < 2500 ? theme.warning : theme.danger }}>
               {latency}ms
             </strong>
           </>

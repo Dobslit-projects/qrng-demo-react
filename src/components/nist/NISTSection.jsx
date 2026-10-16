@@ -28,14 +28,26 @@ const badge = (color) => ({
   whiteSpace: "nowrap",
 });
 
+// Palavras cruas da API (status, tipo de teste, gatilho) traduzidas na UI —
+// antes apareciam "completed", "both", "upload", "periodic" no modo PT.
+function apiWord(w, t) {
+  const map = {
+    queued: t("nistWordQueued"), running: t("nistWordRunning"), completed: t("nistWordCompleted"), failed: t("nistWordFailed"),
+    both: t("nistTestBoth"), iid: t("nistTestIidOnly"), non_iid: t("nistTestNonIidOnly"),
+    upload: t("nistOriginUpload"), manual: t("nistWordManual"), periodic: t("nistWordPeriodic"), unknown: t("nistOriginUnknown"),
+  };
+  return map[w] || (w == null ? "—" : String(w));
+}
+
 function StatusBadge({ status }) {
+  const { t } = useLanguage();
   const map = {
     queued:    theme.textMuted,
     running:   theme.warning,
     completed: theme.success,
     failed:    theme.danger,
   };
-  return <span style={badge(map[status] || theme.textMuted)}>{status}</span>;
+  return <span style={badge(map[status] || theme.textMuted)}>{apiWord(status, t)}</span>;
 }
 
 function PassBadge({ passed }) {
@@ -189,9 +201,9 @@ function JobModal({ job, log, onClose }) {
               <div>
                 <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, fontFamily: mono, marginBottom: 8 }}>{t("nistFileSection")}</div>
                 <H label={t("nistOriginalName")}   value={job.original_filename} />
-                <H label={t("nistTestTypeLabel")}   value={job.test_type} />
+                <H label={t("nistTestTypeLabel")}   value={apiWord(job.test_type, t)} />
                 <H label={t("nistFormatLabel")}         value={job.format_detected || job.format_requested} />
-                <H label={t("nistTriggerLabel")}         value={job.trigger_type} />
+                <H label={t("nistTriggerLabel")}         value={apiWord(job.trigger_type, t)} />
                 <H label={t("nistDurationLabel")}         value={job.duration_seconds ? `${job.duration_seconds.toFixed(1)}s` : null} />
                 <H label={t("nistSha256Label")} value={job.sha256_original?.slice(0, 16) + "…"} dim />
               </div>
@@ -336,6 +348,10 @@ export default function NISTSection() {
   const [uploadFile,   setUploadFile]   = useState(null);
   const [testType,     setTestType]     = useState("both");
   const [format,       setFormat]       = useState("auto");
+  // o histórico inclui o monitoramento periódico interno (muitas linhas
+  // "Falhou" de amostras de engenharia); por padrão mostra só o que foi
+  // disparado pela interface.
+  const [showPeriodic, setShowPeriodic] = useState(false);
   const [uploadTest,   setUploadTest]   = useState("both");
   const [uploadFmt,    setUploadFmt]    = useState("auto");
   const [error,        setError]        = useState(null);
@@ -580,7 +596,7 @@ export default function NISTSection() {
         <div style={{ ...card, display: "flex", flexDirection: "column", gap: 12 }}>
           <span style={{ fontSize: 13, fontWeight: 700, fontFamily: mono }}>{t("nistUploadTitle")}</span>
           <span style={{ fontSize: 11, color: theme.textDim }}>
-            {t("nistUploadDescPrefix")} <code style={{ fontFamily: mono }}>.csv</code>, <code style={{ fontFamily: mono }}>.txt</code> {lang === "en" ? "or" : "ou"} <code style={{ fontFamily: mono }}>.bin</code>.
+            {t("nistUploadDescPrefix")} <code style={{ fontFamily: mono }}>.bin</code> {lang === "en" ? "or" : "ou"} <code style={{ fontFamily: mono }}>.txt</code>{lang === "en" ? " (one uint32 per line; CSV with one column is accepted as text)" : " (um uint32 por linha; CSV de uma coluna é aceito como texto)"}.
             {" "}{t("nistUploadDescSuffix")}
           </span>
           <input
@@ -619,12 +635,16 @@ export default function NISTSection() {
 
       {/* ── Jobs history ── */}
       <div style={{ ...card }}>
-        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 14, gap: 10, flexWrap: "wrap" }}>
           <span style={{ fontSize: 13, fontWeight: 700, fontFamily: mono }}>{t("nistJobHistory")}</span>
+          <label style={{ fontSize: 11, color: theme.textMuted, fontFamily: mono, display: "flex", alignItems: "center", gap: 6, marginLeft: "auto" }}>
+            <input type="checkbox" checked={showPeriodic} onChange={(e) => setShowPeriodic(e.target.checked)} />
+            {t("nistShowPeriodic")}
+          </label>
           <Btn onClick={refresh} color={theme.accent} small>{t("nistRefreshBtn")}</Btn>
         </div>
 
-        {jobs.length === 0 ? (
+        {(showPeriodic ? jobs : jobs.filter((j) => j.trigger_type !== "periodic")).length === 0 ? (
           <div style={{ fontSize: 11, color: theme.textMuted, fontFamily: mono, textAlign: "center", padding: "20px 0" }}>
             {t("nistNoJobs")}
           </div>
@@ -639,16 +659,16 @@ export default function NISTSection() {
                 </tr>
               </thead>
               <tbody>
-                {jobs.map((j) => (
+                {(showPeriodic ? jobs : jobs.filter((j) => j.trigger_type !== "periodic")).map((j) => (
                   <tr key={j.id} style={{ borderBottom: `1px solid ${theme.border}`, transition: "background .1s" }}
                     onMouseEnter={(e) => e.currentTarget.style.background = theme.surfaceAlt}
                     onMouseLeave={(e) => e.currentTarget.style.background = "transparent"}
                   >
                     <td style={{ padding: "8px 10px", color: theme.textDim, whiteSpace: "nowrap" }}>{fmtTs(j.created_at)}</td>
-                    <td style={{ padding: "8px 10px" }}><span style={badge(theme.accent)}>{j.trigger_type}</span></td>
+                    <td style={{ padding: "8px 10px" }}><span style={badge(theme.accent)}>{apiWord(j.trigger_type, t)}</span></td>
                     <td style={{ padding: "8px 10px", color: theme.textDim, maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
                       title={j.original_filename}>{j.original_filename || "—"}</td>
-                    <td style={{ padding: "8px 10px", color: theme.textDim }}>{j.test_type || "—"}</td>
+                    <td style={{ padding: "8px 10px", color: theme.textDim }}>{apiWord(j.test_type, t)}</td>
                     <td style={{ padding: "8px 10px" }}><StatusBadge status={j.status} /></td>
                     <td style={{ padding: "8px 10px" }}>
                       <PassBadge passed={j.iid_passed} />

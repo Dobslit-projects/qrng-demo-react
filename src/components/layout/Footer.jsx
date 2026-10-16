@@ -65,6 +65,10 @@ export default function Footer() {
         >
           {t("footerDevelopedBy")}
         </span>
+        <span style={{ color: theme.border }}>|</span>
+        <a href="/termos-de-uso" target="_blank" rel="noopener" style={{ fontSize: 10, color: theme.textMuted, fontFamily: "'IBM Plex Mono', monospace", letterSpacing: "0.06em" }}>
+          {t("footerTerms")}
+        </a>
       </div>
     </>
   );

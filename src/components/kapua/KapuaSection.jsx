@@ -11,9 +11,9 @@ const grotesk = "'Space Grotesk', sans-serif";
 /* ── Component catalogue ──────────────────────────────────────────────────── */
 
 const COMPONENTS = [
-  { id: 0, step: 1, icon: "⚛",
+  { id: 0, step: 1, icon: "⚛️",
     nameKey: "kc0Name", descKey: "kc0Desc", badgeKey: "kc0Badge",
-    color: "#8b5cf6", cx: 138, cy: 124, face: "top" },
+    color: "#8b5cf6", cx: 172, cy: 150, face: "top" },  // afastado do logotipo (sobrepunha "DOBSLIT")
   { id: 1, step: 2, icon: "📡",
     nameKey: "kc1Name", descKey: "kc1Desc", badgeKey: "kc1Badge",
     color: "#06b6d4", cx: 213, cy: 107, face: "top" },
@@ -169,7 +169,7 @@ function KapuaDeviceSVG({ selected, onSelect, flowStep, genFlowStep }) {
         <text x="100" y="115" fill="white" fontSize="13" fontWeight="800"
               fontFamily="IBM Plex Mono, monospace" letterSpacing="2">DOBSLIT</text>
         <text x="100" y="128" fill="#3d5fa0" fontSize="6.5"
-              fontFamily="IBM Plex Mono, monospace" letterSpacing="1.5">KUAPOÃ QRNG · FPGA</text>
+              fontFamily="IBM Plex Mono, monospace" letterSpacing="1.5">KUAPOÃ QRNG</text>
 
         {/* Subtle circuit trace lines */}
         <g stroke="#0c8ce9" strokeWidth="0.4" opacity="0.12">
@@ -391,7 +391,7 @@ function ComponentPanel({ selected, onSelect, onPlayFlow, isFlowPlaying }) {
         <span style={{ fontSize: 20 }}>{c.icon}</span>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{ fontSize: 13, fontWeight: 700, color: "#fff", fontFamily: grotesk }}>{t(c.nameKey)}</div>
-          <div style={{ fontSize: 9, color: c.color, fontFamily: mono, letterSpacing: "0.1em" }}>
+          <div style={{ fontSize: 10, color: "#a9c4e4", fontFamily: mono, letterSpacing: "0.1em" }}>
             {t("kapuaStepLabel")} {c.step} {t("kapuaOfLabel")} {COMPONENTS.length}
           </div>
         </div>
@@ -533,7 +533,10 @@ export default function KapuaSection() {
       const r = await fetchQrngBytes(4, qrngSource);
       const b = r.bytes;
       const n = readUint32LE(b, 0); // uint32-le, consistente com o transporte declarado
-      setRandHex({ value: n, hex: r.hex.slice(0, 8), latency: r.latencyMs, source: r.source });
+      // mostra o hex do VALOR (0x163413CB para 372.511.691), não os 4 bytes crus
+      // na ordem do transporte (little-endian), que davam "0xCB133416" — bug
+      // apontado pelo 1º testador.
+      setRandHex({ value: n, hex: n.toString(16).padStart(8, "0"), latency: r.latencyMs, source: r.source });
     } catch (e) {
       setGenError(errorMessage(e));
     } finally {
@@ -653,14 +656,14 @@ export default function KapuaSection() {
                   background: "rgba(12,140,233,0.07)", border: `1px solid ${theme.quantum}25`,
                   borderRadius: 10, padding: "12px 14px", fontFamily: mono,
                 }}>
-                  <div style={{ fontSize: 9, color: theme.quantum + "99", marginBottom: 4, letterSpacing: "0.1em" }}>
+                  <div style={{ fontSize: 10, color: "#8fc4f0", marginBottom: 4, letterSpacing: "0.1em" }}>
                     {t("kapuaRandomNumberLabel")} {sourceLabel(randHex.source, t)}
                     {randHex.latency != null && ` · ${randHex.latency}ms`}
                   </div>
                   <div style={{ fontSize: 24, fontWeight: 700, color: "#fff" }}>
                     {randHex.value.toLocaleString(lang === "en" ? "en-US" : "pt-BR")}
                   </div>
-                  <div style={{ fontSize: 11, color: "#4d80b8", marginTop: 3 }}>
+                  <div style={{ fontSize: 11, color: "#7fb0e0", marginTop: 3 }}>
                     0x{randHex.hex.toUpperCase()}
                   </div>
                 </div>

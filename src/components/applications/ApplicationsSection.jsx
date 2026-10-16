@@ -344,6 +344,7 @@ function MonteCarloCard({ source }) {
 function RaffleCard({ source }) {
   const { t } = useLanguage();
   const [names, setNames] = useState("");
+  const participantCount = names.split("\n").map(s => s.trim()).filter(Boolean).length; // botão só com ≥ 2
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -397,7 +398,7 @@ function RaffleCard({ source }) {
           color: theme.text, outline: "none", width: "100%", boxSizing: "border-box",
         }}
       />
-      <Btn onClick={draw} color={theme.quantum} disabled={busy}>{busy ? t("apRaffleSortingBtn") : t("apRaffleDrawBtn")}</Btn>
+      <Btn onClick={draw} color={theme.quantum} disabled={busy || participantCount < 2}>{busy ? t("apRaffleSortingBtn") : t("apRaffleDrawBtn")}</Btn>
       {result && (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{

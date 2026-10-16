@@ -184,9 +184,9 @@ function StatChip({ lbl, val }) {
 }
 
 const DL_SIZES = [
-  { label: "1 KB",   value: 1024 },
-  { label: "10 KB",  value: 10240 },
-  { label: "100 KB", value: 102400 },
+  { label: "1 KiB",   value: 1024 },
+  { label: "10 KiB",  value: 10240 },
+  { label: "100 KiB", value: 102400 },
   { label: "1 MiB",  value: MAX_BYTES },
 ];
 
@@ -202,6 +202,7 @@ export default function DataSection() {
   // Tamanho comum (raw / hex / uint8)
   const [dlSize,      setDlSize]      = useState(1024);
   const [customSzIn,  setCustomSzIn]  = useState("");
+  const [customErr,   setCustomErr]   = useState("");
 
   // Hex
   const [hexSep, setHexSep] = useState("space"); // "none" | "space" | "line"
@@ -578,19 +579,24 @@ export default function DataSection() {
             </FieldRow>
             <FieldRow lbl={t("dsCustomBytes")}>
               <input
-                type="number" value={customSzIn} placeholder="ex: 8192"
-                onChange={e => setCustomSzIn(e.target.value)} min={1} max={MAX_BYTES}
+                type="number" value={customSzIn} placeholder="ex: 8192" step={1}
+                onChange={e => { setCustomSzIn(e.target.value); setCustomErr(""); }} min={1} max={MAX_BYTES}
                 style={{ width: 110, padding: "5px 10px", borderRadius: 6, border: `1px solid ${theme.border}`,
                   background: "#fff", color: theme.text, fontSize: 12, fontFamily: MONO, outline: "none" }}
               />
               <Btn small color={theme.accent} onClick={() => {
-                const v = parseInt(customSzIn);
-                if (v >= 1 && v <= MAX_BYTES) { setDlSize(v); setCustomSzIn(""); }
+                // antes: parseInt silencioso (1,5 → 1; -5/0/999999999 ignorados sem aviso)
+                const v = Number(customSzIn);
+                if (Number.isInteger(v) && v >= 1 && v <= MAX_BYTES) { setDlSize(v); setCustomSzIn(""); setCustomErr(""); }
+                else setCustomErr(t("dsCustomInvalid", { max: MAX_BYTES.toLocaleString() }));
               }}>{t("dsApply")}</Btn>
               <span style={{ fontSize: 11, color: theme.textMuted, fontFamily: MONO }}>
                 {formatBytes(dlSize)}
               </span>
             </FieldRow>
+            {customErr && (
+              <span style={{ fontSize: 11, color: theme.danger, fontFamily: MONO }}>{customErr}</span>
+            )}
             <span style={{ fontSize: 11, color: theme.textDim, fontFamily: SANS }}>
               {t("dsRawFileInfo", { size: formatBytes(dlSize), bytes: dlSize.toLocaleString() })}
             </span>

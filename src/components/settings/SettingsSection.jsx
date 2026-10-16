@@ -5,14 +5,9 @@ import { fetchHealth, API_ROUTES } from "../../qrngApi";
 import { theme, formatBytes } from "../../theme";
 import { QRNG_PRECOLLECTED } from "../../qrngFallbackData";
 
+// 2026-10-15: uma única fonte física (Kuapoã). O antigo card "Servidor Remoto
+// (SP)" era um 2º caminho de proxy para o MESMO broker.
 const SOURCES = [
-  {
-    key: "remote",
-    icon: "\u{1F4E1}",
-    titleKey: "settSrc0Title",
-    descKey: "settSrc0Desc",
-    route: "/qrng/api",
-  },
   {
     key: "fpga",
     icon: "\u{1F52C}",
@@ -140,7 +135,7 @@ function SourceCard({ source, isActive, health, latency, onSelect }) {
 
         {!isFallback && latency !== null && (
           <span style={{
-            color: latency < 100 ? theme.success : latency < 500 ? theme.warning : theme.danger,
+            color: latency < 1000 ? theme.success : latency < 2500 ? theme.warning : theme.danger,
           }}>
             {latency}ms
           </span>
@@ -163,7 +158,7 @@ function SourceCard({ source, isActive, health, latency, onSelect }) {
         }}>
           <span>{t("buffer")}: {formatBytes(health.buffer_bytes_available)} / {formatBytes(health.buffer_capacity)}</span>
           <span>{t("generated")}: {formatBytes(health.total_pushed)}</span>
-          <span>{t("consumed")}: {formatBytes(health.total_popped)}</span>
+          <span>{t("consumed")} ({t("settAllClients")}): {formatBytes(health.total_popped)}</span>
         </div>
       )}
 
@@ -287,9 +282,7 @@ export default function SettingsSection() {
       }}>
         <strong style={{ color: theme.textDim }}>{t("settHowItWorks")}</strong>
         <br />
-        {t("settInfoPrefix")} <strong>{t("settRemoteWord")}</strong> {t("settInfoRemoteSuffix")}
-        <br />
-        {t("settInfoPrefix")} <strong>FPGA</strong> {t("settInfoFpgaSuffix")}
+        {t("settInfoPrefix")} <strong>Kuapoã</strong> {t("settInfoFpgaSuffix")}
         <br />
         {t("settInfoFallbackPrefix")} <strong>Fallback</strong> {t("settInfoFallbackSuffix", { n: QRNG_PRECOLLECTED.length })}
         <br />

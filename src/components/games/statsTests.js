@@ -79,7 +79,10 @@ export function runsTest(bytes) {
  * Tests if byte values 0-255 are uniformly distributed.
  */
 export function chiSquareTest(bytes) {
-  if (bytes.length < 100) return { passed: null, value: "-", label: "Chi²" };
+  // A aproximação qui-quadrado exige contagem esperada razoável por classe
+  // (≥ 10 em cada um dos 256 valores → ≥ 2560 bytes); com amostras menores o
+  // teste oscilava e marcava ✗ até no QRNG.
+  if (bytes.length < 2560) return { passed: null, value: "-", label: "Chi²" };
 
   const counts = new Array(256).fill(0);
   for (const b of bytes) counts[b]++;
@@ -91,8 +94,10 @@ export function chiSquareTest(bytes) {
     chiSq += (diff * diff) / expected;
   }
 
-  // Degrees of freedom = 255. Critical value at p=0.01 is ~310.
-  const passed = chiSq < 310;
+  // Degrees of freedom = 255. Critical value at p≈0.001 is ~330 (p=0.01 → 310);
+  // o indicador é informativo e roda continuamente, então usa o limiar mais
+  // folgado para não acusar ✗ a cada ~100 janelas por acaso.
+  const passed = chiSq < 330;
 
   return {
     passed,

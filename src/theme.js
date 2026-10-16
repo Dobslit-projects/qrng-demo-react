@@ -25,7 +25,7 @@ export const theme = {
 
 export function formatBytes(n) {
   if (n === null || n === undefined) return "-";
-  const units = ["B", "KB", "MB", "GB"];
+  const units = ["B", "KiB", "MiB", "GiB"]; // base 1024 → unidades binárias, coerentes com "1 MiB" nos botões
   let x = n, i = 0;
   while (x >= 1024 && i < units.length - 1) { x /= 1024; i++; }
   return `${x.toFixed(i === 0 ? 0 : 1)} ${units[i]}`;

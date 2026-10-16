@@ -23,7 +23,7 @@ const MODES = [
   { key: "sonification", labelKey: "qvSonification", mod: sonification },
 ];
 
-const STATS_BUFFER_SIZE = 2000;
+const STATS_BUFFER_SIZE = 5120; // ≥ 20 amostras esperadas por valor de byte no Chi² (antes 2000 → ✗ espúrios)
 const STATS_UPDATE_INTERVAL = 30; // frames
 const MAX_AUDIO_EVENTS_PER_FRAME = 6; // prevent audio overload
 

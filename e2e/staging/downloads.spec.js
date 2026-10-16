@@ -18,7 +18,7 @@ async function gotoDados(page) {
 async function pickMode(page, label) {
   await page.getByRole("button", { name: label, exact: true }).first().click();
   // escolhe um preset de tamanho múltiplo de 4 (1 KB) quando existir
-  const kb = page.getByRole("button", { name: "1 KB", exact: true });
+  const kb = page.getByRole("button", { name: "1 KiB", exact: true });
   if (await kb.count()) await kb.first().click();
 }
 

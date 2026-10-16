@@ -5,9 +5,9 @@ import { fetchQrngRawBytes, errorMessage, PRECOLLECTED_LIMIT } from "../../lib/q
 import Btn from "../ui/Btn";
 
 const presets = [
-  { label: "1 KB", value: 1024, desc: "Testes rapidos" },
-  { label: "10 KB", value: 10 * 1024, desc: "Seeds e nonces" },
-  { label: "100 KB", value: 100 * 1024, desc: "Simulacoes" },
+  { label: "1 KiB", value: 1024, desc: "Testes rápidos" },
+  { label: "10 KiB", value: 10 * 1024, desc: "Seeds e nonces" },
+  { label: "100 KiB", value: 100 * 1024, desc: "Simulações" },
   { label: "1 MB", value: 1024 * 1024, desc: "Analise estatistica" },
   { label: "10 MB", value: 10 * 1024 * 1024, desc: "Datasets" },
   { label: "50 MB", value: 50 * 1024 * 1024, desc: "Bulk entropy" },

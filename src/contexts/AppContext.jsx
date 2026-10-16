@@ -18,9 +18,21 @@ const OK_THRESHOLD     = 2;     // 2 sucessos consecutivos → recupera de um OF
 function loadSource() {
   try {
     const saved = localStorage.getItem(STORAGE_KEY);
-    if (saved && ["remote", "pre-collected", "fpga"].includes(saved)) return saved;
+    // 2026-10-15: só existe UMA fonte física (Kuapoã = "fpga"). "remote" era
+    // um 2º caminho de proxy para o mesmo broker; valores antigos migram.
+    if (saved === "pre-collected") return saved;
   } catch { /* localStorage indisponivel (modo privado etc.) -- usa o default */ }
-  return "remote";
+  return "fpga";
+}
+
+// Navegação por hash (#dados, #nist…): permite compartilhar o link de uma aba
+// e usar o botão voltar. A aba continua sendo estado do provider.
+const PAGE_IDS = ["kapua", "visuals", "data", "applications", "nist", "developer", "settings"];
+function pageFromHash() {
+  try {
+    const h = window.location.hash.replace(/^#\/?/, "");
+    return PAGE_IDS.includes(h) ? h : "kapua";
+  } catch { return "kapua"; }
 }
 
 /**
@@ -149,8 +161,11 @@ function computeStatus(qrngSource, health, hookStatus) {
 }
 
 export function AppProvider({ children }) {
-  const remoteH = useHysteresisHealth(API_ROUTES.remote);
+  // 2026-10-15: fonte única (Kuapoã = API_ROUTES.fpga). O 2º poller "remote"
+  // batia no mesmo broker por outro prefixo de proxy; `remoteH` fica como
+  // alias para os consumidores antigos (Configurações).
   const fpgaH   = useHysteresisHealth(API_ROUTES.fpga);
+  const remoteH = fpgaH;
   const {
     health: remoteHealth, latency: remoteLatency, status: remoteHookStatus, lastSuccessAt: remoteLastSuccessAt,
     lastHealthCheckAt: remoteLastHealthCheckAt, apiReachable: remoteApiReachable,
@@ -164,7 +179,17 @@ export function AppProvider({ children }) {
 
   const [qrngSource, setQrngSourceRaw] = useState(loadSource);
   const [streamError, setStreamError]  = useState(null);
-  const [activePage,  setActivePage]   = useState("kapua");
+  const [activePage,  setActivePage]   = useState(pageFromHash);
+  useEffect(() => {
+    const onHash = () => setActivePage(pageFromHash());
+    window.addEventListener("hashchange", onHash);
+    return () => window.removeEventListener("hashchange", onHash);
+  }, []);
+  useEffect(() => {
+    try {
+      if (pageFromHash() !== activePage) window.location.hash = activePage;
+    } catch { /* ambiente sem location (testes) */ }
+  }, [activePage]);
 
   // Item 4 da auditoria: cursor do fallback pré-coletado, sem wraparound.
   // Vive como estado de módulo em qrngHelper.js (compartilhado por todos os
