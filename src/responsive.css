@@ -1,0 +1,26 @@
+/* Regras responsivas globais (2026-10-16). Os componentes usam style={} inline,
+   que vence qualquer regra de folha de estilo; por isso estas regras usam
+   !important e só se aplicam em larguras estreitas, onde o layout inline
+   (pensado para desktop) não cabe. Marque os contêineres com as classes
+   abaixo em vez de duplicar lógica de largura em JS. */
+
+@media (max-width: 760px) {
+  /* herói da página inicial: texto em cima, diagrama embaixo */
+  .kq-hero-inner { padding: 20px 14px 18px !important; gap: 16px !important; }
+  .kq-hero-left  { flex: 1 1 100% !important; min-width: 0 !important; }
+  .kq-hero-right { min-width: 0 !important; }
+
+  /* barra de status e abas: menos espaço horizontal */
+  .kq-status-bar { padding: 6px 10px !important; }
+  .kq-nav        { padding: 6px 8px !important; }
+
+  /* grades de 2 colunas viram 1 coluna */
+  .kq-two-col    { grid-template-columns: 1fr !important; }
+
+  /* cartões de conteúdo com menos margem lateral */
+  .kq-page       { padding-left: 10px !important; padding-right: 10px !important; }
+}
+
+@media (max-width: 480px) {
+  .kq-hero-title { font-size: 34px !important; }
+}

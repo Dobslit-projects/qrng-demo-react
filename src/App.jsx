@@ -43,7 +43,7 @@ function AppContent() {
         <FallbackBanner />
       </header>
       <SectionNav />
-      <main ref={mainRef} tabIndex={-1} style={{ flex: 1, overflow: "auto", WebkitOverflowScrolling: "touch", outline: "none", padding: NO_PADDING_PAGES.has(activePage) ? 0 : "12px 16px" }}>
+      <main ref={mainRef} tabIndex={-1} className="kq-page" style={{ flex: 1, overflow: "auto", WebkitOverflowScrolling: "touch", outline: "none", padding: NO_PADDING_PAGES.has(activePage) ? 0 : "12px 16px" }}>
         {activePage === "kapua"        && <KapuaSection />}
         {activePage === "visuals"      && <VisuaisSection />}
         {activePage === "data"         && <DataSection />}

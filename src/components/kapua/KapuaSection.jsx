@@ -434,12 +434,11 @@ function ComponentPanel({ selected, onSelect, onPlayFlow, isFlowPlaying }) {
 
 /* ── Feature cards ────────────────────────────────────────────────────────── */
 
-const FEATURE_CARDS = [
-  { icon: "⚡", titleKey: "kf0Title", descKey: "kf0Desc" },
-  { icon: "🔬", titleKey: "kf1Title", descKey: "kf1Desc" },
-  { icon: "🎲", titleKey: "kf2Title", descKey: "kf2Desc" },
-  { icon: "📦", titleKey: "kf3Title", descKey: "kf3Desc" },
-  { icon: "🧪", titleKey: "kf4Title", descKey: "kf4Desc" },
+// 3 chamadas à ação (antes: 5 cards descritivos que repetiam o diagrama)
+const CTA_CARDS = [
+  { icon: "🔌", titleKey: "ctaApiTitle",  descKey: "ctaApiDesc",  btnKey: "ctaApiBtn",  page: "developer", color: "#0c8ce9" },
+  { icon: "📦", titleKey: "ctaDataTitle", descKey: "ctaDataDesc", btnKey: "ctaDataBtn", page: "data",      color: "#10b981" },
+  { icon: "🧪", titleKey: "ctaNistTitle", descKey: "ctaNistDesc", btnKey: "ctaNistBtn", page: "nist",      color: "#e11d48" },
 ];
 
 /* ── Helper: source display text ──────────────────────────────────────────── */
@@ -589,7 +588,7 @@ export default function KapuaSection() {
           marginBottom: 20,
         }}>
           <QuantumParticles />
-          <div style={{
+          <div className="kq-hero-inner" style={{
             position: "relative", zIndex: 1,
             display: "flex", flexWrap: "wrap", gap: 24,
             padding: "32px 28px 28px",
@@ -597,7 +596,7 @@ export default function KapuaSection() {
           }}>
 
             {/* ── Left column ── */}
-            <div style={{ flex: "0 0 300px", minWidth: 240, display: "flex", flexDirection: "column", gap: 16 }}>
+            <div className="kq-hero-left" style={{ flex: "0 0 300px", minWidth: 240, display: "flex", flexDirection: "column", gap: 16 }}>
               {/* Brand + status */}
               <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
                 <span style={{ fontSize: 10, fontWeight: 700, fontFamily: mono,
@@ -613,7 +612,7 @@ export default function KapuaSection() {
 
               {/* Title */}
               <div>
-                <h1 style={{ margin: 0, fontSize: 44, fontWeight: 800, fontFamily: sans,
+                <h1 className="kq-hero-title" style={{ margin: 0, fontSize: 44, fontWeight: 800, fontFamily: sans,
                   color: "#fff", letterSpacing: "-0.02em", lineHeight: 1.1 }}>Kuapoã</h1>
                 <div style={{ fontSize: 12, color: theme.quantum, fontFamily: mono,
                   fontWeight: 600, marginTop: 4 }}>{t("kapuaSubtitle")}</div>
@@ -685,7 +684,7 @@ export default function KapuaSection() {
             </div>
 
             {/* ── Right column: interactive device ── */}
-            <div ref={exploreRef} style={{ flex: 1, minWidth: 300, display: "flex", flexDirection: "column", gap: 12 }}>
+            <div ref={exploreRef} className="kq-hero-right" style={{ flex: 1, minWidth: 300, display: "flex", flexDirection: "column", gap: 12 }}>
               <KapuaDeviceSVG
                 selected={selected}
                 onSelect={(id) => { setSelected(id); if (isFlowPlaying) stopFlow(); }}
@@ -708,20 +707,24 @@ export default function KapuaSection() {
           </div>
         </div>
 
-        {/* ── Feature cards ── */}
+        {/* ── Chamadas à ação ── */}
         <div style={{
-          display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+          display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))",
           gap: 12, marginBottom: 20,
         }}>
-          {FEATURE_CARDS.map((c) => (
+          {CTA_CARDS.map((c) => (
             <div key={c.titleKey} style={{
-              background: theme.surface, border: `1px solid ${theme.border}`,
-              borderRadius: 12, padding: "16px 16px 14px",
+              background: theme.surface, border: `1px solid ${theme.border}`, borderTop: `3px solid ${c.color}`,
+              borderRadius: 12, padding: "16px 18px 16px",
               display: "flex", flexDirection: "column", gap: 8,
             }}>
               <span style={{ fontSize: 22 }}>{c.icon}</span>
-              <div style={{ fontSize: 13, fontWeight: 700, fontFamily: grotesk, color: theme.text }}>{t(c.titleKey)}</div>
-              <div style={{ fontSize: 12, color: theme.textDim, lineHeight: 1.55, fontFamily: sans }}>{t(c.descKey)}</div>
+              <div style={{ fontSize: 14, fontWeight: 700, fontFamily: grotesk, color: theme.text }}>{t(c.titleKey)}</div>
+              <div style={{ fontSize: 12, color: theme.textDim, lineHeight: 1.55, fontFamily: sans, flex: 1 }}>{t(c.descKey)}</div>
+              <button onClick={() => setActivePage(c.page)} style={{
+                alignSelf: "flex-start", marginTop: 4, padding: "8px 16px", borderRadius: 8, border: "none",
+                background: c.color, color: "#fff", fontSize: 12, fontWeight: 700, fontFamily: sans, cursor: "pointer",
+              }}>{t(c.btnKey)} →</button>
             </div>
           ))}
         </div>

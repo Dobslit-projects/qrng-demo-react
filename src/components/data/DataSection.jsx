@@ -203,6 +203,7 @@ export default function DataSection() {
   const [dlSize,      setDlSize]      = useState(1024);
   const [customSzIn,  setCustomSzIn]  = useState("");
   const [customErr,   setCustomErr]   = useState("");
+  const [genProgress, setGenProgress] = useState(0); // % dos lotes de 64 KiB já recebidos
 
   // Hex
   const [hexSep, setHexSep] = useState("space"); // "none" | "space" | "line"
@@ -329,9 +330,11 @@ export default function DataSection() {
       // Modo "raw": binário real da API (application/octet-stream, N bytes
       // exatos). Demais modos: JSON hex (rejection sampling etc. operam sobre
       // os bytes decodificados). Ver qrngHelper.js item 2.
+      setGenProgress(0);
+      const onProgress = (done, total) => setGenProgress(Math.round(100 * done / total));
       const result  = snap.mode === "raw"
-        ? await fetchQrngRawBytesInChunks(needed, qrngSource)
-        : await fetchQrngBytesInChunks(needed, qrngSource);
+        ? await fetchQrngRawBytesInChunks(needed, qrngSource, undefined, onProgress)
+        : await fetchQrngBytesInChunks(needed, qrngSource, undefined, onProgress);
       const { bytes } = result;
       const latencyMs = result.latencyMs;
       const source    = result.source ?? (qrngSource === "pre-collected" ? t("sourcePrecollected") : "qrng");
@@ -768,7 +771,7 @@ export default function DataSection() {
           {/* Botões de ação */}
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <Btn color={theme.quantum} disabled={!canGenerate} onClick={handleGenerate}>
-              {status === "generating" ? t("dsGeneratingBtn") : t("dsGeneratePreviewBtn")}
+              {status === "generating" ? `${t("dsGeneratingBtn")} ${genProgress}%` : t("dsGeneratePreviewBtn")}
             </Btn>
             <Btn color={theme.success} disabled={!hasDone} onClick={handleDownload}>
               {t("dsDownloadBtn")}

@@ -12,6 +12,7 @@ import * as sonification from "./visualizations/sonification";
 import DataPipeline from "./DataPipeline";
 import StatsBadges from "./StatsBadges";
 import InfoModal from "./InfoModal";
+import { useIsMobile } from "../../hooks/useIsMobile";
 import { createAudioEngine } from "../../audioEngine";
 
 const BG = "#0c0e1a";
@@ -49,6 +50,7 @@ function generatePrngBytes(count, seedRef) {
 export default function QuantumVisualizer() {
   const { latency, qrngSource: globalSource } = useContext(AppContext);
   const { t } = useLanguage();
+  const isMobile = useIsMobile(640); // canvases empilhados precisam de altura própria
   const [mode, setMode] = useState("galaxy");
   const [qrngSourceLabel, setQrngSourceLabel] = useState("...");
   const [bytesUsed, setBytesUsed] = useState(0);
@@ -484,6 +486,7 @@ export default function QuantumVisualizer() {
         ref={containerRef}
         style={{
           flex: 1,
+          minHeight: isMobile ? 560 : undefined,
           display: "flex",
           flexWrap: "wrap",   // < 640 px: os canvases (largura total) caem um por linha
           alignContent: "flex-start",

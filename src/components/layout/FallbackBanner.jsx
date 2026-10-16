@@ -2,6 +2,7 @@ import { useContext, useState } from "react";
 import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
 import { useLanguage } from "../../contexts/LanguageContext";
+import { useIsMobile } from "../../hooks/useIsMobile";
 
 /**
  * Item 4 da auditoria: banner global de fallback, visível em TODAS as
@@ -29,6 +30,7 @@ export default function FallbackBanner() {
     useContext(AppContext);
   const { t } = useLanguage();
   const [confirming, setConfirming] = useState(false);
+  const isMobile = useIsMobile(640); // no celular: só o essencial (o resto está em Configurações)
 
   if (!isFallbackSelected) return null;
 
@@ -59,14 +61,18 @@ export default function FallbackBanner() {
           {precollectedRemaining} / {precollectedLimit} {t("fbBytesRemaining")}
           {low && !exhausted ? t("fbAlmostExhausted") : ""}
         </span>
-        <span style={{ color: theme.border }}>|</span>
-        <span style={{ color: theme.textMuted }}>
-          {t("fbProvenance")}: <strong style={{ color: theme.textDim }}>{t("fbNotRegistered")}</strong> {t("fbNotLiveMeasure")}
-        </span>
-        <span style={{ color: theme.border }}>|</span>
-        <span style={{ color: theme.textMuted }}>
-          {t("fbKeyGenBlocked")}
-        </span>
+        {!isMobile && (
+          <>
+            <span style={{ color: theme.border }}>|</span>
+            <span style={{ color: theme.textMuted }}>
+              {t("fbProvenance")}: <strong style={{ color: theme.textDim }}>{t("fbNotRegistered")}</strong> {t("fbNotLiveMeasure")}
+            </span>
+            <span style={{ color: theme.border }}>|</span>
+            <span style={{ color: theme.textMuted }}>
+              {t("fbKeyGenBlocked")}
+            </span>
+          </>
+        )}
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>

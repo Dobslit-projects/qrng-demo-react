@@ -23,6 +23,7 @@ export default function SectionNav() {
 
   return (
     <nav
+      className="kq-nav"
       aria-label="Seções"
       style={{
         background: theme.bg,

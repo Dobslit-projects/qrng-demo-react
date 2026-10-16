@@ -8,6 +8,7 @@ import {
 } from "../../lib/qrngHelper";
 import Btn from "../ui/Btn";
 import GlowTag from "../ui/GlowTag";
+import { useIsMobile } from "../../hooks/useIsMobile";
 
 const mono = "'IBM Plex Mono', monospace";
 const sans = "'Outfit', sans-serif";
@@ -740,12 +741,13 @@ export default function ApplicationsSection() {
   const { t } = useLanguage();
   const source = qrngSource;
 
+  const wide = !useIsMobile(1100); // ≥ 1100 px: 2 colunas (3º revisor)
   return (
     <div>{/* a rolagem é do <main> da App (teclado/Page Down funcionam) */}
-      <div style={{ maxWidth: 820, margin: "0 auto", padding: "16px", display: "flex", flexDirection: "column", gap: 14 }}>
+      <div style={{ maxWidth: wide ? 1240 : 820, margin: "0 auto", padding: "16px", display: "grid", gridTemplateColumns: wide ? "1fr 1fr" : "1fr", gap: 14, alignItems: "start" }}>
 
         {/* Intro */}
-        <div style={{ ...card, background: "linear-gradient(135deg, #0a1628, #0d1f3c)", border: `1px solid ${theme.quantum}25` }}>
+        <div style={{ ...card, gridColumn: "1 / -1", background: "linear-gradient(135deg, #0a1628, #0d1f3c)", border: `1px solid ${theme.quantum}25` }}>
           <div style={{ fontSize: 18, fontWeight: 800, fontFamily: grotesk, color: "#fff" }}>{t("apMainTitle")}</div>
           <p style={{ margin: 0, fontSize: 13, color: "#aac4e8", lineHeight: 1.75, fontFamily: sans }}>
             {t("apMainDesc")}

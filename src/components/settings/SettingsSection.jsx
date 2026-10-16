@@ -127,11 +127,6 @@ function SourceCard({ source, isActive, health, latency, onSelect }) {
           {online ? t("settOnline") : degraded ? t("settDegraded") : t("settOffline")}
         </span>
 
-        {!isFallback && source.route && (
-          <span style={{ color: theme.textMuted }}>
-            {t("settRoute")}: {source.route}
-          </span>
-        )}
 
         {!isFallback && latency !== null && (
           <span style={{

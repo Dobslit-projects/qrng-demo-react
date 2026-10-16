@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useContext } from "react";
 import { theme } from "../../theme";
+import { AppContext } from "../../contexts/AppContext";
 import { useLanguage } from "../../contexts/LanguageContext";
 import {
   nistStatus, nistJobs, nistJob, nistJobLog, nistRun, nistUpload,
@@ -371,6 +372,9 @@ export default function NISTSection() {
   // "Falhou" de amostras de engenharia); por padrão mostra só o que foi
   // disparado pela interface.
   const [showPeriodic, setShowPeriodic] = useState(false);
+  // estado ATUAL dos health tests (RCT/APT) lido do hardware pelo broker — vem
+  // no /health que a App já consulta; não depende do serviço NIST.
+  const { health: liveHealth } = useContext(AppContext);
   const [uploadTest,   setUploadTest]   = useState("both");
   const [uploadFmt,    setUploadFmt]    = useState("auto");
   const [error,        setError]        = useState(null);
@@ -477,6 +481,29 @@ export default function NISTSection() {
           </div>
         </div>
       )}
+
+      {/* ── Health tests no hardware (3º revisor): estado atual, não arquivo antigo ── */}
+      {liveHealth && (() => {
+        const eh = liveHealth.entropy_health;
+        const prof = liveHealth.qualification?.health_profile_detail;
+        const state = eh === "hw_health_tests_passing" ? { label: t("nistHwPassing"), color: theme.success }
+                    : eh === "hw_health_alarm" ? { label: t("nistHwAlarm"), color: theme.danger }
+                    : eh === "hw_health_unavailable" ? { label: t("nistHwUnavailable"), color: theme.warning }
+                    : { label: t("nistHwNotAssessed"), color: theme.textMuted };
+        return (
+          <div style={{ ...card, display: "flex", flexDirection: "column", gap: 8, borderLeft: `4px solid ${state.color}` }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 13, fontWeight: 700, fontFamily: mono }}>{t("nistHwTitle")}</span>
+              <span style={badge(state.color)}>{state.label}</span>
+              {liveHealth.conditioned && <span style={badge(theme.quantum)}>Toeplitz 256→128</span>}
+            </div>
+            <div style={{ fontSize: 11, color: theme.textDim, fontFamily: mono, lineHeight: 1.7 }}>
+              {t("nistHwDesc")}
+              {prof && ` ${t("nistHwProfile", { rct: prof.rct_cutoff, aptw: prof.apt_window, aptc: prof.apt_cutoff, alpha: prof.alpha })}`}
+            </div>
+          </div>
+        );
+      })()}
 
       {/* ── Status card ── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: 12 }}>
@@ -590,7 +617,7 @@ export default function NISTSection() {
       )}
 
       {/* ── Actions ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div className="kq-two-col" style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
 
         {/* Teste sob demanda */}
         <div style={{ ...card, display: "flex", flexDirection: "column", gap: 12 }}>

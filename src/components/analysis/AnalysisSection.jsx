@@ -162,7 +162,7 @@ export default function AnalysisSection() {
               }}>
                 Scatter Plot
               </div>
-              <div style={{ height: 240, padding: 4 }}>
+              <div style={{ height: 320, padding: 4 }}>
                 <ScatterCanvas points={prngSeq} color={theme.classical} label={`seed=${seed}`} />
               </div>
             </div>
@@ -245,7 +245,7 @@ export default function AnalysisSection() {
               }}>
                 Scatter Plot
               </div>
-              <div style={{ height: 240, padding: 4 }}>
+              <div style={{ height: 320, padding: 4 }}>
                 <ScatterCanvas points={qrngSeq} color={theme.quantum} label={qrngLabel} />
               </div>
             </div>

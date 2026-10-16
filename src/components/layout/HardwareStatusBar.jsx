@@ -63,6 +63,7 @@ export default function HardwareStatusBar() {
 
   return (
     <div
+      className="kq-status-bar"
       style={{
         background: theme.surface,
         borderBottom: `1px solid ${theme.border}`,

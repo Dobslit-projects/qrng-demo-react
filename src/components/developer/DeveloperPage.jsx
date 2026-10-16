@@ -279,15 +279,31 @@ export default function DeveloperPage() {
   }
 
   if (!user) {
+    // documentação pública ANTES do login (3º revisor: o visitante só via um formulário)
+    const code = { fontFamily: mono, fontSize: 11, background: "#0a0e17", color: "#8fc4f0", padding: "10px 12px", borderRadius: 8, whiteSpace: "pre-wrap", wordBreak: "break-all", margin: 0 };
     return (
-      <div style={{ height: "100%", display: "flex", alignItems: "center", justifyContent: "center", padding: "20px 0" }}>
+      <div className="kq-two-col" style={{ display: "grid", gridTemplateColumns: "minmax(0, 1fr) 360px", gap: 20, alignItems: "start", maxWidth: 1100, margin: "0 auto", padding: "20px 0" }}>
+        <div style={{ background: theme.surface, border: `1px solid ${theme.border}`, borderRadius: 14, padding: "20px 22px", display: "flex", flexDirection: "column", gap: 12 }}>
+          <div style={{ fontSize: 16, fontWeight: 700, fontFamily: mono, color: theme.text }}>{t("devDocsTitle")}</div>
+          <p style={{ margin: 0, fontSize: 12, color: theme.textDim, lineHeight: 1.7 }}>{t("devDocsIntro")}</p>
+          <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, fontFamily: mono, textTransform: "uppercase" }}>{t("devDocsStep1")}</div>
+          <pre style={code}>{`curl "https://bongo.dobslit.com/qrng/v1/public/random?bytes=16&format=hex"`}</pre>
+          <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, fontFamily: mono, textTransform: "uppercase" }}>{t("devDocsStep2")}</div>
+          <pre style={code}>{`curl -H "Authorization: Bearer SEU_TOKEN" \\\n  "https://bongo.dobslit.com/qrng/v1/random?bytes=1048576&format=raw" -o kuapoa.bin`}</pre>
+          <div style={{ fontSize: 11, fontWeight: 700, color: theme.textMuted, fontFamily: mono, textTransform: "uppercase" }}>{t("devDocsStep3")}</div>
+          <p style={{ margin: 0, fontSize: 12, color: theme.textDim, lineHeight: 1.7 }}>{t("devDocsHeaders")}</p>
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+            <a href="/qrng/v1/redoc" target="_blank" rel="noopener" style={{ padding: "7px 14px", borderRadius: 8, background: theme.quantum, color: "#fff", fontSize: 12, fontWeight: 700, textDecoration: "none" }}>{t("devDocsRedoc")}</a>
+            <a href="/qrng/v1/docs/" target="_blank" rel="noopener" style={{ padding: "7px 14px", borderRadius: 8, border: `1px solid ${theme.border}`, color: theme.textDim, fontSize: 12, fontWeight: 600, textDecoration: "none" }}>{t("devDocsSwagger")}</a>
+          </div>
+        </div>
         <AuthPage onAuth={handleAuth} />
       </div>
     );
   }
 
   return (
-    <div style={{ height: "100%", display: "flex", flexDirection: "column", gap: 0 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 0 }}>
       {/* Header */}
       <div
         style={{
@@ -387,8 +403,8 @@ export default function DeveloperPage() {
         ))}
       </div>
 
-      {/* Conteúdo */}
-      <div style={{ flex: 1, overflowY: "auto" }}>
+      {/* Conteúdo (a rolagem é do <main>) */}
+      <div style={{ flex: 1 }}>
         {showQuotaBanner && (
           <div
             style={{
