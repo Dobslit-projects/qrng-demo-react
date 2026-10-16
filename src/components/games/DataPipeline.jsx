@@ -4,7 +4,7 @@ import { AppContext } from "../../contexts/AppContext";
 import { useLanguage } from "../../contexts/LanguageContext";
 
 const STEPS = [
-  { id: "redpitaya", label: "Red Pitaya", sub: "FPGA" },
+  { id: "redpitaya", label: "Kuapoã", sub: "FPGA" },
   { id: "noise",     labelKey: "dpNoiseQ", subKey: "dpFotons" },
   { id: "adc",       label: "ADC", sub: "14-bit" },
   { id: "api",       label: "API REST", sub: null },

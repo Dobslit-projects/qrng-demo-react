@@ -741,7 +741,7 @@ export default function ApplicationsSection() {
   const source = qrngSource;
 
   return (
-    <div style={{ height: "100%", overflowY: "auto" }}>
+    <div>{/* a rolagem é do <main> da App (teclado/Page Down funcionam) */}
       <div style={{ maxWidth: 820, margin: "0 auto", padding: "16px", display: "flex", flexDirection: "column", gap: 14 }}>
 
         {/* Intro */}

@@ -2,6 +2,7 @@ import { useContext, useState } from "react";
 import { theme, formatBytes } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
 import { useLanguage, SOURCE_KEY_MAP } from "../../contexts/LanguageContext";
+import { useIsMobile } from "../../hooks/useIsMobile";
 
 function LogoImg({ height }) {
   const [broken, setBroken] = useState(false);
@@ -55,6 +56,7 @@ function effectiveOrigin({ isFallback, isOnline, health, t }) {
 export default function HardwareStatusBar() {
   const { health, latency, isOnline, qrngSource, precollectedRemaining, precollectedLimit } = useContext(AppContext);
   const { t, lang, setLang } = useLanguage();
+  const isMobile = useIsMobile(640); // no celular a latência sai da barra (fica em Configurações)
   const isFallback = qrngSource === "pre-collected";
   const statusColor = isOnline ? theme.success : theme.danger;
   const origin = effectiveOrigin({ isFallback, isOnline, health, t });
@@ -121,7 +123,7 @@ export default function HardwareStatusBar() {
       </div>
 
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-        {latency !== null ? (
+        {isMobile ? null : latency !== null ? (
           <>
             <span style={{ color: theme.textMuted }}>{t("latency")}:</span>
             {/* o caminho passa por um túnel até o laboratório: 0,5–2 s é o normal, não um problema */}

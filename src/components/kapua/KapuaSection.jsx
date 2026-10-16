@@ -577,7 +577,7 @@ export default function KapuaSection() {
   };
 
   return (
-    <div style={{ height: "100%", overflowY: "auto" }}>
+    <div>{/* a rolagem é do <main> da App (teclado/Page Down funcionam) */}
       <div style={{ maxWidth: 1100, margin: "0 auto", padding: "16px 16px 40px" }}>
 
         {/* ── Hero (2-column layout) ──────────────────────────────────────── */}

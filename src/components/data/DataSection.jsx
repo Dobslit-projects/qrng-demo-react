@@ -1,7 +1,7 @@
 import { useState, useContext, useRef, useEffect } from "react";
 import { theme, formatBytes } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
-import { useLanguage } from "../../contexts/LanguageContext";
+import { useLanguage, SOURCE_KEY_MAP } from "../../contexts/LanguageContext";
 import { fetchQrngBytesInChunks, fetchQrngRawBytesInChunks, readUint32LE, PRECOLLECTED_LIMIT } from "../../lib/qrngHelper";
 import Btn from "../ui/Btn";
 
@@ -505,7 +505,7 @@ export default function DataSection() {
   const bufferInfo  = health?.buffer_level ?? health?.buffer ?? null;
 
   return (
-    <div style={{ height: "100%", overflowY: "auto" }}>
+    <div>{/* a rolagem é do <main> da App (teclado/Page Down funcionam) */}
       <div style={{ maxWidth: 800, margin: "0 auto", padding: "16px 16px 32px", display: "flex", flexDirection: "column", gap: 14 }}>
 
         {/* ── Card 1: Status da fonte QRNG ──────────────────────── */}
@@ -537,7 +537,7 @@ export default function DataSection() {
               </span>
             )}
             <span style={{ fontSize: 11, color: theme.textMuted, fontFamily: MONO }}>
-              {t("dsSourceLabel")}: {qrngSource}
+              {t("dsSourceLabel")}: {t(SOURCE_KEY_MAP[qrngSource]) || qrngSource}
             </span>
             {bufferInfo !== null && (
               <span style={{ fontSize: 11, color: theme.textMuted, fontFamily: MONO }}>
@@ -822,7 +822,7 @@ export default function DataSection() {
               {/* Meta */}
               {resultData?.meta && (
                 <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: MONO, lineHeight: 1.8 }}>
-                  {t("dsSourceLabel")}: {resultData.meta.source}
+                  {t("dsSourceLabel")}: {/pr[eé]-?col/i.test(resultData.meta.source || "") ? t("sourcePrecollected") : t("sourceFpga")}
                   {resultData.meta.latencyMs ? ` · ${t("dsLatencyApi")}: ${resultData.meta.latencyMs} ms` : ""}
                   {` · ${t("dsFileLabel")}: ${resultData.meta.filename}`}
                 </div>

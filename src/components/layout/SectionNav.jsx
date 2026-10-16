@@ -2,6 +2,7 @@ import { useContext } from "react";
 import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
 import { useLanguage } from "../../contexts/LanguageContext";
+import { useIsMobile } from "../../hooks/useIsMobile";
 
 const pages = [
   { id: "kapua",        key: "navKapua" },
@@ -16,6 +17,9 @@ const pages = [
 export default function SectionNav() {
   const { activePage, setActivePage } = useContext(AppContext);
   const { t } = useLanguage();
+  // com overflow-x: auto, justifyContent:center deixa as primeiras abas
+  // inalcançáveis quando não cabem (celular): alinha à esquerda nesse caso
+  const isMobile = useIsMobile(760);
 
   return (
     <nav
@@ -26,7 +30,7 @@ export default function SectionNav() {
         padding: "6px 20px",
         display: "flex",
         gap: 4,
-        justifyContent: "center",
+        justifyContent: isMobile ? "flex-start" : "center",
         flexShrink: 0,
         // Em telas estreitas os 7 rótulos (sem quebra de linha) não cabem na
         // largura visível; sem rolagem horizontal, os botões que ultrapassam

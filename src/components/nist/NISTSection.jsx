@@ -77,6 +77,7 @@ function sampleOriginLabel(origin, t) {
     periodic_live: t("nistOriginPeriodicLive"),
     live:          t("nistOriginLive"),
     historical:    t("nistOriginHistorical"),
+    historical_assessment: t("nistOriginHistorical"),
     upload:        t("nistOriginUpload"),
     user_upload:   t("nistOriginUpload"),
     unknown:       t("nistOriginUnknown"),
@@ -500,7 +501,7 @@ export default function NISTSection() {
           background: theme.textMuted + "12", border: `1px solid ${theme.textMuted}30`,
           fontSize: 11, color: theme.textDim, fontFamily: mono,
         }}>
-          {t("nistLiveCaptureUnavailablePrefix")} ({status.periodic_enabled === false ? "periodic_enabled=false" : "—"});
+          {t("nistLiveCaptureUnavailablePrefix")};
           {" "}{t("nistLiveCaptureUnavailableSuffix")}
         </div>
       )}
@@ -549,7 +550,8 @@ export default function NISTSection() {
             </div>
             <div>
               <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>{t("nistFileLabel")}</div>
-              <span style={{ fontSize: 11, fontFamily: mono, color: theme.textDim }}>
+              <span style={{ fontSize: 11, fontFamily: mono, color: theme.textDim, display: "block", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+                title={status.last_job.original_filename || ""}>
                 {status.last_job.original_filename || "—"}
               </span>
             </div>
@@ -594,7 +596,7 @@ export default function NISTSection() {
         <div style={{ ...card, display: "flex", flexDirection: "column", gap: 12 }}>
           <span style={{ fontSize: 13, fontWeight: 700, fontFamily: mono }}>{t("nistRunNowTitle")}</span>
           <span style={{ fontSize: 11, color: theme.textDim }}>
-            {t("nistRunNowDescPrefix")} <code style={{ fontFamily: mono }}>NIST_DATA_DIR</code> {t("nistRunNowDescSuffix")}
+            {t("nistRunNowDescPrefix")} {t("nistRunNowDescSuffix")}
           </span>
           <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
             <Sel value={testType}  onChange={setTestType}  options={getTestOptions(t)} />
