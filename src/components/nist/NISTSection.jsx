@@ -78,6 +78,7 @@ function sampleOriginLabel(origin, t) {
     live:          t("nistOriginLive"),
     historical:    t("nistOriginHistorical"),
     upload:        t("nistOriginUpload"),
+    user_upload:   t("nistOriginUpload"),
     unknown:       t("nistOriginUnknown"),
   };
   return map[origin] || (origin ? String(origin) : t("nistOriginUnknown"));
@@ -550,7 +551,7 @@ export default function NISTSection() {
             <div>
               <div style={{ fontSize: 10, color: theme.textMuted, fontFamily: mono }}>{t("nistTransportOrigin")}</div>
               <span style={{ fontSize: 11, fontFamily: mono, color: theme.textDim }}>
-                {status.last_job.transport_format}
+                {apiWord(status.last_job.transport_format, t)}
                 {status.last_job.source_word_width != null ? ` · ${status.last_job.source_word_width}B/${t("nistPerWord")}` : ""}
                 {status.last_job.sample_conditioned != null
                   ? ` · ${status.last_job.sample_conditioned ? t("nistConditioned") : t("nistNotConditioned")}`

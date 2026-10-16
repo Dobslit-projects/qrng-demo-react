@@ -58,6 +58,21 @@ export default function SectionNav() {
           {t(p.key)}
         </button>
       ))}
+      {/* link discreto para os Termos de Uso do portal (o 1º testador notou que
+          a home citava os Termos sem nenhum link) */}
+      <a
+        href="/termos-de-uso"
+        target="_blank"
+        rel="noopener"
+        style={{
+          marginLeft: 12, alignSelf: "center", padding: "6px 10px",
+          fontSize: 10, fontFamily: "'IBM Plex Mono', monospace",
+          color: theme.textMuted, textDecoration: "none", whiteSpace: "nowrap", flexShrink: 0,
+          borderLeft: `1px solid ${theme.border}`,
+        }}
+      >
+        {t("footerTerms")}
+      </a>
     </div>
   );
 }
