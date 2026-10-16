@@ -177,7 +177,11 @@ export function connectQRNGStream(onChunk, onError, onClose, onStall, apiPrefix 
         const { done, value } = await reader.read();
         if (done) { cleanup(); onClose(); break; }
         resetStall();
-        onChunk(new Uint8Array(value.buffer || value));
+        // `value` já é um Uint8Array; `value.buffer` é o ArrayBuffer SUBJACENTE,
+        // que o navegador costuma alocar maior que a fatia recebida — usá-lo
+        // inflava a contagem de bytes (87 MiB "recebidos" em 12 s com
+        // limit_rate de 256 kB/s) e injetava lixo na visualização.
+        onChunk(value instanceof Uint8Array ? value : new Uint8Array(value));
       }
     } catch (err) {
       cleanup();
