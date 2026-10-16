@@ -237,9 +237,11 @@ export async function fetchQrngRawBytesViaToken(byteCount) {
 // pré-coletado (limite fixo PRECOLLECTED_LIMIT) é repassado sem lote.
 const SAFE_CHUNK_BYTES = 65536; // <= PUBLIC_MAX_BYTES_PER_REQUEST padrão do servidor
 
-async function fetchInChunks(fetchFn, byteCount, source, chunkSize) {
+async function fetchInChunks(fetchFn, byteCount, source, chunkSize, onProgress) {
   if (source === "pre-collected" || byteCount <= chunkSize) {
-    return fetchFn(byteCount, source);
+    const r = await fetchFn(byteCount, source);
+    if (onProgress) onProgress(byteCount, byteCount);
+    return r;
   }
   const out = new Uint8Array(byteCount);
   let offset = 0;
@@ -251,18 +253,19 @@ async function fetchInChunks(fetchFn, byteCount, source, chunkSize) {
     out.set(last.bytes, offset);
     offset += n;
     latencyMs += last.latencyMs;
+    if (onProgress) onProgress(offset, byteCount);
   }
   return { ...last, bytes: out, hex: bytesToHex(out), latencyMs };
 }
 
 /** Como fetchQrngBytes, mas divide pedidos grandes em lotes <= chunkSize (evita 413 REQUEST_TOO_LARGE). */
-export async function fetchQrngBytesInChunks(byteCount, source = "remote", chunkSize = SAFE_CHUNK_BYTES) {
-  return fetchInChunks(fetchQrngBytes, byteCount, source, chunkSize);
+export async function fetchQrngBytesInChunks(byteCount, source = "remote", chunkSize = SAFE_CHUNK_BYTES, onProgress = null) {
+  return fetchInChunks(fetchQrngBytes, byteCount, source, chunkSize || SAFE_CHUNK_BYTES, onProgress);
 }
 
 /** Como fetchQrngRawBytes, mas divide pedidos grandes em lotes <= chunkSize (evita 413 REQUEST_TOO_LARGE). */
-export async function fetchQrngRawBytesInChunks(byteCount, source = "remote", chunkSize = SAFE_CHUNK_BYTES) {
-  return fetchInChunks(fetchQrngRawBytes, byteCount, source, chunkSize);
+export async function fetchQrngRawBytesInChunks(byteCount, source = "remote", chunkSize = SAFE_CHUNK_BYTES, onProgress = null) {
+  return fetchInChunks(fetchQrngRawBytes, byteCount, source, chunkSize || SAFE_CHUNK_BYTES, onProgress);
 }
 
 // ─── Conversões derivadas (bytes → hex / uint32 / float / int) ─────────────

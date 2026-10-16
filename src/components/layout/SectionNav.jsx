@@ -18,7 +18,8 @@ export default function SectionNav() {
   const { t } = useLanguage();
 
   return (
-    <div
+    <nav
+      aria-label="Seções"
       style={{
         background: theme.bg,
         borderBottom: `1px solid ${theme.border}`,
@@ -38,6 +39,7 @@ export default function SectionNav() {
       {pages.map((p) => (
         <button
           key={p.id}
+          aria-current={activePage === p.id ? "page" : undefined}
           onClick={() => setActivePage(p.id)}
           style={{
             padding: "6px 16px",
@@ -73,6 +75,6 @@ export default function SectionNav() {
       >
         {t("footerTerms")}
       </a>
-    </div>
+    </nav>
   );
 }

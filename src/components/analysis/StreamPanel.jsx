@@ -71,24 +71,31 @@ export default function StreamPanel() {
           bufferPosRef.current++;
         }
         totalBytesRef.current += chunk.length;
-        for (let i = 0; i + 1 < chunk.length; i += 2) {
-          particlesRef.current.push({ x: chunk[i] / 255, y: chunk[i + 1] / 255, born: Date.now() });
+        // 2º revisor: o broker entrega chunks grandes (dezenas de KiB);
+        // `push(...row)` espalhava o chunk inteiro como argumentos e estourava
+        // a pilha ("Maximum call stack size exceeded") logo na 1ª leitura.
+        // Só os últimos bytes de cada chunk interessam à visualização.
+        const born = Date.now();
+        const pStart = Math.max(0, chunk.length - 2 * 800);
+        for (let i = pStart; i + 1 < chunk.length; i += 2) {
+          particlesRef.current.push({ x: chunk[i] / 255, y: chunk[i + 1] / 255, born });
         }
         if (particlesRef.current.length > 4000) {
           particlesRef.current = particlesRef.current.slice(-4000);
         }
-        const row = [];
-        for (let i = 0; i < chunk.length; i++) row.push(chunk[i]);
-        matrixRowsRef.current.push(...row);
-        if (matrixRowsRef.current.length > 2048) {
-          matrixRowsRef.current = matrixRowsRef.current.slice(-2048);
-        }
+        const mStart = Math.max(0, chunk.length - 2048);
+        const rows = matrixRowsRef.current;
+        for (let i = mStart; i < chunk.length; i++) rows.push(chunk[i]);
+        if (rows.length > 2048) matrixRowsRef.current = rows.slice(-2048);
       },
       (err) => {
         setStreaming(false);
         setStalled(false);
         if (statsIntervalRef.current) clearInterval(statsIntervalRef.current);
-        setStreamError(err?.message || t("spUnknownError"));
+        // 429 = outra conexão de stream deste IP ainda está aberta no servidor
+        // (limite de 1 por IP); a anterior leva alguns segundos para ser liberada.
+        const m = err?.message || "";
+        setStreamError(/429/.test(m) ? t("spBusy429") : (m || t("spUnknownError")));
       },
       () => { setStreaming(false); setStalled(false); },
       (isStalled) => setStalled(isStalled),

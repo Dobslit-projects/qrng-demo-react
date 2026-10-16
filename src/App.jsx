@@ -1,4 +1,4 @@
-import { useContext } from "react";
+import { useContext, useEffect, useRef } from "react";
 import { AppProvider, AppContext } from "./contexts/AppContext";
 import { LanguageProvider } from "./contexts/LanguageContext";
 import { theme, fonts } from "./theme";
@@ -17,6 +17,13 @@ const NO_PADDING_PAGES = new Set(["kapua", "visuals", "data", "applications", "s
 
 function AppContent() {
   const { activePage } = useContext(AppContext);
+  // 2º revisor: html/body têm overflow hidden e a rolagem é do container
+  // abaixo; sem foco nele, Page Down/End/setas não rolavam nada.
+  const mainRef = useRef(null);
+  useEffect(() => {
+    mainRef.current?.focus({ preventScroll: true });
+    mainRef.current?.scrollTo?.(0, 0);
+  }, [activePage]);
 
   return (
     <div
@@ -31,10 +38,12 @@ function AppContent() {
       }}
     >
       <style>{fonts}</style>
-      <HardwareStatusBar />
-      <FallbackBanner />
+      <header>
+        <HardwareStatusBar />
+        <FallbackBanner />
+      </header>
       <SectionNav />
-      <div style={{ flex: 1, overflow: "auto", WebkitOverflowScrolling: "touch", padding: NO_PADDING_PAGES.has(activePage) ? 0 : "12px 16px" }}>
+      <main ref={mainRef} tabIndex={-1} style={{ flex: 1, overflow: "auto", WebkitOverflowScrolling: "touch", outline: "none", padding: NO_PADDING_PAGES.has(activePage) ? 0 : "12px 16px" }}>
         {activePage === "kapua"        && <KapuaSection />}
         {activePage === "visuals"      && <VisuaisSection />}
         {activePage === "data"         && <DataSection />}
@@ -42,7 +51,7 @@ function AppContent() {
         {activePage === "nist"         && <NISTSection />}
         {activePage === "developer"    && <DeveloperPage />}
         {activePage === "settings"     && <SettingsSection />}
-      </div>
+      </main>
     </div>
   );
 }

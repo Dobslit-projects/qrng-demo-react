@@ -101,8 +101,15 @@ const keyTags = {
   256: ["High-Entropy Pool"], 512: ["Multi-Key Derivation"], 1024: ["Bulk Entropy"],
 };
 
+// rótulos dos selos de tamanho (2º revisor: "BULK ENTROPY" aparecia em inglês no modo PT)
+const KEY_TAG_PT = {
+  "Seed Master": "Seed mestre", "RSA Seed": "Seed RSA", "KDF Input": "Entrada de KDF",
+  "High-Entropy Pool": "Pool de alta entropia", "Multi-Key Derivation": "Derivação multichave", "Bulk Entropy": "Entropia em volume",
+};
+
 function KeyCard({ source }) {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
+  const blocked = source === "pre-collected"; // amostra estática de 10 kB: nunca para chaves
   const [size, setSize] = useState(32);
   const [hex, setHex] = useState("");
   const [meta, setMeta] = useState(null);
@@ -145,7 +152,7 @@ function KeyCard({ source }) {
         <Badge color={theme.success}>{t("apFunctional")}</Badge>
         <Badge color={theme.quantum}>QRNG</Badge>
         <div style={{ marginLeft: "auto", display: "flex", gap: 5, flexWrap: "wrap" }}>
-          {(keyTags[size] || []).map(tag => <GlowTag key={tag} color={theme.quantum}>{tag}</GlowTag>)}
+          {(keyTags[size] || []).map(tag => <GlowTag key={tag} color={theme.quantum}>{lang === "pt" ? (KEY_TAG_PT[tag] || tag) : tag}</GlowTag>)}
         </div>
       </div>
       <p style={{ margin: 0, fontSize: 12, color: theme.textDim, fontFamily: sans }}>
@@ -154,7 +161,8 @@ function KeyCard({ source }) {
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         {keyPresets.map(p => <SizeBtn key={p.bytes} label={p.label} active={size === p.bytes} onClick={() => { setSize(p.bytes); setHex(""); setMeta(null); }} />)}
       </div>
-      <Btn onClick={generate} color={theme.quantum} disabled={busy}>{busy ? t("apGenerating") : t("apKeyGenerateBtn")}</Btn>
+      <Btn onClick={generate} color={theme.quantum} disabled={busy || blocked}>{busy ? t("apGenerating") : t("apKeyGenerateBtn")}</Btn>
+      {blocked && <ErrMsg msg={t("apBlockedPrecollected")} />}
       <HexBox hex={hex} placeholder={t("apKeyPlaceholder")} />
       <ErrMsg msg={err} />
       <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
@@ -171,6 +179,7 @@ function KeyCard({ source }) {
 
 function AISeedCard({ source }) {
   const { t } = useLanguage();
+  const blocked = source === "pre-collected";
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -199,7 +208,8 @@ function AISeedCard({ source }) {
       <p style={{ margin: 0, fontSize: 12, color: theme.textDim, fontFamily: sans }}>
         {t("apSeedDesc")}
       </p>
-      <Btn onClick={generate} color={theme.quantum} disabled={busy}>{busy ? t("apGenerating") : t("apSeedGenerateBtn")}</Btn>
+      <Btn onClick={generate} color={theme.quantum} disabled={busy || blocked}>{busy ? t("apGenerating") : t("apSeedGenerateBtn")}</Btn>
+      {blocked && <ErrMsg msg={t("apBlockedPrecollected")} />}
       {result && (
         <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
@@ -242,6 +252,7 @@ function MonteCarloCard({ source }) {
   const { t, lang } = useLanguage();
   const canvasRef = useRef(null);
   const [nPoints, setNPoints] = useState(1000);
+  const [progress, setProgress] = useState(0); // 0–100 (lotes de 64 KiB)
   const [result, setResult] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -253,7 +264,8 @@ function MonteCarloCard({ source }) {
     setBusy(true); setErr(""); setResult(null);
     try {
       const bytesNeeded = nPoints * 8;
-      const r = await fetchQrngBytesInChunks(bytesNeeded, source);
+      setProgress(0);
+      const r = await fetchQrngBytesInChunks(bytesNeeded, source, undefined, (done, total) => setProgress(Math.round(100 * done / total)));
       const u32s = bytesToUint32Array(r.bytes);
 
       let inside = 0;
@@ -318,7 +330,12 @@ function MonteCarloCard({ source }) {
           <SizeBtn key={n} label={n.toLocaleString(lang === "en" ? "en-US" : "pt-BR")} active={nPoints === n} onClick={() => { setNPoints(n); setResult(null); }} />
         ))}
       </div>
-      <Btn onClick={run} color={theme.quantum} disabled={busy}>{busy ? t("apMcCalculating") : t("apMcEstimateBtn", { n: nPoints.toLocaleString(lang === "en" ? "en-US" : "pt-BR") })}</Btn>
+      <Btn onClick={run} color={theme.quantum} disabled={busy}>{busy ? `${t("apMcCalculating")} ${progress}%` : t("apMcEstimateBtn", { n: nPoints.toLocaleString(lang === "en" ? "en-US" : "pt-BR") })}</Btn>
+      {busy && (
+        <div style={{ height: 6, borderRadius: 3, background: theme.border, overflow: "hidden" }} aria-hidden="true">
+          <div style={{ width: `${progress}%`, height: "100%", background: theme.quantum, transition: "width .2s" }} />
+        </div>
+      )}
       {(result || busy) && (
         <div style={{ display: "flex", gap: 12, flexWrap: "wrap", alignItems: "flex-start" }}>
           <canvas ref={canvasRef} width={CANVAS_SIZE} height={CANVAS_SIZE}
@@ -341,8 +358,14 @@ function MonteCarloCard({ source }) {
 
 /* ── Card 4: Sorteio Auditável ────────────────────────────────────────────── */
 
+// SHA-256 (hex) da lista de participantes tal como sorteada (uma por linha, aparada)
+async function sha256Hex(text) {
+  const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, "0")).join("");
+}
+
 function RaffleCard({ source }) {
-  const { t } = useLanguage();
+  const { t, lang } = useLanguage();
   const [names, setNames] = useState("");
   const participantCount = names.split("\n").map(s => s.trim()).filter(Boolean).length; // botão só com ≥ 2
   const [result, setResult] = useState(null);
@@ -357,18 +380,28 @@ function RaffleCard({ source }) {
     try {
       const r = await fetchQrngBytes(32, source);
       const winner = uniformIntFromBytes(0, list.length - 1, r.bytes);
-      setResult({ winner: list[winner], idx: winner, total: list.length, meta: r, ts: new Date().toISOString() });
+      // 2º revisor: o comprovante não era verificável (bytes truncados, sem
+      // hash da lista, sem algoritmo). Agora traz tudo o que um terceiro
+      // precisa para refazer o sorteio: hash da lista, os 32 bytes completos
+      // e a regra de derivação (ver apVoucherAlgo).
+      const listSha256 = await sha256Hex(list.join("\n"));
+      setResult({ winner: list[winner], idx: winner, total: list.length, meta: r, listSha256, ts: new Date() });
     } catch (e) {
       setErr(errorMessage(e));
     } finally { setBusy(false); }
   };
 
+  const tsLocal = result ? result.ts.toLocaleString(lang === "en" ? "en-US" : "pt-BR", { timeZoneName: "short" }) : "";
   const voucher = result
-    ? t("apVoucherTemplate", {
-        winner: result.winner, total: result.total, ts: result.ts,
-        source: result.meta?.source ?? t("apSourceBadgeDefault"),
-        bytes: result.meta?.hex?.slice(0, 16), req: result.meta?.requestId ?? "n/a",
-      })
+    ? [
+        t("apVoucherTemplate", {
+          winner: result.winner, total: result.total, ts: `${tsLocal} (${result.ts.toISOString()})`,
+          source: result.meta?.source ?? t("apSourceBadgeDefault"),
+          bytes: result.meta?.hex, req: result.meta?.requestId ?? "n/a",
+        }),
+        `${t("apVoucherListHash")}: sha256=${result.listSha256}`,
+        `${t("apVoucherAlgoLabel")}: ${t("apVoucherAlgo", { n: result.total, idx: result.idx })}`,
+      ].join("\n")
     : "";
 
   const copyVoucher = async () => {
@@ -415,9 +448,11 @@ function RaffleCard({ source }) {
           <div style={{ background: "#0a0e17", borderRadius: 10, padding: "10px 14px", border: `1px solid ${theme.border}` }}>
             <div style={{ fontSize: 9, color: theme.textMuted, fontFamily: mono, marginBottom: 6 }}>{t("apVoucherLabel")}</div>
             <div style={{ fontSize: 10, color: "#5b96cc", fontFamily: mono, lineHeight: 1.6, wordBreak: "break-all" }}>
-              {`Timestamp: ${result.ts}`}<br />
+              {`Timestamp: ${tsLocal} · ${result.ts.toISOString()}`}<br />
               {`Source: ${result.meta?.source ?? t("apSourceBadgeDefault")}`}<br />
-              {`Bytes: ${result.meta?.hex?.slice(0, 32)}...`}<br />
+              {`Bytes (32): ${result.meta?.hex}`}<br />
+              {`${t("apVoucherListHash")}: sha256=${result.listSha256}`}<br />
+              {`${t("apVoucherAlgoLabel")}: ${t("apVoucherAlgo", { n: result.total, idx: result.idx })}`}<br />
               {result.meta?.requestId && `Req-ID: ${result.meta.requestId}`}
             </div>
           </div>

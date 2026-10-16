@@ -1,3 +1,5 @@
+import { getGlowSprite, drawGlow } from "./glowSprite";
+
 const STAR_COUNT = 900;
 const ARM_COUNT = 3;
 const PERTURB_INTERVAL = 360; // frames (~6s at 60fps) — longer between perturbations
@@ -90,16 +92,8 @@ export function draw(ctx, state, w, h, color) {
     const alpha = s.brightness * twinkle;
     if (alpha < 0.05) continue;
 
-    // Glow effect
-    const grad = ctx.createRadialGradient(x, y, 0, x, y, s.size * 3);
-    grad.addColorStop(0, `rgba(${cr},${cg},${cb},${alpha * 0.9})`);
-    grad.addColorStop(0.3, `rgba(${cr},${cg},${cb},${alpha * 0.3})`);
-    grad.addColorStop(1, `rgba(${cr},${cg},${cb},0)`);
-
-    ctx.beginPath();
-    ctx.arc(x, y, s.size * 3, 0, Math.PI * 2);
-    ctx.fillStyle = grad;
-    ctx.fill();
+    // Glow effect (sprite em cache — ver glowSprite.js)
+    drawGlow(ctx, getGlowSprite(cr, cg, cb, s.size * 3), x, y, alpha);
 
     // Core
     ctx.beginPath();

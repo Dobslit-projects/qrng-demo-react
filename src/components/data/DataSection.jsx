@@ -1,4 +1,4 @@
-import { useState, useContext } from "react";
+import { useState, useContext, useRef, useEffect } from "react";
 import { theme, formatBytes } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
 import { useLanguage } from "../../contexts/LanguageContext";
@@ -234,8 +234,20 @@ export default function DataSection() {
 
   function resetResult() { setResultData(null); setStatus("idle"); setErrorMsg(""); }
   function changeMode(m) { setMode(m); resetResult(); }
+  // 2º revisor: os cards de "Aplicações Rápidas" só aplicavam o preset e
+  // limpavam a prévia, exigindo um 2º clique em "Gerar prévia". Agora o
+  // preset dispara a prévia assim que o estado novo estiver aplicado.
+  const autoPreviewRef = useRef(false);
+  useEffect(() => {
+    if (!autoPreviewRef.current) return;
+    autoPreviewRef.current = false;
+    if (canGenerate) handleGenerate();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mode, dlSize, u8Fmt, rMin, rMax, rCount, rAllowRepeats, rSort, rFmt, mcCount, mcFmt]);
+
   function applyPreset(cfg) {
     resetResult();
+    autoPreviewRef.current = true;
     if (cfg.mode   !== undefined) setMode(cfg.mode);
     if (cfg.dlSize !== undefined) setDlSize(cfg.dlSize);
     if (cfg.u8Fmt  !== undefined) setU8Fmt(cfg.u8Fmt);
@@ -696,7 +708,7 @@ export default function DataSection() {
             )}
             {rMax >= rMin && rCount <= (rAllowRepeats ? rCount : (rMax - rMin + 1)) && (
               <div style={{ fontSize: 11, color: theme.textDim, fontFamily: SANS }}>
-                {t("dsRangeGeneratesPrefix")} {rCount} {t("dsRangeGeneratesMid")} [{rMin}–{rMax}]. {t("dsRangeGeneratesSuffix", { n: (rMax - rMin + 1).toLocaleString() })}
+                {t("dsRangeGeneratesPrefix")} {rCount} {t("dsRangeGeneratesMid")} [{rMin}–{rMax}]. {(rMax - rMin + 1) === 1 ? t("dsRangeGeneratesSuffixOne") : t("dsRangeGeneratesSuffix", { n: (rMax - rMin + 1).toLocaleString() })}
                 {!rAllowRepeats && ` · ${t("dsRangeFloyd")}`}
                 {rAllowRepeats  && ` · ${t("dsRangeRejection")}`}
               </div>

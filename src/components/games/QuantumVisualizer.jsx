@@ -27,18 +27,19 @@ const STATS_BUFFER_SIZE = 5120; // ≥ 20 amostras esperadas por valor de byte n
 const STATS_UPDATE_INTERVAL = 30; // frames
 const MAX_AUDIO_EVENTS_PER_FRAME = 6; // prevent audio overload
 
-// Quantize PRNG to 8 levels — makes output visibly "digital/grid-like"
-// vs QRNG's smooth 256 levels. Dramatically exposes LCG limitations.
-// 8 levels = only values 0, 36, 73, 109, 146, 182, 219, 255
-const PRNG_LEVELS = 8;
-
+// 2º revisor (2026-10-16): antes o "PRNG (LCG)" desta aba era quantizado
+// artificialmente em 8 níveis (entropia 3,00 bits) enquanto a Análise
+// Estatística usava os 16 bits ALTOS do mesmo LCG (que passam nos testes
+// simples) — duas implementações com o mesmo rótulo. Agora esta aba usa o
+// BYTE BAIXO do estado do LCG: uma fraqueza REAL de LCGs com módulo 2^32
+// (o bit 0 alterna, o byte baixo tem período 256), sem truque visual. Os
+// rótulos dizem qual parte do LCG cada aba observa.
 function generatePrngBytes(count, seedRef) {
   const bytes = new Uint8Array(count);
   let s = seedRef.current;
-  const step = 255 / (PRNG_LEVELS - 1);
   for (let i = 0; i < count; i++) {
     const r = lcgNext(s);
-    bytes[i] = Math.round(Math.floor(r.value * PRNG_LEVELS) * step);
+    bytes[i] = r.nextSeed & 0xff;   // byte baixo do estado (bits 0–7)
     s = r.nextSeed;
   }
   seedRef.current = s;
@@ -213,8 +214,10 @@ export default function QuantumVisualizer() {
 
     const resize = () => {
       const rect = container.getBoundingClientRect();
-      const cw = Math.floor((rect.width - 12) / 2);
-      const ch = Math.floor(rect.height);
+      // telas estreitas: canvases empilhados (um por linha) em vez de lado a lado
+      const stacked = rect.width < 640;
+      const cw = Math.floor(stacked ? rect.width : (rect.width - 12) / 2);
+      const ch = Math.floor(stacked ? (rect.height - 12) / 2 : rect.height);
       if (cw < 10 || ch < 10) return;
 
       const dpr = window.devicePixelRatio || 1;
@@ -463,7 +466,7 @@ export default function QuantumVisualizer() {
           fontFamily: "'IBM Plex Mono', monospace",
           letterSpacing: "0.06em",
         }}>
-          PRNG (LCG)
+          {t("qvPrngLowBitsLabel")}
         </span>
         <div style={{ width: 12 }} />
         <span style={{
@@ -482,6 +485,8 @@ export default function QuantumVisualizer() {
         style={{
           flex: 1,
           display: "flex",
+          flexWrap: "wrap",   // < 640 px: os canvases (largura total) caem um por linha
+          alignContent: "flex-start",
           gap: 12,
           borderRadius: 12,
           overflow: "hidden",

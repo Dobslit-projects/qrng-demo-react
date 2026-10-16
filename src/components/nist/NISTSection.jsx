@@ -150,15 +150,32 @@ function Sel({ value, onChange, options }) {
 const getTestOptions = (t) => [["both",t("nistTestBoth")], ["iid",t("nistTestIidOnly")], ["non_iid",t("nistTestNonIidOnly")]];
 const getFormatOptions = (t) => [["auto",t("nistFmtAuto")], ["raw",t("nistFmtRaw")], ["u32txt",t("nistFmtU32txt")], ["bits",t("nistFmtBits")]];
 
+// 2º revisor: o log bruto do serviço expunha caminhos absolutos do servidor
+// (usuário e árvore de diretórios). Mantém só o nome do arquivo.
+function maskServerPaths(text) {
+  if (!text) return text;
+  return String(text).replace(/\/(?:home|root|var|opt|srv|tmp|data|mnt)(?:\/[\w.@-]+)*\/([\w.@-]+)/g, "…/$1");
+}
+
 /* ── Detail Modal ───────────────────────────────────────────── */
 function JobModal({ job, log, onClose }) {
   const { t } = useLanguage();
   const [tab, setTab] = useState("resumo");
 
+  // ESC fecha o modal (2º revisor)
+  useEffect(() => {
+    const onKey = (e) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
   if (!job) return null;
 
   return (
     <div
+      role="dialog"
+      aria-modal="true"
+      aria-label={t("nistJobTitle")}
       style={{
         position: "fixed", inset: 0, background: "rgba(0,0,0,0.45)", zIndex: 1000,
         display: "flex", alignItems: "center", justifyContent: "center", padding: 20,
@@ -308,7 +325,7 @@ function JobModal({ job, log, onClose }) {
                         background: "#0a0e17", color: "#a8d8a0", fontFamily: mono, fontSize: 11,
                         padding: 14, borderRadius: 8, overflow: "auto", maxHeight: 400,
                         margin: 0, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-all",
-                      }}>{log.stdout}</pre>
+                      }}>{maskServerPaths(log.stdout)}</pre>
                     </div>
                   )}
                   {log.stderr && (
@@ -318,7 +335,7 @@ function JobModal({ job, log, onClose }) {
                         background: "#17100a", color: "#e8c89a", fontFamily: mono, fontSize: 11,
                         padding: 14, borderRadius: 8, overflow: "auto", maxHeight: 200,
                         margin: 0, lineHeight: 1.6, whiteSpace: "pre-wrap", wordBreak: "break-all",
-                      }}>{log.stderr}</pre>
+                      }}>{maskServerPaths(log.stderr)}</pre>
                     </div>
                   )}
                   {!log.stdout && !log.stderr && (

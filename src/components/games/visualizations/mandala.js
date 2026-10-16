@@ -1,3 +1,6 @@
+import { getGlowSprite, drawGlow } from "./glowSprite";
+const MANDALA_STOPS = [[0, 1], [0.4, 0.375], [1, 0]];
+
 const SYMMETRY = 8;
 const POINTS_PER_BURST = 1;
 const BURST_EVERY = 8;
@@ -176,14 +179,9 @@ export function draw(ctx, state, w, h, color, t) {
         markCoverageArea(state, x, y, w, h, coreR);
         markCoverageArea(state, mx, my, w, h, coreR);
       }
-      const grad = ctx.createRadialGradient(x, y, 0, x, y, glowR);
-      grad.addColorStop(0, `rgba(${sr},${sg},${sb},${alpha * 0.8})`);
-      grad.addColorStop(0.4, `rgba(${sr},${sg},${sb},${alpha * 0.3})`);
-      grad.addColorStop(1, `rgba(${sr},${sg},${sb},0)`);
-      ctx.beginPath();
-      ctx.arc(x, y, glowR, 0, Math.PI * 2);
-      ctx.fillStyle = grad;
-      ctx.fill();
+      // sprite em cache (cor quantizada × raio) — antes: 2 gradientes radiais
+      // por ponto × 8 simetrias × quadro
+      drawGlow(ctx, getGlowSprite(sr, sg, sb, glowR, MANDALA_STOPS), x, y, alpha * 0.8);
 
       // Core
       ctx.beginPath();
@@ -192,14 +190,7 @@ export function draw(ctx, state, w, h, color, t) {
       ctx.fill();
 
       // Mirror
-      const mGrad = ctx.createRadialGradient(mx, my, 0, mx, my, glowR);
-      mGrad.addColorStop(0, `rgba(${sr},${sg},${sb},${alpha * 0.6})`);
-      mGrad.addColorStop(0.4, `rgba(${sr},${sg},${sb},${alpha * 0.2})`);
-      mGrad.addColorStop(1, `rgba(${sr},${sg},${sb},0)`);
-      ctx.beginPath();
-      ctx.arc(mx, my, glowR, 0, Math.PI * 2);
-      ctx.fillStyle = mGrad;
-      ctx.fill();
+      drawGlow(ctx, getGlowSprite(sr, sg, sb, glowR, MANDALA_STOPS), mx, my, alpha * 0.6);
     }
   }
 

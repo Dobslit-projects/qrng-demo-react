@@ -652,7 +652,7 @@ export default function KapuaSection() {
 
               {/* Number result */}
               {randHex && (
-                <div style={{
+                <div aria-live="polite" style={{
                   background: "rgba(12,140,233,0.07)", border: `1px solid ${theme.quantum}25`,
                   borderRadius: 10, padding: "12px 14px", fontFamily: mono,
                 }}>

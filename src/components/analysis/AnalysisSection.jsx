@@ -30,7 +30,14 @@ export default function AnalysisSection() {
   const generate = useCallback(async () => {
     setBusy(true);
     setError(null);
-    const s = parseInt(inputSeed) || 42;
+    // 2º revisor: "abc"/0/vazio caíam em 42 silenciosamente e valores enormes
+    // perdiam precisão. Agora a seed precisa ser um inteiro 1..2^31-1.
+    const s = /^\d{1,10}$/.test(inputSeed.trim()) ? Number(inputSeed.trim()) : NaN;
+    if (!Number.isSafeInteger(s) || s < 1 || s > 2147483647) {
+      setError(t("asSeedInvalid"));
+      setBusy(false);
+      return;
+    }
     setSeed(s);
     const p = generatePRNGSequence(s, count);
 
@@ -50,7 +57,7 @@ export default function AnalysisSection() {
     } finally {
       setBusy(false);
     }
-  }, [inputSeed, count, qrngSource, setLatency]);
+  }, [inputSeed, count, qrngSource, setLatency, t]);
 
   useEffect(() => { generate(); }, []);
 
@@ -80,6 +87,9 @@ export default function AnalysisSection() {
           </label>
           <input
             value={inputSeed}
+            inputMode="numeric"
+            pattern="[0-9]*"
+            title="1 … 2147483647"
             onChange={(e) => setInputSeed(e.target.value)}
             style={{
               width: 80, padding: "6px 10px", borderRadius: 6,
@@ -135,7 +145,7 @@ export default function AnalysisSection() {
               borderRadius: 8,
               border: `1px solid ${theme.classical}25`,
             }}>
-              PRNG (LCG) · seed={seed}
+              {t("asPrngHighBitsLabel")} · seed={seed}
             </div>
 
             {/* Scatter */}

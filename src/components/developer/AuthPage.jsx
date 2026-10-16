@@ -4,6 +4,7 @@ import { useLanguage } from "../../contexts/LanguageContext";
 import { authLogin, authRegister } from "../../qrngApi";
 
 const mono = "'IBM Plex Mono', monospace";
+const labelStyle = { fontSize: 10, color: theme.textMuted, fontFamily: mono, letterSpacing: "0.06em", textTransform: "uppercase" };
 
 export default function AuthPage({ onAuth }) {
   const { t } = useLanguage();
@@ -11,6 +12,7 @@ export default function AuthPage({ onAuth }) {
   const [email, setEmail]       = useState("");
   const [password, setPassword] = useState("");
   const [confirm, setConfirm]   = useState("");
+  const [acceptTerms, setAcceptTerms] = useState(false);
   const [loading, setLoading]   = useState(false);
   const [error, setError]       = useState(null);
 
@@ -23,6 +25,7 @@ export default function AuthPage({ onAuth }) {
     if (mode === "register") {
       if (password !== confirm) return setError(t("authPasswordMismatch"));
       if (password.length < 12) return setError(t("authPasswordTooShort"));
+      if (!acceptTerms) return setError(t("authTermsRequired"));
     }
 
     setLoading(true);
@@ -109,7 +112,9 @@ export default function AuthPage({ onAuth }) {
         </div>
 
         <form onSubmit={handleSubmit} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+          <label htmlFor="dev-auth-email" style={labelStyle}>{t("authEmailPlaceholder")}</label>
           <input
+            id="dev-auth-email"
             type="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
@@ -118,25 +123,36 @@ export default function AuthPage({ onAuth }) {
             autoComplete="email"
             style={inputStyle}
           />
+          <label htmlFor="dev-auth-password" style={labelStyle}>{t("authPasswordPlaceholder")}{mode === "register" ? ` · ${t("authPasswordHint")}` : ""}</label>
           <input
+            id="dev-auth-password"
             type="password"
             value={password}
             onChange={(e) => setPassword(e.target.value)}
             placeholder={t("authPasswordPlaceholder")}
             required
+            minLength={mode === "register" ? 12 : undefined}
             autoComplete={mode === "login" ? "current-password" : "new-password"}
             style={inputStyle}
           />
           {mode === "register" && (
-            <input
-              type="password"
-              value={confirm}
-              onChange={(e) => setConfirm(e.target.value)}
-              placeholder={t("authConfirmPasswordPlaceholder")}
-              required
-              autoComplete="new-password"
-              style={inputStyle}
-            />
+            <>
+              <label htmlFor="dev-auth-confirm" style={labelStyle}>{t("authConfirmPasswordPlaceholder")}</label>
+              <input
+                id="dev-auth-confirm"
+                type="password"
+                value={confirm}
+                onChange={(e) => setConfirm(e.target.value)}
+                placeholder={t("authConfirmPasswordPlaceholder")}
+                required
+                autoComplete="new-password"
+                style={inputStyle}
+              />
+              <label style={{ ...labelStyle, display: "flex", alignItems: "center", gap: 8, textTransform: "none", letterSpacing: 0 }}>
+                <input type="checkbox" checked={acceptTerms} onChange={(e) => setAcceptTerms(e.target.checked)} required />
+                <span>{t("authAcceptTermsPrefix")} <a href="/termos-de-uso" target="_blank" rel="noopener" style={{ color: theme.quantum }}>{t("footerTerms")}</a></span>
+              </label>
+            </>
           )}
 
           {error && (

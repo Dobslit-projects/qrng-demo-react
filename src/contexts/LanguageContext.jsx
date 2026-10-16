@@ -154,22 +154,22 @@ const translations = {
 
     // ── Canvas labels (visualizations/*.js) ──
     vzCoverage: "Cobertura",
-    vzCollectingOutputs: "COLETANDO SAIDAS",
+    vzCollectingOutputs: "COLETANDO SAÍDAS",
     vzInternalState: "ESTADO INTERNO (624 PALAVRAS DE 32 BITS)",
     vzCloned: "CLONADO!",
-    vzPrediction: "PREDICAO",
+    vzPrediction: "PREDIÇÃO",
     vzMt19937Cloned: "MT19937 CLONADO",
     vzCloneFailed: "CLONE FALHOU",
-    vzExperimentDone: "EXPERIMENTO CONCLUIDO",
-    vzAccuracy: "ACURACIA",
-    vzCorrectPredictions: "predicoes corretas",
-    vzObservation: "OBSERVACAO",
+    vzExperimentDone: "EXPERIMENTO CONCLUÍDO",
+    vzAccuracy: "ACURÁCIA",
+    vzCorrectPredictions: "predições corretas",
+    vzObservation: "OBSERVAÇÃO",
     vzBreakingLcg: "QUEBRANDO O LCG...",
-    vzRealtimePrediction: "PREDICAO EM TEMPO REAL",
+    vzRealtimePrediction: "PREDIÇÃO EM TEMPO REAL",
     vzPhase: "FASE",
     vzLcgCracked: "LCG QUEBRADO",
-    vzUnpredictable: "IMPREVISIVEL",
-    vzSonificationTitle: "SONIFICACAO — ESCALA PENTATONICA",
+    vzUnpredictable: "IMPREVISÍVEL",
+    vzSonificationTitle: "SONIFICAÇÃO — ESCALA PENTATÔNICA",
 
     // ── AnalysisSection ──
     asSamples: "Amostras",
@@ -183,9 +183,11 @@ const translations = {
     spStop: "Parar",
     spStart: "Iniciar Stream",
     spUnknownError: "Erro desconhecido",
-    spReadyRealtime: "Pronto para visualizar bytes quanticos em tempo real",
+    spBusy429: "Já existe uma conexão de stream aberta para este endereço (limite: 1). Aguarde alguns segundos e tente de novo.",
+    qvPrngLowBitsLabel: "PRNG · LCG (byte baixo)",
+    spReadyRealtime: "Pronto para visualizar bytes quânticos em tempo real",
     spUnavailablePrecollected: "Stream indisponível com dados pré-coletados",
-    spBackendOfflineStream: "Backend offline — stream indisponivel",
+    spBackendOfflineStream: "Backend offline — stream indisponível",
     spWaitingHardware: "Aguardando dados do hardware QRNG...",
     spDisconnected: "Desconectado",
     spReconnect: "Reconectar",
@@ -242,6 +244,7 @@ const translations = {
     dsRangeGeneratesPrefix: "Gera",
     dsRangeGeneratesMid: "número(s) no intervalo",
     dsRangeGeneratesSuffix: "Faixa: {n} valores.",
+    dsRangeGeneratesSuffixOne: "Faixa: 1 valor.",
     dsRangeFloyd: "Algoritmo de Floyd F2 (sem repetição, sem viés).",
     dsRangeRejection: "Rejection sampling uint32 (sem viés).",
     dsMcInfo: "Cada uint32 QRNG é mapeado para [0, 1) via n÷2³². Precisão de 15 casas decimais. Consome {n} bytes QRNG.",
@@ -327,8 +330,12 @@ const translations = {
     apWinnerLabel: "VENCEDOR",
     apRaffleRankOf: "#{idx} de {total} participantes",
     apVoucherLabel: "COMPROVANTE",
+    apVoucherListHash: "Lista (SHA-256 de uma linha por participante, na ordem digitada)",
+    apVoucherAlgoLabel: "Algoritmo",
+    apVoucherAlgo: "uint32 little-endian dos bytes 0–3 (depois 4–7, …); rejeita n ≥ floor(2^32/{n})·{n}; índice = n mod {n} = {idx} (0-based)",
+    apBlockedPrecollected: "Geração desabilitada com a fonte pré-coletada: a amostra é fixa e se repete. Selecione a fonte Kuapoã em Configurações.",
     apCopyVoucher: "Copiar comprovante",
-    apVoucherTemplate: "Sorteio Kuapoã/Dobslit | Vencedor: {winner} | Participantes: {total} | Timestamp: {ts} | Source: {source} | Bytes: {bytes}... | Req: {req}",
+    apVoucherTemplate: "Sorteio Kuapoã/Dobslit | Vencedor: {winner} | Participantes: {total} | Timestamp: {ts} | Fonte: {source} | Bytes(32): {bytes} | Req: {req}",
     apGamesTitle: "🎲 Jogos e Educação",
     apGamesDesc: "Experimente moeda e dado alimentados por entropia quântica. Cada resultado usa bytes do Kuapoã/backend.",
     apCoinTitle: "Moeda Quântica",
@@ -510,6 +517,11 @@ const translations = {
     // ── AuthPage ──
     authPasswordMismatch: "As senhas não coincidem.",
     authPasswordTooShort: "A senha deve ter pelo menos 12 caracteres.",
+    authPasswordHint: "mínimo 12 caracteres",
+    authTermsRequired: "É preciso aceitar os Termos de Uso para criar a conta.",
+    authAcceptTermsPrefix: "Li e aceito os",
+    asSeedInvalid: "Seed inválida: use um inteiro entre 1 e 2147483647.",
+    asPrngHighBitsLabel: "PRNG · LCG (16 bits altos)",
     authInvalidCredentials: "E-mail ou senha incorretos.",
     authEmailTaken: "Este e-mail já está cadastrado.",
     authMissingFields: "Preencha e-mail e senha.",
@@ -823,6 +835,8 @@ const translations = {
     spStop: "Stop",
     spStart: "Start Stream",
     spUnknownError: "Unknown error",
+    spBusy429: "A stream connection is already open for this address (limit: 1). Wait a few seconds and try again.",
+    qvPrngLowBitsLabel: "PRNG · LCG (low byte)",
     spReadyRealtime: "Ready to visualize quantum bytes in real time",
     spUnavailablePrecollected: "Stream unavailable with pre-collected data",
     spBackendOfflineStream: "Backend offline — stream unavailable",
@@ -880,6 +894,7 @@ const translations = {
     dsRangeGeneratesPrefix: "Generates",
     dsRangeGeneratesMid: "number(s) in the range",
     dsRangeGeneratesSuffix: "Range: {n} values.",
+    dsRangeGeneratesSuffixOne: "Range: 1 value.",
     dsRangeFloyd: "Floyd's F2 algorithm (no repeats, no bias).",
     dsRangeRejection: "uint32 rejection sampling (no bias).",
     dsMcInfo: "Each QRNG uint32 is mapped to [0, 1) via n÷2³². Precision of 15 decimal places. Consumes {n} QRNG bytes.",
@@ -964,8 +979,12 @@ const translations = {
     apWinnerLabel: "WINNER",
     apRaffleRankOf: "#{idx} of {total} participants",
     apVoucherLabel: "RECEIPT",
+    apVoucherListHash: "List (SHA-256 of one line per participant, in the order typed)",
+    apVoucherAlgoLabel: "Algorithm",
+    apVoucherAlgo: "little-endian uint32 from bytes 0–3 (then 4–7, …); reject n ≥ floor(2^32/{n})·{n}; index = n mod {n} = {idx} (0-based)",
+    apBlockedPrecollected: "Generation disabled with the pre-collected source: the sample is fixed and repeats. Select the Kuapoã source in Settings.",
     apCopyVoucher: "Copy receipt",
-    apVoucherTemplate: "Kuapoã/Dobslit Raffle | Winner: {winner} | Participants: {total} | Timestamp: {ts} | Source: {source} | Bytes: {bytes}... | Req: {req}",
+    apVoucherTemplate: "Kuapoã/Dobslit Raffle | Winner: {winner} | Participants: {total} | Timestamp: {ts} | Source: {source} | Bytes(32): {bytes} | Req: {req}",
     apGamesTitle: "🎲 Games and Education",
     apGamesDesc: "Try a coin and a die powered by quantum entropy. Each result uses bytes from the Kuapoã/backend.",
     apCoinTitle: "Quantum Coin",
@@ -1144,6 +1163,11 @@ const translations = {
 
     authPasswordMismatch: "Passwords do not match.",
     authPasswordTooShort: "Password must be at least 12 characters.",
+    authPasswordHint: "at least 12 characters",
+    authTermsRequired: "You must accept the Terms of Use to create the account.",
+    authAcceptTermsPrefix: "I have read and accept the",
+    asSeedInvalid: "Invalid seed: use an integer between 1 and 2147483647.",
+    asPrngHighBitsLabel: "PRNG · LCG (high 16 bits)",
     authInvalidCredentials: "Incorrect email or password.",
     authEmailTaken: "This email is already registered.",
     authMissingFields: "Please fill in email and password.",
@@ -1294,7 +1318,8 @@ export const LanguageContext = createContext(null);
 
 function loadLang() {
   try {
-    const saved = localStorage.getItem(STORAGE_KEY);
+    // mesma preferência do portal Bongo (chave bongo_lang) quando o site ainda não tem a sua
+    const saved = localStorage.getItem(STORAGE_KEY) || localStorage.getItem("bongo_lang");
     if (saved === "pt" || saved === "en") return saved;
   } catch { /* localStorage indisponível (modo privado etc.) */ }
   return "pt";
@@ -1305,7 +1330,7 @@ export function LanguageProvider({ children }) {
 
   const setLang = (newLang) => {
     setLangState(newLang);
-    try { localStorage.setItem(STORAGE_KEY, newLang); } catch { /* best-effort */ }
+    try { localStorage.setItem(STORAGE_KEY, newLang); localStorage.setItem("bongo_lang", newLang); } catch { /* best-effort */ }
   };
 
   // `params` opcional interpola {placeholder} na string traduzida --
