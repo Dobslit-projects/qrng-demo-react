@@ -20,7 +20,7 @@ mudam de formato nem de comportamento.
   (`GET /v1/capabilities`, `POST /v1/entropy`, `GET /v1/healthtest`) descritas em prosa e exemplos.
   O repositório **não** traz um documento OpenAPI/JSON Schema formal.
 - *OpenAPI* (antiga Swagger) é o formato de descrição de APIs que este serviço já publica em `/v1/openapi.json`.
-  As novas rotas foram descritas nesse formato (seção 6) como documentação própria do Kuapoã.
+  As novas rotas foram descritas nesse formato (seção 4) como documentação própria do Kuapoã.
 
 **Licença.** Por ser AGPL-3.0, nenhum código, texto ou arquivo do repositório foi copiado para o Kuapoã. A
 implementação é própria e segue apenas o contrato (nomes de rotas, campos e códigos de erro). Se no futuro alguém
