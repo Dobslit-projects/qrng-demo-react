@@ -62,6 +62,14 @@ const definition = {
     { name: "Random", description: "Geração de bytes aleatórios (endpoint principal)" },
     { name: "Health", description: "Saúde da API e do upstream FPGA" },
     { name: "Usage", description: "Cota, uso e histórico de chamadas do token" },
+    {
+      name: "QRNG Open API",
+      description:
+        "Interface compatível com o contrato QRNG Open API (github.com/PaloAltoNetworks/QRNG-OPENAPI, revisão 812e2055), " +
+        "implementada de forma própria, ao lado das rotas atuais: mesmo token, mesmas cotas, mesma fonte. " +
+        "Não é a especificação OpenAPI (Swagger); é um contrato de interoperabilidade para obter entropia por REST. " +
+        "Compatibilidade com produtos de terceiros não foi testada. Ambiguidades e interpretações: docs/qrng-open-api.md.",
+    },
     { name: "Admin", description: "Administração de tokens e usuários (role=admin)" },
   ],
   components: {
@@ -81,6 +89,14 @@ const definition = {
           "Token de API pessoal (formato dobslit_qrng_live_<hex>, emitido por POST /v1/tokens). " +
           "Usado pelos endpoints de consumo: /v1/random, /v1/health. " +
           "Endpoints /v1/me/* aceitam tanto este token quanto o JWT de sessão.",
+      },
+      apiKeyHeader: {
+        type: "apiKey",
+        in: "header",
+        name: "X-API-Key",
+        description:
+          "O MESMO token de API pessoal de bearerAuthToken, enviado no cabeçalho X-API-Key. Aceito só nas rotas QRNG Open API " +
+          "(/capabilities, /entropy, /healthtest). Não envie valores diferentes em Authorization e X-API-Key (400 AMBIGUOUS_CREDENTIALS).",
       },
     },
     schemas: {
@@ -243,6 +259,101 @@ const definition = {
           api: { type: "string", example: "dobslit-qrng-client-api" },
           source: { type: "string", example: "ufpe-fpga" },
           upstream: { type: "object", additionalProperties: true },
+        },
+      },
+      QoaExtension: {
+        type: "object",
+        description: "Objeto de extensão (o contrato só diz \"array de objetos JSON\"; formato adotado pelo Kuapoã).",
+        required: ["name", "version", "data"],
+        properties: {
+          name: { type: "string", example: "kuapoa.limits" },
+          version: { type: "integer", example: 1 },
+          data: { type: "object", additionalProperties: true },
+        },
+      },
+      QoaTestThreshold: {
+        type: "object",
+        required: ["test_type", "time_stamp"],
+        properties: {
+          test_type: { type: "string", example: "kuapoa_hw_continuous_rct_apt" },
+          time_stamp: { type: "string", format: "date-time", description: "Instante da última observação (ISO 8601, UTC)." },
+          report_link: { type: "string", format: "uri" },
+        },
+      },
+      QoaCapabilitiesResponse: {
+        type: "object",
+        required: ["entropy"],
+        properties: {
+          entropy: {
+            type: "object",
+            required: ["max_block_size", "max_block_count"],
+            properties: {
+              min_block_size: { type: "integer", example: 1 },
+              max_block_size: { type: "integer", example: 1048576, description: "Bytes por bloco." },
+              min_block_count: { type: "integer", example: 1 },
+              max_block_count: { type: "integer", example: 1024 },
+              entropy_types: { type: "array", items: { type: "string" }, example: ["kuapoa_qrng"] },
+              extensions: {
+                type: "array",
+                items: { $ref: "#/components/schemas/QoaExtension" },
+                description: "kuapoa.limits (max_total_bytes: block_size × block_count não pode passar disso; cotas), kuapoa.entropy_types, kuapoa.contract.",
+              },
+            },
+          },
+          healthtest: {
+            type: "object",
+            properties: {
+              test_threshold: { type: "array", items: { $ref: "#/components/schemas/QoaTestThreshold" } },
+              source_count: { type: "integer", example: 1 },
+              extensions: { type: "array", items: { $ref: "#/components/schemas/QoaExtension" } },
+            },
+          },
+        },
+      },
+      QoaEntropyRequest: {
+        type: "object",
+        required: ["block_size"],
+        properties: {
+          block_size: { type: "integer", minimum: 1, description: "Bytes por bloco. Número inteiro JSON (strings, booleanos e frações → 422)." },
+          block_count: { type: "integer", minimum: 1, default: 1, description: "Quantidade de blocos." },
+          entropy_type: { type: "string", description: "Padrão: o primeiro de entropy_types em /capabilities.", example: "kuapoa_qrng" },
+        },
+      },
+      QoaEntropyResponse: {
+        type: "object",
+        required: ["entropy"],
+        properties: {
+          entropy: {
+            type: "array",
+            items: { type: "string", format: "byte" },
+            description: "block_count strings Base64; cada uma decodifica para exatamente block_size bytes.",
+          },
+          extensions: {
+            type: "array",
+            items: { $ref: "#/components/schemas/QoaExtension" },
+            description: "kuapoa.response: request_id, entropy_type, block_size, block_count, total_bytes, conditioned, qualification_status, entropy_health, provenance.",
+          },
+        },
+      },
+      QoaHealthtestResponse: {
+        type: "object",
+        required: ["test_result"],
+        properties: {
+          test_result: {
+            type: "array",
+            description: "Só observações atuais. Resultados históricos ficam na extensão kuapoa.historical_assessment.",
+            items: {
+              type: "object",
+              required: ["test_type", "test_result", "time_stamp"],
+              properties: {
+                test_type: { type: "string", enum: ["kuapoa_hw_continuous_rct_apt", "kuapoa_source_liveness", "kuapoa_bitstream_qualification"] },
+                test_result: { type: "string", description: "Estado observado, em texto: passing | alarm | unavailable | not_assessed | unknown (RCT/APT); online | degraded | offline | unknown (liveness); verified_active_bitstream | ... (qualificação)." },
+                time_stamp: { type: "string", format: "date-time" },
+                report_link: { type: "string", format: "uri" },
+              },
+            },
+          },
+          extensions: { type: "array", items: { $ref: "#/components/schemas/QoaExtension" } },
         },
       },
     },

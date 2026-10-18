@@ -253,16 +253,24 @@ function setProvenanceHeaders(res, prov) {
 // sempre e os demais ficam AUSENTES — nenhuma qualificação é inventada.
 const QUAL_STATUS_RX = /^[a-z_]{1,64}$/;
 const SHA256_HEX_RX = /^[0-9a-f]{64}$/;
-function setSourceQualificationHeaders(res, upHdr) {
+// Mesma regra para cabeçalhos (rotas atuais) e para a extensão kuapoa.response (QRNG Open API).
+function sourceQualificationFrom(upHdr) {
   const uh = upHdr || {};
   const qs = String(uh["x-qrng-qualification-status"] || "");
   // "true" só com as DUAS afirmações do broker: conditioned=true E bitstream qualificado verificado ativo
   const verified = qs === "verified_active_bitstream";
-  const conditioned = String(uh["x-qrng-conditioned"] || "").toLowerCase() === "true" && verified;
-  res.setHeader("X-QRNG-Conditioned", conditioned ? "true" : "false");
-  if (QUAL_STATUS_RX.test(qs)) res.setHeader("X-QRNG-Qualification-Status", qs);
   const sha = String(uh["x-qrng-bitstream-sha256"] || "").toLowerCase();
-  if (verified && SHA256_HEX_RX.test(sha)) res.setHeader("X-QRNG-Bitstream-SHA256", sha);
+  return {
+    conditioned: String(uh["x-qrng-conditioned"] || "").toLowerCase() === "true" && verified,
+    qualificationStatus: QUAL_STATUS_RX.test(qs) ? qs : null,
+    bitstreamSha256: (verified && SHA256_HEX_RX.test(sha)) ? sha : null,
+  };
+}
+function setSourceQualificationHeaders(res, upHdr) {
+  const q = sourceQualificationFrom(upHdr);
+  res.setHeader("X-QRNG-Conditioned", q.conditioned ? "true" : "false");
+  if (q.qualificationStatus) res.setHeader("X-QRNG-Qualification-Status", q.qualificationStatus);
+  if (q.bitstreamSha256) res.setHeader("X-QRNG-Bitstream-SHA256", q.bitstreamSha256);
 }
 
 /** Objeto plano de headers do upstream em minúsculas (node-fetch Headers). */
@@ -423,7 +431,8 @@ function deleteUserData(userId) {
 
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin",  "*");
-  res.header("Access-Control-Allow-Headers", "Authorization, Content-Type");
+  // X-API-Key: forma alternativa de enviar o MESMO token pessoal, aceita só nas rotas QRNG Open API (contrato).
+  res.header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-API-Key");
   res.header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   if (req.method === "OPTIONS") return res.sendStatus(200);
   next();
@@ -793,13 +802,38 @@ function requireAdmin(req, res, next) {
   next();
 }
 
+function lookupActiveToken(raw) {
+  return db.prepare("SELECT * FROM api_tokens WHERE token_hash = ? AND status = 'active'").get(hashToken(raw));
+}
+
 // API token — para /random e /health (machine-to-machine)
 function requireToken(req, res, next) {
   const auth = req.headers.authorization || "";
   if (!auth.startsWith("Bearer ")) {
     return res.status(401).json({ request_id: req.requestId, error: "MISSING_TOKEN", message: "Use Authorization: Bearer <api_token>" });
   }
-  const row = db.prepare("SELECT * FROM api_tokens WHERE token_hash = ? AND status = 'active'").get(hashToken(auth.slice(7).trim()));
+  const row = lookupActiveToken(auth.slice(7).trim());
+  if (!row) return res.status(403).json({ request_id: req.requestId, error: "INVALID_TOKEN", message: "Token inválido ou revogado." });
+  req.tokenRow = row;
+  next();
+}
+
+// Rotas QRNG Open API: o MESMO token pessoal, em Authorization: Bearer (como as rotas atuais) ou em X-API-Key
+// (forma também prevista pelo contrato). Não há contas nem chaves próprias desta interface.
+function requireApiCredential(req, res, next) {
+  const auth = req.headers.authorization || "";
+  const bearer = auth.startsWith("Bearer ") ? auth.slice(7).trim() : null;
+  const xkey = typeof req.headers["x-api-key"] === "string" ? req.headers["x-api-key"].trim() : null;
+  if (bearer && xkey && bearer !== xkey) {
+    return res.status(400).json({ request_id: req.requestId, error: "AMBIGUOUS_CREDENTIALS",
+      message: "Envie o token em Authorization: Bearer OU em X-API-Key, não dois valores diferentes." });
+  }
+  const raw = bearer || xkey;
+  if (!raw) {
+    return res.status(401).json({ request_id: req.requestId, error: "MISSING_TOKEN",
+      message: "Use Authorization: Bearer <api_token> ou X-API-Key: <api_token>" });
+  }
+  const row = lookupActiveToken(raw);
   if (!row) return res.status(403).json({ request_id: req.requestId, error: "INVALID_TOKEN", message: "Token inválido ou revogado." });
   req.tokenRow = row;
   next();
@@ -1754,6 +1788,56 @@ function interpretUpstreamResponse(contentType, rawBuffer, requestedBytes) {
  */
 const RANDOM_FORMATS = ["hex", "base64", "uint8", "raw"];
 
+/**
+ * Serviço comum de aquisição: UMA chamada GET /random ao broker para exatamente `bytes` bytes, com o contrato de
+ * transporte (Content-Length, Content-Type) validado. Usado por /v1/random, /v1/raw, /v1/public/* e pela camada
+ * QRNG Open API, que diferem só em autenticação, contabilização e formato da resposta.
+ *
+ * Retorna { ok: true, buf, upHdr } com buf.length === bytes EXATOS, ou { ok: false, status, body } (corpo sem
+ * request_id; o chamador registra o uso e responde). Erros de rede/timeout são LANÇADOS, como antes, e cada rota os
+ * trata no próprio catch. Nunca completa, repete, corta para menos nem troca de fonte: menos bytes que o pedido é 503.
+ * A região entregue sai do buffer do broker de forma destrutiva e atômica (pop sob trava): nada aqui guarda ou reusa
+ * bytes entre requisições.
+ */
+async function acquireUpstreamBytes(bytes) {
+  const upBytes = Math.min(bytes * UPSTREAM_OVERPROVISION, 50 * 1024 * 1024);
+  const r = await fetchWithTimeout(`${QRNG_UPSTREAM}/random?bytes=${upBytes}`, QRNG_TIMEOUT_MS);
+
+  if (!r.ok) {
+    const prov = resolveProvenance({ servedFromUpstream: false, upstreamHeaders: lowerHeaders(r.headers) });
+    return { ok: false, status: 502, body: { error: "UPSTREAM_ERROR", status: r.status, provenance: prov.actual_origin, provenance_detail: prov } };
+  }
+
+  const contentType         = r.headers.get("content-type");
+  const contentLengthHeader = r.headers.get("content-length");
+  const rawBuffer           = await r.buffer();
+
+  // Content-Length é validado ANTES de qualquer interpretação: se o
+  // transporte já mente sobre o tamanho, não há por que confiar no corpo.
+  if (contentLengthHeader !== null && Number(contentLengthHeader) !== rawBuffer.length) {
+    return { ok: false, status: 502, body: {
+      error: "UPSTREAM_LENGTH_MISMATCH",
+      message: `Content-Length declarado (${contentLengthHeader}) não bate com bytes efetivamente recebidos (${rawBuffer.length}).`,
+    } };
+  }
+
+  let buf;
+  try {
+    buf = interpretUpstreamResponse(contentType, rawBuffer, bytes);
+  } catch (err) {
+    if (err instanceof UpstreamFormatError) return { ok: false, status: 502, body: { error: err.code, message: err.message } };
+    throw err;
+  }
+
+  const upHdr = lowerHeaders(r.headers);
+
+  if (buf.length < bytes) {
+    const prov = resolveProvenance({ servedFromUpstream: false, upstreamHeaders: upHdr, insufficientEntropy: true });
+    return { ok: false, status: 503, body: { error: "INSUFFICIENT_ENTROPY", available: buf.length, requested: bytes, provenance: prov.actual_origin, provenance_detail: prov } };
+  }
+  return { ok: true, buf: buf.slice(0, bytes), upHdr }; // upBytes é sobre-provisionado; entrega exatamente o pedido
+}
+
 // GET /raw é um alias explícito de GET /random?format=raw (mesma cadeia de
 // middleware). res.locals.forceRawFormat força o modo binário mesmo sem a query.
 async function randomHandler(req, res) {
@@ -1773,49 +1857,12 @@ async function randomHandler(req, res) {
   }
 
   try {
-    const upBytes = Math.min(bytes * UPSTREAM_OVERPROVISION, 50 * 1024 * 1024);
-    const r = await fetchWithTimeout(`${QRNG_UPSTREAM}/random?bytes=${upBytes}`, QRNG_TIMEOUT_MS);
-
-    if (!r.ok) {
-      logRequest(requestId, req.tokenRow.id, "/v1/random", bytes, format, 502, ip, ua, Date.now() - t0);
-      const prov = resolveProvenance({ servedFromUpstream: false, upstreamHeaders: lowerHeaders(r.headers) });
-      return res.status(502).json({ request_id: requestId, error: "UPSTREAM_ERROR", status: r.status, provenance: prov.actual_origin, provenance_detail: prov });
+    const acq = await acquireUpstreamBytes(bytes);
+    if (!acq.ok) {
+      logRequest(requestId, req.tokenRow.id, "/v1/random", bytes, format, acq.status, ip, ua, Date.now() - t0);
+      return res.status(acq.status).json({ request_id: requestId, ...acq.body });
     }
-
-    const contentType        = r.headers.get("content-type");
-    const contentLengthHeader = r.headers.get("content-length");
-    const rawBuffer          = await r.buffer();
-
-    // Content-Length é validado ANTES de qualquer interpretação: se o
-    // transporte já mente sobre o tamanho, não há por que confiar no corpo.
-    if (contentLengthHeader !== null && Number(contentLengthHeader) !== rawBuffer.length) {
-      logRequest(requestId, req.tokenRow.id, "/v1/random", bytes, format, 502, ip, ua, Date.now() - t0);
-      return res.status(502).json({
-        request_id: requestId,
-        error: "UPSTREAM_LENGTH_MISMATCH",
-        message: `Content-Length declarado (${contentLengthHeader}) não bate com bytes efetivamente recebidos (${rawBuffer.length}).`,
-      });
-    }
-
-    let buf;
-    try {
-      buf = interpretUpstreamResponse(contentType, rawBuffer, bytes);
-    } catch (err) {
-      if (err instanceof UpstreamFormatError) {
-        logRequest(requestId, req.tokenRow.id, "/v1/random", bytes, format, 502, ip, ua, Date.now() - t0);
-        return res.status(502).json({ request_id: requestId, error: err.code, message: err.message });
-      }
-      throw err;
-    }
-
-    const upHdr = lowerHeaders(r.headers);
-
-    if (buf.length < bytes) {
-      logRequest(requestId, req.tokenRow.id, "/v1/random", bytes, format, 503, ip, ua, Date.now() - t0);
-      const prov = resolveProvenance({ servedFromUpstream: false, upstreamHeaders: upHdr, insufficientEntropy: true });
-      return res.status(503).json({ request_id: requestId, error: "INSUFFICIENT_ENTROPY", available: buf.length, requested: bytes, provenance: prov.actual_origin, provenance_detail: prov });
-    }
-    buf = buf.slice(0, bytes); // upBytes é sobre-provisionado; entrega exatamente o pedido
+    const { buf, upHdr } = acq;
 
     logRequest(requestId, req.tokenRow.id, "/v1/random", bytes, format, 200, ip, ua, Date.now() - t0);
 
@@ -1894,6 +1941,258 @@ app.get("/v1/random", ...randomChain, randomHandler);
  *       503: { description: Upstream indisponível ou entropia insuficiente., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
  */
 app.get("/v1/raw", ...randomChain, (req, res) => { res.locals.forceRawFormat = true; return randomHandler(req, res); });
+
+// ── QRNG Open API (contrato Palo Alto Networks e parceiros) ──────────────────
+// Camada de compatibilidade AO LADO das rotas atuais: mesmo token, mesmos limites por token/IP, mesma cota diária,
+// mesma aquisição de bytes (acquireUpstreamBytes), mesmo bloqueio de fonte parada e mesma proveniência.
+// Lógica do contrato em lib/qrng-open-api.js; avaliação, ambiguidades e exemplos em docs/qrng-open-api.md.
+// Endereço público: https://bongo.dobslit.com/qrng/v1/{capabilities,entropy,healthtest} (nginx: /qrng/v1/ → :3010/v1/).
+const qoa = require("./lib/qrng-open-api");
+const OPENAPI_LIMITS = qoa.resolveLimits({
+  maxTotalBytes: MAX_BYTES_PER_REQUEST,   // o MESMO limite por requisição de /v1/random
+  maxBlockSize:  parseInt(process.env.QRNG_OPENAPI_MAX_BLOCK_SIZE  || String(MAX_BYTES_PER_REQUEST), 10),
+  maxBlockCount: parseInt(process.env.QRNG_OPENAPI_MAX_BLOCK_COUNT || "1024", 10),
+  entropyTypes:  [process.env.QRNG_OPENAPI_ENTROPY_TYPE || "kuapoa_qrng"],
+});
+const QRNG_PUBLIC_BASE_URL = (process.env.QRNG_PUBLIC_BASE_URL || "https://bongo.dobslit.com/qrng/v1").replace(/\/+$/, "");
+
+// Leitura do /health do broker para /capabilities e /healthtest (status, não entropia). Cache curto: no máximo uma
+// consulta ao broker a cada BROKER_STATUS_TTL_MS. Este cache NUNCA libera bytes: /v1/entropy decide pelo próprio pop no
+// broker e pelo mesmo bloqueio de fonte parada das rotas atuais.
+const BROKER_STATUS_TTL_MS = parseInt(process.env.QRNG_OPENAPI_STATUS_TTL_MS || "3000", 10);
+let brokerStatusCache = { at: 0, ok: false, data: null, readAt: null };
+async function readBrokerStatus() {
+  const now = Date.now();
+  if (brokerStatusCache.data !== null && now - brokerStatusCache.at <= BROKER_STATUS_TTL_MS) return brokerStatusCache;
+  try {
+    const r = await fetchWithTimeout(`${QRNG_UPSTREAM}/health`, Math.min(QRNG_TIMEOUT_MS, 5000));
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const data = await r.json();
+    if (!data || typeof data !== "object" || Array.isArray(data)) throw new Error("JSON inesperado");
+    brokerStatusCache = { at: now, ok: true, data, readAt: new Date(now).toISOString() };
+  } catch (err) {
+    console.error(`[qrng-open-api] /health do broker indisponível: ${err.message}`);
+    brokerStatusCache = { at: now, ok: false, data: {}, readAt: new Date(now).toISOString() };
+  }
+  return brokerStatusCache;
+}
+
+// Toda resposta das rotas do contrato, inclusive os erros de token, limite, cota e fonte parada, é marcada no-store.
+function qoaNoStore(_req, res, next) { res.setHeader("Cache-Control", "no-store"); next(); }
+
+function qoaError(res, status, requestId, error, message, extra) {
+  res.setHeader("Cache-Control", "no-store");
+  return res.status(status).json({ request_id: requestId, error, message, ...(extra || {}) });
+}
+
+/**
+ * @openapi
+ * /capabilities:
+ *   get:
+ *     tags: [QRNG Open API]
+ *     summary: "QRNG Open API — capacidades da plataforma: limites de bloco, tipos de entropia e testes de saúde."
+ *     description: >
+ *       Contrato QRNG Open API (revisão 812e2055 do repositório PaloAltoNetworks/QRNG-OPENAPI), implementado de forma
+ *       própria. Os limites publicados são os que POST /entropy aplica. Como max_block_size × max_block_count pode
+ *       passar do limite total por requisição, o limite total vai na extensão `kuapoa.limits` (max_total_bytes).
+ *       Nenhuma taxa de produção é anunciada. Não consome entropia. Conta como 1 requisição na cota diária do token
+ *       (mesma política de GET /health).
+ *     security: [{ bearerAuthToken: [] }, { apiKeyHeader: [] }]
+ *     responses:
+ *       200:
+ *         description: Capacidades.
+ *         headers:
+ *           X-Request-Id: { schema: { type: string } }
+ *           Cache-Control: { schema: { type: string, example: no-store } }
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/QoaCapabilitiesResponse' } } }
+ *       400: { description: "AMBIGUOUS_CREDENTIALS (Bearer e X-API-Key com valores diferentes).", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       403: { description: "INVALID_TOKEN.", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       429: { $ref: '#/components/responses/RateLimited' }
+ *       503: { description: "Fonte indisponível (broker inacessível ou fonte parada) — código do contrato.", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ */
+app.get("/v1/capabilities", attachRequestId, qoaNoStore, requireApiCredential, checkTokenRate, async (req, res) => {
+  const t0 = Date.now();
+  const ip = req.ip || req.socket.remoteAddress;
+  const st = await readBrokerStatus();
+  const info = qoa.interpretBrokerHealth(st.data, st.readAt);
+  if (!st.ok || info.sourceStatus === "offline") {
+    logRequest(req.requestId, req.tokenRow.id, "/v1/capabilities", 0, null, 503, ip, req.headers["user-agent"], Date.now() - t0);
+    return qoaError(res, 503, req.requestId, st.ok ? "SOURCE_OFFLINE" : "QRNG_UNAVAILABLE",
+      st.ok ? "A fonte física está parada; nenhuma entropia está disponível agora." : "Fonte QRNG indisponível no momento.");
+  }
+  logRequest(req.requestId, req.tokenRow.id, "/v1/capabilities", 0, null, 200, ip, req.headers["user-agent"], Date.now() - t0);
+  res.setHeader("Cache-Control", "no-store");
+  res.json(qoa.buildCapabilities(OPENAPI_LIMITS, info, {
+    reportLink: `${QRNG_PUBLIC_BASE_URL}/healthtest`,
+    quotas: { dailyRequests: req.tokenRow.quota_daily, dailyBytes: DAILY_QUOTA_BYTES, perTokenPerMinute: RATE_LIMIT_PER_TOKEN_MIN },
+  }));
+});
+
+// Valida o corpo de POST /v1/entropy ANTES de consumir entropia e define req.requestedBytes = total, para que a cota
+// diária (checkQuota) avalie o total da chamada — com qualquer número de blocos, a chamada conta 1 requisição.
+function parseOpenApiEntropy(req, res, next) {
+  if (!req.is("application/json")) {
+    return qoaError(res, 415, req.requestId, "UNSUPPORTED_MEDIA_TYPE", "Envie o corpo como JSON (Content-Type: application/json).");
+  }
+  const p = qoa.parseEntropyRequest(req.body, OPENAPI_LIMITS);
+  if (!p.ok) {
+    return qoaError(res, 422, req.requestId, p.error, p.message, p.field ? { field: p.field } : undefined);
+  }
+  req.openApiEntropy = p;
+  req.requestedBytes = p.totalBytes;
+  next();
+}
+
+/**
+ * @openapi
+ * /entropy:
+ *   post:
+ *     tags: [QRNG Open API]
+ *     summary: "QRNG Open API — entrega entropia em blocos Base64 (block_size × block_count bytes)."
+ *     description: >
+ *       Mesma fonte, mesma aquisição e mesmas cotas de GET /random: a chamada retira do broker EXATAMENTE
+ *       block_size × block_count bytes, divide em block_count blocos e codifica cada bloco em Base64. Nunca completa
+ *       com zeros, PRNG ou repetição: se a fonte não entregar o total, a resposta é 503 e nenhum bloco é devolvido.
+ *       Contabilização: 1 requisição e block_size × block_count bytes na cota diária do token (compartilhada com
+ *       /random e /raw); falhas do upstream contam como nas rotas atuais. Proveniência e qualificação vão na extensão
+ *       `kuapoa.response` e nos cabeçalhos X-QRNG-*. Nada da entropia é registrado em logs.
+ *     security: [{ bearerAuthToken: [] }, { apiKeyHeader: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema: { $ref: '#/components/schemas/QoaEntropyRequest' }
+ *           examples:
+ *             umBloco: { summary: "Um bloco de 32 bytes", value: { block_size: 32 } }
+ *             variosBlocos: { summary: "Quatro blocos de 64 bytes", value: { block_size: 64, block_count: 4, entropy_type: kuapoa_qrng } }
+ *     responses:
+ *       200:
+ *         description: block_count strings Base64, cada uma com block_size bytes depois de decodificada.
+ *         headers:
+ *           X-Request-Id: { schema: { type: string } }
+ *           Cache-Control: { schema: { type: string, example: no-store } }
+ *           X-QRNG-Conditioned: { schema: { type: string, enum: ['true', 'false'] }, description: "Mesma regra de GET /random." }
+ *           X-QRNG-Entropy-Health: { schema: { type: string }, description: "Estado dos health tests RCT/APT do hardware nesta resposta." }
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/QoaEntropyResponse' } } }
+ *       400: { description: "AMBIGUOUS_CREDENTIALS ou INVALID_JSON (corpo que não é JSON válido).", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       403: { description: "INVALID_TOKEN.", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       413: { description: "REQUEST_BODY_TOO_LARGE (corpo JSON acima de 8 KiB).", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       415: { description: "UNSUPPORTED_MEDIA_TYPE (corpo sem Content-Type application/json).", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       422: { description: "Parâmetro inválido — código do contrato. error: INVALID_REQUEST_BODY | MISSING_BLOCK_SIZE | INVALID_BLOCK_SIZE | BLOCK_SIZE_OUT_OF_RANGE | INVALID_BLOCK_COUNT | BLOCK_COUNT_OUT_OF_RANGE | UNSUPPORTED_ENTROPY_TYPE | TOTAL_TOO_LARGE. Nenhuma entropia é consumida.", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       429: { description: "RATE_LIMIT_EXCEEDED, QUOTA_EXCEEDED ou QUOTA_BYTES_EXCEEDED (mesmos limites e cotas de /random).", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       502: { description: "Upstream com erro (exceto 503/504) ou fora do contrato de transporte (mesmos códigos de /random).", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       503: { description: "Fonte indisponível — código do contrato. error: QRNG_UNAVAILABLE (broker inacessível, timeout ou broker sem os bytes: upstream_status 503/504) | INSUFFICIENT_ENTROPY | SOURCE_OFFLINE.", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ */
+async function openApiEntropyHandler(req, res) {
+  const { blockSize, blockCount, entropyType, totalBytes } = req.openApiEntropy;
+  const ip        = req.ip || req.socket.remoteAddress;
+  const ua        = req.headers["user-agent"];
+  const requestId = req.requestId;
+  const t0        = Date.now();
+  const FORMAT    = "qrng-openapi";
+  res.setHeader("Cache-Control", "no-store");
+  try {
+    const acq = await acquireUpstreamBytes(totalBytes);
+    if (!acq.ok) {
+      let { status, body } = acq;
+      // Contrato: 503 = fonte de entropia indisponível. O broker responde 503 quando não tem os bytes dentro do
+      // timeout; aqui isso é 503 (as rotas atuais continuam com o 502 UPSTREAM_ERROR de sempre).
+      if (body.error === "UPSTREAM_ERROR" && (body.status === 503 || body.status === 504)) {
+        status = 503;
+        body = { error: "QRNG_UNAVAILABLE", message: "Fonte QRNG indisponível no momento.", upstream_status: body.status,
+                 provenance: body.provenance, provenance_detail: body.provenance_detail };
+      }
+      logRequest(requestId, req.tokenRow.id, "/v1/entropy", totalBytes, FORMAT, status, ip, ua, Date.now() - t0);
+      return res.status(status).json({ request_id: requestId, ...body });
+    }
+    const entropy = qoa.splitBlocksBase64(acq.buf, blockSize, blockCount);
+    logRequest(requestId, req.tokenRow.id, "/v1/entropy", totalBytes, FORMAT, 200, ip, ua, Date.now() - t0);
+    const prov = resolveProvenance({ servedFromUpstream: true, upstreamHeaders: acq.upHdr });
+    const q = sourceQualificationFrom(acq.upHdr);
+    setProvenanceHeaders(res, prov);
+    setSourceQualificationHeaders(res, acq.upHdr);
+    res.json({
+      entropy,
+      extensions: [qoa.ext("kuapoa.response", {
+        request_id: requestId,
+        entropy_type: entropyType,
+        block_size: blockSize,
+        block_count: blockCount,
+        total_bytes: totalBytes,
+        encoding: "base64",
+        source: QRNG_SOURCE_LABEL,
+        conditioned: q.conditioned,
+        qualification_status: q.qualificationStatus,
+        bitstream_sha256: q.bitstreamSha256,
+        entropy_health: prov.entropy_health || "not_assessed",
+        provenance: prov.actual_origin,
+        provenance_detail: prov,
+        served_at: prov.served_at,
+      })],
+    });
+  } catch (err) {
+    logRequest(requestId, req.tokenRow.id, "/v1/entropy", totalBytes, FORMAT, 503, ip, ua, Date.now() - t0);
+    // Só a mensagem do erro de transporte (sem URL do broker no corpo e nunca bytes de entropia).
+    console.error(`[qrng-client-api] upstream indisponível request_id=${requestId}: ${err.message}`);
+    const prov = resolveProvenance({ servedFromUpstream: false });
+    res.status(503).json({ request_id: requestId, error: "QRNG_UNAVAILABLE", message: "Fonte QRNG indisponível no momento.", provenance: prov.actual_origin, provenance_detail: prov });
+  }
+}
+
+app.post("/v1/entropy", attachRequestId, qoaNoStore, requireApiCredential, checkTokenRate, parseOpenApiEntropy, checkQuota, refuseIfSourceOffline, openApiEntropyHandler);
+
+/**
+ * @openapi
+ * /healthtest:
+ *   get:
+ *     tags: [QRNG Open API]
+ *     summary: "QRNG Open API — estado observado dos testes de saúde da fonte (somente leitura, sem consumir entropia)."
+ *     description: >
+ *       test_result traz SÓ observações atuais, cada uma com o instante em que foi feita:
+ *       kuapoa_hw_continuous_rct_apt (health tests RCT/APT executados no FPGA sobre cada amostra bruta, lidos pela sonda
+ *       da placa; time_stamp = instante da leitura da sonda), kuapoa_source_liveness (fonte enviando dados) e
+ *       kuapoa_bitstream_qualification (bitstream qualificado verificado ativo). Os valores de test_result são texto
+ *       (passing, alarm, unavailable, not_assessed, online, offline…): nenhum número é inventado para representar
+ *       aprovação. Observação vencida aparece como unavailable, nunca como passing. Resultados de avaliações offline
+ *       (H_original, h_out pré-restart, limitações) vão só na extensão `kuapoa.historical_assessment`, marcada como não
+ *       sendo saúde em tempo real. Nada aqui é validação SP 800-90B ou certificação. Leitura do broker com cache de até
+ *       3 s; conta como 1 requisição na cota diária do token (mesma política de GET /health).
+ *     security: [{ bearerAuthToken: [] }, { apiKeyHeader: [] }]
+ *     responses:
+ *       200:
+ *         description: Estado observado (inclusive alarme — um alarme é um resultado, não uma falha desta rota).
+ *         headers:
+ *           X-Request-Id: { schema: { type: string } }
+ *           Cache-Control: { schema: { type: string, example: no-store } }
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/QoaHealthtestResponse' } } }
+ *       400: { description: "AMBIGUOUS_CREDENTIALS.", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       403: { description: "INVALID_TOKEN.", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       429: { $ref: '#/components/responses/RateLimited' }
+ *       503: { description: "Fonte dos testes de saúde indisponível (broker inacessível) — código do contrato.", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ */
+app.get("/v1/healthtest", attachRequestId, qoaNoStore, requireApiCredential, checkTokenRate, async (req, res) => {
+  const t0 = Date.now();
+  const ip = req.ip || req.socket.remoteAddress;
+  const st = await readBrokerStatus();
+  if (!st.ok) {
+    logRequest(req.requestId, req.tokenRow.id, "/v1/healthtest", 0, null, 503, ip, req.headers["user-agent"], Date.now() - t0);
+    return qoaError(res, 503, req.requestId, "HEALTH_TEST_SOURCE_UNAVAILABLE", "Não foi possível ler o estado da fonte agora.");
+  }
+  logRequest(req.requestId, req.tokenRow.id, "/v1/healthtest", 0, null, 200, ip, req.headers["user-agent"], Date.now() - t0);
+  res.setHeader("Cache-Control", "no-store");
+  res.json(qoa.buildHealthtest(qoa.interpretBrokerHealth(st.data, st.readAt), { reportLink: `${QRNG_PUBLIC_BASE_URL}/health` }));
+});
+
+// Método errado nas rotas do contrato: 405 com Allow, em vez do 404 genérico.
+for (const [route, allow] of [["/v1/capabilities", "GET"], ["/v1/entropy", "POST"], ["/v1/healthtest", "GET"]]) {
+  app.all(route, attachRequestId, (req, res) => {
+    res.setHeader("Allow", allow);
+    return qoaError(res, 405, req.requestId, "METHOD_NOT_ALLOWED", `Use ${allow} ${route}.`);
+  });
+}
 
 // ── GET /v1/public/random — endpoint público anônimo (item 6 da auditoria) ────
 //
@@ -2103,54 +2402,16 @@ async function publicRandomHandler(req, res) {
   }
 
   try {
-    const upBytes = bytes * UPSTREAM_OVERPROVISION;
-    const r = await fetchWithTimeout(`${QRNG_UPSTREAM}/random?bytes=${upBytes}`, QRNG_TIMEOUT_MS);
-
-    if (!r.ok) {
+    const acq = await acquireUpstreamBytes(bytes);
+    if (!acq.ok) {
       // token_id NULL agrega todo o tráfego público anônimo numa única linha
       // de daily_usage (esperado -- a cota real deste caminho é aplicada por
       // IP via publicIpDailyUsage acima, não por essa tabela).
-      logRequest(requestId, null, "/v1/public/random", bytes, format, 502, ip, ua, Date.now() - t0);
+      logRequest(requestId, null, "/v1/public/random", bytes, format, acq.status, ip, ua, Date.now() - t0);
       recordPublicUsage(ip, bytes);
-      const prov = resolveProvenance({ servedFromUpstream: false, upstreamHeaders: lowerHeaders(r.headers) });
-      return res.status(502).json({ request_id: requestId, error: "UPSTREAM_ERROR", status: r.status, provenance: prov.actual_origin, provenance_detail: prov });
+      return res.status(acq.status).json({ request_id: requestId, ...acq.body });
     }
-
-    const contentType         = r.headers.get("content-type");
-    const contentLengthHeader = r.headers.get("content-length");
-    const rawBuffer           = await r.buffer();
-
-    if (contentLengthHeader !== null && Number(contentLengthHeader) !== rawBuffer.length) {
-      logRequest(requestId, null, "/v1/public/random", bytes, format, 502, ip, ua, Date.now() - t0);
-      recordPublicUsage(ip, bytes);
-      return res.status(502).json({
-        request_id: requestId,
-        error: "UPSTREAM_LENGTH_MISMATCH",
-        message: `Content-Length declarado (${contentLengthHeader}) não bate com bytes efetivamente recebidos (${rawBuffer.length}).`,
-      });
-    }
-
-    let buf;
-    try {
-      buf = interpretUpstreamResponse(contentType, rawBuffer, bytes);
-    } catch (err) {
-      if (err instanceof UpstreamFormatError) {
-        logRequest(requestId, null, "/v1/public/random", bytes, format, 502, ip, ua, Date.now() - t0);
-        recordPublicUsage(ip, bytes);
-        return res.status(502).json({ request_id: requestId, error: err.code, message: err.message });
-      }
-      throw err;
-    }
-
-    const upHdr = lowerHeaders(r.headers);
-
-    if (buf.length < bytes) {
-      logRequest(requestId, null, "/v1/public/random", bytes, format, 503, ip, ua, Date.now() - t0);
-      recordPublicUsage(ip, bytes);
-      const prov = resolveProvenance({ servedFromUpstream: false, upstreamHeaders: upHdr, insufficientEntropy: true });
-      return res.status(503).json({ request_id: requestId, error: "INSUFFICIENT_ENTROPY", available: buf.length, requested: bytes, provenance: prov.actual_origin, provenance_detail: prov });
-    }
-    buf = buf.slice(0, bytes);
+    const { buf, upHdr } = acq;
 
     logRequest(requestId, null, "/v1/public/random", bytes, format, 200, ip, ua, Date.now() - t0);
     recordPublicUsage(ip, bytes);
@@ -2558,6 +2819,13 @@ app.get("/metrics", (req, res) => {
   const publicTotalBytes  = publicByStatus.find(r => r.status_code === 200)?.b || 0;
   const publicTotalErrors = publicByStatus.filter(r => r.status_code >= 400).reduce((a, r) => a + r.n, 0);
 
+  // QRNG Open API (POST /v1/entropy): mesma fonte e mesmas cotas de /v1/random, contada à parte para observabilidade.
+  const qoaByStatus = db.prepare(`
+    SELECT status_code, COUNT(*) as n, COALESCE(SUM(bytes_requested),0) as b
+    FROM api_usage_logs WHERE endpoint = '/v1/entropy' GROUP BY status_code
+  `).all();
+  const qoaTotalBytes = qoaByStatus.find(r => r.status_code === 200)?.b || 0;
+
   const activeTokens = db.prepare("SELECT COUNT(*) as n FROM api_tokens WHERE status='active'").get().n;
   const totalUsers   = db.prepare("SELECT COUNT(*) as n FROM users").get().n;
 
@@ -2606,6 +2874,14 @@ app.get("/metrics", (req, res) => {
     "# TYPE qrng_public_quota_exceeded_total counter",
     `qrng_public_quota_exceeded_total{type="requests"} ${metricsCounters.public_quota_requests_exceeded}`,
     `qrng_public_quota_exceeded_total{type="bytes"}    ${metricsCounters.public_quota_bytes_exceeded}`,
+    "",
+    "# HELP qrng_openapi_entropy_requests_total Total requests a POST /v1/entropy (QRNG Open API), por status",
+    "# TYPE qrng_openapi_entropy_requests_total counter",
+    ...qoaByStatus.map(r => `qrng_openapi_entropy_requests_total{status="${r.status_code}"} ${r.n}`),
+    "",
+    "# HELP qrng_openapi_entropy_bytes_total Total bytes de entropia entregues via POST /v1/entropy (status=200)",
+    "# TYPE qrng_openapi_entropy_bytes_total counter",
+    `qrng_openapi_entropy_bytes_total ${qoaTotalBytes}`,
     "",
     "# HELP qrng_upstream_status 1=up, 0=down, -1=unknown",
     "# TYPE qrng_upstream_status gauge",
