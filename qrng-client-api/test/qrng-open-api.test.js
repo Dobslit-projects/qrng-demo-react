@@ -96,7 +96,11 @@ before(async () => {
     DB_PATH: testDbPath, NODE_ENV: "test", JWT_SECRET: "test-jwt-secret-for-ci",
     QRNG_UPSTREAM: `http://127.0.0.1:${upstream.address().port}`,
     MAX_BYTES_PER_REQUEST: "4096", QRNG_OPENAPI_MAX_BLOCK_COUNT: "16",
-    QRNG_OPENAPI_STATUS_TTL_MS: "0", QRNG_REQUEST_TIMEOUT_MS: "400",
+    QRNG_OPENAPI_STATUS_TTL_MS: "0",
+    // 400 ms era apertado demais: com 30 requisições simultâneas e o bcrypt do cadastro ocupando o
+    // processo, respostas legítimas do broker falso passavam do prazo e falhas consecutivas marcavam a
+    // fonte como parada (falhas aleatórias em cascata). Só o teste de logs usa o modo "timeout".
+    QRNG_REQUEST_TIMEOUT_MS: "3000",
     DAILY_QUOTA_REQUESTS: "100000", DAILY_QUOTA_BYTES: String(64 * 1024 * 1024),
     RATE_LIMIT_PER_TOKEN_PER_MINUTE: "100000", RATE_LIMIT_PER_IP_PER_MINUTE: "100000",
   });
