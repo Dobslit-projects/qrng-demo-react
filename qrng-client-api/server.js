@@ -212,7 +212,11 @@ function statusHeadersFromHealthJson(data, upHdr) {
 function resolveProvenance(o) {
   return _resolveProvenance({
     ...o,
-    discontinuitiesBaseline: discontinuitiesBaselineFrom(o.upstreamHeaders),
+    // baseline explícito: blocos do pool de pré-carga já foram classificados na
+    // chegada (ordem temporal correta); não reprocessar o contador cumulativo.
+    discontinuitiesBaseline: o.discontinuitiesBaseline !== undefined
+      ? o.discontinuitiesBaseline
+      : discontinuitiesBaselineFrom(o.upstreamHeaders),
     instanceMode: QRNG_INSTANCE_MODE,
     configuredSource: QRNG_CONFIGURED_SOURCE,
     pollerSourceHealth: upstreamHealthLabel(),
@@ -2218,6 +2222,217 @@ app.get("/v1/public/random", ...publicRandomChain, publicRandomHandler);
  */
 app.get("/v1/public/raw", ...publicRandomChain, (req, res) => { res.locals.forceRawFormat = true; return publicRandomHandler(req, res); });
 
+// ── Amostra rápida + cota pública (2026-10-18) ──────────────────────────────
+//
+// Medido em produção: o botão "Baixar dados QRNG" fazia 16 chamadas de 64 KiB
+// em sequência; cada uma paga a ida e volta usuário → VM → túnel → Recife
+// (≈1,3–1,5 s), total de 24 s a ~1 min. O broker entrega 1 MiB numa única
+// chamada em ≈1,1 s. /v1/public/sample entrega até 1 MiB numa só resposta,
+// de preferência a partir de um pool pré-carregado em memória (bytes
+// recém-chegados do hardware, entregues uma única vez, descartados após
+// ENTROPY_POOL_MAX_AGE_MS). Sem pool, busca direto no broker (1 chamada).
+const { EntropyPool } = require("./lib/entropyPool");
+const PUBLIC_SAMPLE_MAX_BYTES     = parseInt(process.env.PUBLIC_SAMPLE_MAX_BYTES || "1048576", 10);           // 1 MiB
+const PUBLIC_SAMPLE_PER_WINDOW    = parseInt(process.env.PUBLIC_SAMPLE_PER_WINDOW || "10", 10);
+const PUBLIC_SAMPLE_WINDOW_MS     = parseInt(process.env.PUBLIC_SAMPLE_WINDOW_MS || String(10 * 60 * 1000), 10); // 10 min
+const ENTROPY_POOL_BYTES          = parseInt(process.env.ENTROPY_POOL_BYTES ?? (process.env.NODE_ENV === "test" ? "0" : String(2 * 1024 * 1024)), 10);
+const ENTROPY_POOL_MAX_AGE_MS     = parseInt(process.env.ENTROPY_POOL_MAX_AGE_MS || String(Math.max(30000, LIVE_SAMPLE_MAX_AGE_MS - 60000)), 10);
+
+/** Busca n bytes no broker numa única chamada e classifica o bloco (ordem temporal). */
+async function fetchUpstreamBlock(n) {
+  const r = await fetchWithTimeout(`${QRNG_UPSTREAM}/random?bytes=${n}`, Math.max(QRNG_TIMEOUT_MS, 15000));
+  if (!r.ok) throw new Error(`upstream HTTP ${r.status}`);
+  const contentLengthHeader = r.headers.get("content-length");
+  const rawBuffer = await r.buffer();
+  if (contentLengthHeader !== null && Number(contentLengthHeader) !== rawBuffer.length) throw new Error("UPSTREAM_LENGTH_MISMATCH");
+  const buf = interpretUpstreamResponse(r.headers.get("content-type"), rawBuffer, n);
+  if (buf.length < n) throw new Error("INSUFFICIENT_ENTROPY");
+  const upHdr = lowerHeaders(r.headers);
+  const prov = resolveProvenance({ servedFromUpstream: true, upstreamHeaders: upHdr });
+  return { buf: buf.slice(0, n), upHdr, prov, discontinuous: prov.buffer_health === "discontinuous" };
+}
+
+const entropyPool = new EntropyPool({
+  capacityBytes: ENTROPY_POOL_BYTES,
+  blockBytes: Math.min(PUBLIC_SAMPLE_MAX_BYTES, 1024 * 1024),
+  maxAgeMs: ENTROPY_POOL_MAX_AGE_MS,
+  // só guarda blocos íntegros: transporte saudável, sem gap NESTE bloco, sem
+  // alarme dos health tests do hardware. Bloco recusado => pool não cresce.
+  fetchBlock: async (n) => {
+    const blk = await fetchUpstreamBlock(n);
+    const ok = blk.prov.transport_health === "healthy" && blk.prov.buffer_health === "healthy"
+      && !["failed", "hw_health_alarm"].includes(blk.prov.entropy_health);
+    return ok ? blk : null;
+  },
+});
+
+const publicSampleLimiter = rateLimit({
+  windowMs: PUBLIC_SAMPLE_WINDOW_MS,
+  max: PUBLIC_SAMPLE_PER_WINDOW,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (req, res) => {
+    metricsCounters.public_rate_limited_total++;
+    res.status(429).json({
+      request_id: req.requestId,
+      error: "RATE_LIMIT_EXCEEDED",
+      message: `Limite de ${PUBLIC_SAMPLE_PER_WINDOW} amostras rápidas a cada ${Math.round(PUBLIC_SAMPLE_WINDOW_MS / 60000)} min por IP. Use a aba Dados (lotes de 64 KiB) ou um token pessoal.`,
+    });
+  },
+});
+
+function parseSampleBytes(req, res, next) {
+  const raw = req.query.bytes;
+  const n = raw === undefined ? PUBLIC_SAMPLE_MAX_BYTES : Number(raw);
+  if (!Number.isInteger(n) || n < 1) {
+    return res.status(422).json({ request_id: req.requestId, error: "INVALID_BYTES", message: "bytes deve ser um inteiro ≥ 1." });
+  }
+  if (n > PUBLIC_SAMPLE_MAX_BYTES) {
+    return res.status(413).json({ request_id: req.requestId, error: "REQUEST_TOO_LARGE", message: `Amostra rápida: máximo de ${PUBLIC_SAMPLE_MAX_BYTES} bytes.`, max_bytes_per_request: PUBLIC_SAMPLE_MAX_BYTES });
+  }
+  req.requestedBytes = n;
+  next();
+}
+
+/**
+ * @openapi
+ * /public/sample:
+ *   get:
+ *     tags: [Random]
+ *     summary: Amostra rápida de até 1 MiB numa única resposta (anônimo, binário).
+ *     description: >
+ *       Entrega N bytes brutos (application/octet-stream) numa só resposta, de
+ *       preferência a partir de um pool em memória com bytes recém-recebidos do
+ *       hardware (cada byte é entregue uma única vez; blocos expiram em poucos
+ *       minutos). Sem pool, busca direto na fonte. Conta na cota diária pública
+ *       por IP (bytes e requisições) e tem limite próprio de amostras por janela.
+ *       Cabeçalhos de proveniência iguais aos de /public/raw, mais
+ *       X-QRNG-Delivery (prefetch-pool | direct) e X-QRNG-Pool-Age-Ms.
+ *     parameters:
+ *       - name: bytes
+ *         in: query
+ *         schema: { type: integer, minimum: 1, maximum: 1048576, default: 1048576 }
+ *     responses:
+ *       200:
+ *         description: N bytes brutos.
+ *         headers:
+ *           X-Request-Id: { schema: { type: string } }
+ *           X-QRNG-Delivery: { schema: { type: string, enum: [prefetch-pool, direct] } }
+ *           X-QRNG-Pool-Age-Ms: { schema: { type: integer }, description: Idade, em ms, do bloco mais antigo usado na resposta. }
+ *         content:
+ *           application/octet-stream: { schema: { type: string, format: binary } }
+ *       413: { description: bytes acima do máximo da amostra rápida., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       422: { description: bytes inválido., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       429: { description: Limite de amostras por janela ou cota pública diária excedida., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       503: { description: Fonte indisponível., content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ */
+app.get("/v1/public/sample", attachRequestId, publicSampleLimiter, parseSampleBytes, checkPublicQuota, refuseIfSourceOffline, async (req, res) => {
+  const bytes = req.requestedBytes;
+  const ip = req.ip || req.socket.remoteAddress;
+  const ua = req.headers["user-agent"];
+  const requestId = req.requestId;
+  const t0 = Date.now();
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Request-Id", requestId);
+  try {
+    let taken = entropyPool.take(bytes);
+    let delivery = "prefetch-pool";
+    if (!taken) {
+      const blk = await fetchUpstreamBlock(bytes);
+      taken = { buf: blk.buf, blocks: [{ upHdr: blk.upHdr, discontinuous: blk.discontinuous, receivedAt: Date.now() }] };
+      delivery = "direct";
+    }
+    entropyPool.refill().catch(() => {});
+
+    const oldest = taken.blocks[0];
+    const anyGap = taken.blocks.some((b) => b.discontinuous);
+    const count = Number(oldest.upHdr["x-qrng-discontinuities"]);
+    const prov = resolveProvenance({
+      servedFromUpstream: true,
+      upstreamHeaders: oldest.upHdr,
+      discontinuitiesBaseline: Number.isFinite(count) ? (anyGap ? count - 1 : count) : undefined,
+    });
+
+    logRequest(requestId, null, "/v1/public/sample", bytes, "raw", 200, ip, ua, Date.now() - t0);
+    recordPublicUsage(ip, bytes);
+    metricsCounters.public_requests_total++;
+
+    res.status(200);
+    res.setHeader("Content-Type", "application/octet-stream");
+    res.setHeader("Content-Length", taken.buf.length);
+    res.setHeader("Content-Disposition", `attachment; filename="kuapoa_qrng_${bytes}B.bin"`);
+    res.setHeader("X-QRNG-Source", QRNG_SOURCE_LABEL);
+    res.setHeader("X-QRNG-Delivery", delivery);
+    res.setHeader("X-QRNG-Pool-Age-Ms", String(Math.max(0, Date.now() - oldest.receivedAt)));
+    setSourceQualificationHeaders(res, oldest.upHdr);
+    setProvenanceHeaders(res, prov);
+    return res.end(taken.buf);
+  } catch (err) {
+    console.error(`[sample] ${requestId}: ${err.message}`);
+    logRequest(requestId, null, "/v1/public/sample", bytes, "raw", 503, ip, ua, Date.now() - t0);
+    recordPublicUsage(ip, 0);
+    return res.status(503).json({ request_id: requestId, error: "QRNG_UNAVAILABLE", message: "Fonte QRNG indisponível no momento." });
+  }
+});
+
+/**
+ * @openapi
+ * /public/quota:
+ *   get:
+ *     tags: [Health]
+ *     summary: Cota pública de hoje para o endereço de rede (IP) que faz a chamada.
+ *     description: >
+ *       Uso e limites do acesso sem token (contados por IP, zeram à meia-noite
+ *       UTC). Não consome cota. Para limites maiores, use um token pessoal
+ *       (ver /me/usage).
+ *     responses:
+ *       200:
+ *         description: Uso e limites.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 scope: { type: string, enum: [ip] }
+ *                 resets_at: { type: string, format: date-time }
+ *                 requests_today: { type: integer }
+ *                 quota_daily_requests: { type: integer }
+ *                 bytes_today: { type: integer }
+ *                 quota_daily_bytes: { type: integer }
+ *                 max_bytes_per_request: { type: integer }
+ *                 rate_limit_per_minute: { type: integer }
+ *                 sample_max_bytes: { type: integer }
+ *                 sample_per_window: { type: integer }
+ *                 sample_window_seconds: { type: integer }
+ *       429: { $ref: '#/components/responses/RateLimited' }
+ */
+app.get("/v1/public/quota", publicHealthLimiter, attachRequestId, (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const ip = req.ip || req.socket.remoteAddress;
+  const today = new Date().toISOString().slice(0, 10);
+  const e = publicIpDailyUsage.get(ip);
+  const used = e && e.date === today ? e : { requests: 0, bytes: 0 };
+  const resets = new Date(); resets.setUTCHours(24, 0, 0, 0);
+  res.json({
+    request_id: req.requestId,
+    scope: "ip",
+    date: today,
+    resets_at: resets.toISOString(),
+    requests_today: used.requests,
+    quota_daily_requests: PUBLIC_DAILY_QUOTA_REQUESTS_IP,
+    remaining_requests_today: Math.max(0, PUBLIC_DAILY_QUOTA_REQUESTS_IP - used.requests),
+    bytes_today: used.bytes,
+    quota_daily_bytes: PUBLIC_DAILY_QUOTA_BYTES_IP,
+    remaining_bytes_today: Math.max(0, PUBLIC_DAILY_QUOTA_BYTES_IP - used.bytes),
+    max_bytes_per_request: PUBLIC_MAX_BYTES_PER_REQUEST,
+    rate_limit_per_minute: PUBLIC_RATE_LIMIT_PER_IP_MIN,
+    sample_max_bytes: PUBLIC_SAMPLE_MAX_BYTES,
+    sample_per_window: PUBLIC_SAMPLE_PER_WINDOW,
+    sample_window_seconds: Math.round(PUBLIC_SAMPLE_WINDOW_MS / 1000),
+    token_quota: { daily_requests: DAILY_QUOTA_REQUESTS, daily_bytes: DAILY_QUOTA_BYTES, max_bytes_per_request: MAX_BYTES_PER_REQUEST },
+  });
+});
+
 // ── Bulk jobs — stub (não implementado) ───────────────────────────────────────
 
 const BULK_NOT_IMPLEMENTED = {
@@ -2579,7 +2794,12 @@ if (require.main === module) {
     console.log(`Upstream fail threshold → ${UPSTREAM_FAIL_THRESHOLD} consecutive failures`);
     checkUpstream();
     setInterval(checkUpstream, 60 * 1000);
+    if (ENTROPY_POOL_BYTES > 0) {
+      console.log(`Pool de amostra  → ${ENTROPY_POOL_BYTES.toLocaleString()} bytes, idade máx ${ENTROPY_POOL_MAX_AGE_MS} ms`);
+      entropyPool.refill();
+      setInterval(() => { entropyPool.refill().catch(() => {}); }, 30 * 1000).unref();
+    }
   });
 }
 
-module.exports = { app, db, interpretUpstreamResponse, UpstreamFormatError, checkUpstream, purgeUsageLogs, truncateIp };
+module.exports = { app, db, interpretUpstreamResponse, UpstreamFormatError, checkUpstream, purgeUsageLogs, truncateIp, entropyPool };

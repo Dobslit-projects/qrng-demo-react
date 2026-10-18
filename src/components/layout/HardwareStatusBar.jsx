@@ -3,6 +3,7 @@ import { theme, formatBytes } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
 import { useLanguage, SOURCE_KEY_MAP } from "../../contexts/LanguageContext";
 import { useIsMobile } from "../../hooks/useIsMobile";
+import UserQuotaChip from "./UserQuota";
 
 function LogoImg({ height }) {
   const [broken, setBroken] = useState(false);
@@ -136,6 +137,8 @@ export default function HardwareStatusBar() {
           <span style={{ color: theme.textMuted }}>--</span>
         )}
       </div>
+
+      <UserQuotaChip />
 
       <div style={{ display: "flex", alignItems: "center", gap: 2, marginLeft: 12 }}>
         <button

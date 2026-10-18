@@ -2,7 +2,9 @@ import { useState, useContext, useRef, useEffect } from "react";
 import { theme, formatBytes } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
 import { useLanguage, SOURCE_KEY_MAP } from "../../contexts/LanguageContext";
-import { fetchQrngBytesInChunks, fetchQrngRawBytesInChunks, readUint32LE, PRECOLLECTED_LIMIT } from "../../lib/qrngHelper";
+import { fetchQrngBytesInChunks, fetchQrngRawBytesInChunks, readUint32LE, PRECOLLECTED_LIMIT, estimateDownloadSeconds } from "../../lib/qrngHelper";
+import { refreshQuota } from "../../lib/usage";
+import { QuotaDetails } from "../layout/UserQuota";
 import Btn from "../ui/Btn";
 
 const MONO = "'IBM Plex Mono', monospace";
@@ -204,6 +206,13 @@ export default function DataSection() {
   const [customSzIn,  setCustomSzIn]  = useState("");
   const [customErr,   setCustomErr]   = useState("");
   const [genProgress, setGenProgress] = useState(0); // % dos lotes de 64 KiB já recebidos
+  const [genT0, setGenT0] = useState(null);           // início da geração (ms)
+  const [nowTick, setNowTick] = useState(0);           // relógio do contador durante a geração
+  useEffect(() => {
+    if (!genT0) return;
+    const id = setInterval(() => setNowTick(Date.now()), 250);
+    return () => clearInterval(id);
+  }, [genT0]);
 
   // Hex
   const [hexSep, setHexSep] = useState("space"); // "none" | "space" | "line"
@@ -311,6 +320,7 @@ export default function DataSection() {
   // ── Geração principal ───────────────────────────────────────────
 
   const handleGenerate = async () => {
+    setGenT0(null);
     const err = validate();
     if (err) { setErrorMsg(err); setStatus("error"); return; }
 
@@ -331,6 +341,7 @@ export default function DataSection() {
       // exatos). Demais modos: JSON hex (rejection sampling etc. operam sobre
       // os bytes decodificados). Ver qrngHelper.js item 2.
       setGenProgress(0);
+      setGenT0(Date.now()); setNowTick(Date.now());
       const onProgress = (done, total) => setGenProgress(Math.round(100 * done / total));
       const result  = snap.mode === "raw"
         ? await fetchQrngRawBytesInChunks(needed, qrngSource, undefined, onProgress)
@@ -371,9 +382,11 @@ export default function DataSection() {
 
       setResultData({ bytes, numbers, meta: { ...snap, bytesConsumed, source, latencyMs, filename } });
       setStatus("done");
+      setGenT0(null);
+      refreshQuota();
 
     } catch (e) {
-      setErrorMsg(e.message || t("dsGenerateError"));
+      setGenT0(null); setErrorMsg(e.message || t("dsGenerateError"));
       setStatus("error");
     }
   };
@@ -549,6 +562,14 @@ export default function DataSection() {
             )}
           </div>
         </div>
+
+        {/* ── Card 1b: Usuário e cota de hoje (2026-10-18) ────────── */}
+        {qrngSource !== "pre-collected" && (
+          <div style={cardStyle}>
+            <span style={{ fontSize: 14, fontWeight: 700, color: theme.text, fontFamily: MONO }}>{t("uqDataCardTitle")}</span>
+            <QuotaDetails />
+          </div>
+        )}
 
         {/* ── Card 2: Modo de exportação ─────────────────────────── */}
         <div style={cardStyle}>
@@ -783,6 +804,33 @@ export default function DataSection() {
               {t("dsClearBtn")}
             </Btn>
           </div>
+
+          {/* Tempo: estimativa antes; decorrido/restante durante (2026-10-18) */}
+          {qrngSource !== "pre-collected" && (() => {
+            const need = bytesNeeded();
+            const est = estimateDownloadSeconds(need);
+            if (status === "generating" && genT0) {
+              const elapsed = Math.max(0, ((nowTick || Date.now()) - genT0) / 1000);
+              const remaining = genProgress > 3 ? Math.max(0, elapsed * (100 - genProgress) / genProgress) : est.seconds - elapsed;
+              return (
+                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+                  <div style={{ height: 6, borderRadius: 3, background: theme.border, overflow: "hidden" }} aria-hidden="true">
+                    <div style={{ width: `${genProgress}%`, height: "100%", background: theme.quantum, transition: "width .2s" }} />
+                  </div>
+                  <span aria-live="polite" style={{ fontSize: 11, color: theme.textDim, fontFamily: MONO }}>
+                    {t("dsTimeProgress", { pct: genProgress, elapsed: elapsed.toFixed(0), remaining: Math.max(0, Math.ceil(remaining)) })}
+                  </span>
+                </div>
+              );
+            }
+            return (
+              <span style={{ fontSize: 11, color: theme.textMuted, fontFamily: MONO }}>
+                {est.chunks > 1
+                  ? t("dsTimeEstimate", { s: est.seconds, size: formatBytes(need), chunks: est.chunks, par: est.concurrency })
+                  : t("dsTimeEstimateOne", { s: est.seconds, size: formatBytes(need) })}
+              </span>
+            );
+          })()}
 
           {/* Mensagem de erro */}
           {(status === "error" || errorMsg) && (

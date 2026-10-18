@@ -237,25 +237,102 @@ export async function fetchQrngRawBytesViaToken(byteCount) {
 // pré-coletado (limite fixo PRECOLLECTED_LIMIT) é repassado sem lote.
 const SAFE_CHUNK_BYTES = 65536; // <= PUBLIC_MAX_BYTES_PER_REQUEST padrão do servidor
 
+// 2026-10-18: os lotes eram buscados um de cada vez — cada um paga a ida e
+// volta usuário → VM → túnel → Recife (≈1,3–1,5 s medidos), então 1 MiB
+// levava 24 s a ~1 min. Agora até CHUNK_CONCURRENCY lotes em paralelo (cada
+// lote é uma retirada distinta do buffer da fonte; a ordem dos bytes no
+// resultado é a dos offsets, não a de chegada).
+export const CHUNK_CONCURRENCY = 4;
+
+// Tempo medido por "onda" de lotes paralelos (EWMA), para estimar downloads.
+const TIMING_KEY = "qrng-chunk-wave-seconds";
+let waveSeconds = (() => {
+  try { const v = Number(localStorage.getItem(TIMING_KEY)); return v > 0 && v < 60 ? v : 1.6; } catch { return 1.6; }
+})();
+function recordWave(seconds) {
+  if (!(seconds > 0) || seconds > 120) return;
+  waveSeconds = 0.6 * waveSeconds + 0.4 * seconds;
+  try { localStorage.setItem(TIMING_KEY, waveSeconds.toFixed(3)); } catch { /* best-effort */ }
+}
+
+/** Estimativa (segundos) para baixar `byteCount` bytes em lotes pela fonte ao vivo. */
+export function estimateDownloadSeconds(byteCount, chunkSize = SAFE_CHUNK_BYTES) {
+  const chunks = Math.max(1, Math.ceil(byteCount / chunkSize));
+  const waves = Math.ceil(chunks / CHUNK_CONCURRENCY);
+  return { seconds: Math.max(1, Math.round(waves * waveSeconds)), chunks, waves, concurrency: Math.min(CHUNK_CONCURRENCY, chunks) };
+}
+
 async function fetchInChunks(fetchFn, byteCount, source, chunkSize, onProgress) {
   if (source === "pre-collected" || byteCount <= chunkSize) {
+    const t0 = performance.now();
     const r = await fetchFn(byteCount, source);
+    if (source !== "pre-collected") recordWave((performance.now() - t0) / 1000);
     if (onProgress) onProgress(byteCount, byteCount);
     return r;
   }
   const out = new Uint8Array(byteCount);
-  let offset = 0;
+  const total = Math.ceil(byteCount / chunkSize);
+  const t0 = performance.now();
+  let nextIdx = 0;
+  let done = 0;
   let latencyMs = 0;
   let last = null;
-  while (offset < byteCount) {
-    const n = Math.min(chunkSize, byteCount - offset);
-    last = await fetchFn(n, source);
-    out.set(last.bytes, offset);
-    offset += n;
-    latencyMs += last.latencyMs;
-    if (onProgress) onProgress(offset, byteCount);
-  }
+  const worker = async () => {
+    while (nextIdx < total) {
+      const i = nextIdx++;
+      const off = i * chunkSize;
+      const n = Math.min(chunkSize, byteCount - off);
+      const r = await fetchFn(n, source);
+      out.set(r.bytes, off);
+      latencyMs += r.latencyMs;
+      last = r;
+      done += n;
+      if (onProgress) onProgress(done, byteCount);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CHUNK_CONCURRENCY, total) }, worker));
+  recordWave((performance.now() - t0) / 1000 / Math.ceil(total / CHUNK_CONCURRENCY));
   return { ...last, bytes: out, hex: bytesToHex(out), latencyMs };
+}
+
+/**
+ * Amostra rápida (até 1 MiB numa única resposta, de um pool pré-carregado na
+ * API — ver /v1/public/sample). Lê o corpo em streaming para informar o
+ * progresso real do download.
+ */
+export async function fetchQrngSample(byteCount, onProgress = null) {
+  const t0 = performance.now();
+  const r = await fetch(`${CLIENT_API}/public/sample?bytes=${byteCount}`, { signal: AbortSignal.timeout(60000) });
+  if (!r.ok) {
+    const body = await r.json().catch(() => ({}));
+    const e = new Error(body.message || body.error || `QRNG API error ${r.status}`);
+    e.status = r.status;
+    throw e;
+  }
+  const total = Number(r.headers.get("content-length")) || byteCount;
+  const out = new Uint8Array(total);
+  let got = 0;
+  if (r.body && r.body.getReader) {
+    const reader = r.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      out.set(value, got);
+      got += value.byteLength;
+      if (onProgress) onProgress(got, total);
+    }
+  } else {
+    const buf = new Uint8Array(await r.arrayBuffer());
+    out.set(buf); got = buf.length;
+    if (onProgress) onProgress(got, total);
+  }
+  return {
+    bytes: got === total ? out : out.subarray(0, got),
+    delivery: r.headers.get("x-qrng-delivery"),
+    provenance: r.headers.get("x-qrng-provenance"),
+    requestId: r.headers.get("x-request-id"),
+    latencyMs: Math.round(performance.now() - t0),
+  };
 }
 
 /** Como fetchQrngBytes, mas divide pedidos grandes em lotes <= chunkSize (evita 413 REQUEST_TOO_LARGE). */

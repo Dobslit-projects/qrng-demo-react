@@ -1268,6 +1268,117 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+  /public/sample:
+    get:
+      tags:
+        - Random
+      summary: Amostra rápida de até 1 MiB numa única resposta (anônimo, binário).
+      description: >
+        Entrega N bytes brutos (application/octet-stream) numa só resposta, de preferência a partir
+        de um pool em memória com bytes recém-recebidos do hardware (cada byte é entregue uma única
+        vez; blocos expiram em poucos minutos). Sem pool, busca direto na fonte. Conta na cota
+        diária pública por IP (bytes e requisições) e tem limite próprio de amostras por janela.
+        Cabeçalhos de proveniência iguais aos de /public/raw, mais X-QRNG-Delivery (prefetch-pool |
+        direct) e X-QRNG-Pool-Age-Ms.
+      parameters:
+        - name: bytes
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 1048576
+            default: 1048576
+      responses:
+        '200':
+          description: N bytes brutos.
+          headers:
+            X-Request-Id:
+              schema:
+                type: string
+            X-QRNG-Delivery:
+              schema:
+                type: string
+                enum:
+                  - prefetch-pool
+                  - direct
+            X-QRNG-Pool-Age-Ms:
+              schema:
+                type: integer
+              description: Idade
+              em ms: null
+              do bloco mais antigo usado na resposta.: null
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        '413':
+          description: bytes acima do máximo da amostra rápida.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '422':
+          description: bytes inválido.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Limite de amostras por janela ou cota pública diária excedida.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Fonte indisponível.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /public/quota:
+    get:
+      tags:
+        - Health
+      summary: Cota pública de hoje para o endereço de rede (IP) que faz a chamada.
+      description: >
+        Uso e limites do acesso sem token (contados por IP, zeram à meia-noite UTC). Não consome
+        cota. Para limites maiores, use um token pessoal (ver /me/usage).
+      responses:
+        '200':
+          description: Uso e limites.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  scope:
+                    type: string
+                    enum:
+                      - ip
+                  resets_at:
+                    type: string
+                    format: date-time
+                  requests_today:
+                    type: integer
+                  quota_daily_requests:
+                    type: integer
+                  bytes_today:
+                    type: integer
+                  quota_daily_bytes:
+                    type: integer
+                  max_bytes_per_request:
+                    type: integer
+                  rate_limit_per_minute:
+                    type: integer
+                  sample_max_bytes:
+                    type: integer
+                  sample_per_window:
+                    type: integer
+                  sample_window_seconds:
+                    type: integer
+        '429':
+          $ref: '#/components/responses/RateLimited'
   /bulk-random-jobs:
     post:
       tags:

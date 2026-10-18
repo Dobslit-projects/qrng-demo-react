@@ -2,7 +2,8 @@ import { useRef, useEffect, useState, useContext, useCallback } from "react";
 import { theme } from "../../theme";
 import { AppContext } from "../../contexts/AppContext";
 import { useLanguage } from "../../contexts/LanguageContext";
-import { fetchQrngBytes, fetchQrngRawBytesInChunks, readUint32LE, errorMessage } from "../../lib/qrngHelper";
+import { fetchQrngBytes, fetchQrngRawBytesInChunks, fetchQrngSample, readUint32LE, errorMessage } from "../../lib/qrngHelper";
+import { refreshQuota } from "../../lib/usage";
 
 const mono  = "'IBM Plex Mono', monospace";
 const sans  = "'Outfit', sans-serif";
@@ -545,26 +546,37 @@ export default function KapuaSection() {
   };
 
   /* ── Download 1 MiB ──
-     O endpoint público aceita no máximo 64 KiB por requisição (HTTP 413 acima
-     disso) — antes o botão pedia 1 MiB de uma vez e qualquer erro virava
-     "backend offline". Agora baixa em lotes binários de 64 KiB (16 pedidos) e
-     mostra a mensagem real da API quando algo falha. */
+     2026-10-18: antes eram 16 lotes de 64 KiB em sequência (24 s a ~1 min,
+     medido). Agora uma única resposta de /v1/public/sample, servida de um pool
+     pré-carregado na API (bytes frescos do hardware, entregues uma só vez) —
+     tipicamente 1–3 s, limitado pela conexão do usuário. Se a amostra rápida
+     não estiver disponível (limite por janela, pool/fonte), cai para lotes
+     em paralelo. */
   const DOWNLOAD_BYTES = 1048576;
+  const [dlPct, setDlPct] = useState(0);
   const handleDownload = async () => {
     if (qrngSource === "pre-collected") {
       setDlError(t("kapuaDlErrorPrecollected"));
       return;
     }
-    setDownloading(true); setDlError(null);
+    setDownloading(true); setDlError(null); setDlPct(0);
+    const onProgress = (done, total) => setDlPct(Math.round((100 * done) / total));
     try {
-      const r = await fetchQrngRawBytesInChunks(DOWNLOAD_BYTES, qrngSource);
+      let r;
+      try {
+        r = await fetchQrngSample(DOWNLOAD_BYTES, onProgress);
+      } catch (e) {
+        if (e.status && e.status !== 429 && e.status !== 503 && e.status !== 404) throw e;
+        setDlPct(0);
+        r = await fetchQrngRawBytesInChunks(DOWNLOAD_BYTES, qrngSource, undefined, onProgress);
+      }
       if (r.bytes.length !== DOWNLOAD_BYTES) throw new Error(`${r.bytes.length}/${DOWNLOAD_BYTES} bytes`);
       const blob = new Blob([r.bytes], { type: "application/octet-stream" });
       const url  = URL.createObjectURL(blob);
       const a    = document.createElement("a"); a.href = url; a.download = "kuapoa_qrng_1MiB.bin";
       document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
     } catch (e) { setDlError(`${t("kapuaDlErrorPrefix")} ${errorMessage(e)}`);
-    } finally { setDownloading(false); }
+    } finally { setDownloading(false); refreshQuota(); }
   };
 
   /* "Explorar componentes": leva ao diagrama e reproduz o fluxo completo
@@ -639,7 +651,7 @@ export default function KapuaSection() {
                   color: "#c0d8f0", fontSize: 13, fontWeight: 600, fontFamily: sans,
                   cursor: downloading ? "not-allowed" : "pointer", opacity: downloading ? 0.7 : 1,
                   transition: "all 0.15s", textAlign: "left",
-                }}>{downloading ? t("kapuaDownloading") : t("kapuaDownloadBtn")}</button>
+                }}>{downloading ? `${t("kapuaDownloading")} ${dlPct}%` : t("kapuaDownloadBtn")}</button>
 
                 <button onClick={handleExplore} style={{
                   padding: "10px 22px", borderRadius: 10,
