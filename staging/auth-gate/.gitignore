@@ -1,0 +1,4 @@
+# segredos de teste gerados por up.sh e config gerada por render-nginx.py
+.env
+nginx/rendered/
+__pycache__/
