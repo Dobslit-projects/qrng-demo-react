@@ -10,6 +10,7 @@ const os = require("node:os");
 const fs = require("node:fs");
 const crypto = require("node:crypto");
 const request = require("supertest");
+const { execFileSync } = require("node:child_process");
 const { createFakeBongo } = require("../test-support/fake-bongo");
 
 const SERVICE_TOKEN = "test-internal-service-token-reset-off";
@@ -69,4 +70,35 @@ test("padrão sem e-mail: status self_service=false; pedido → 503 igual para q
   const tok = await request(app).post("/v1/tokens").set("Authorization", `Bearer ${login.body.token}`);
   assert.equal(tok.status, 200);
   assert.equal((await request(app).get("/v1/me/usage").set("Authorization", `Bearer ${tok.body.token}`)).status, 200);
+});
+
+test("suporte com a recuperação desligada: o script gera um link de uso único que a página pública confirma", async () => {
+  const email = "legado-suporte@test.com";
+  const password = "senhaAntigaSuporte123";
+  assert.equal((await request(app).post("/v1/auth/register").send({ email, password })).status, 200);
+  const env = { ...process.env, DB_PATH: testDbPath, QRNG_PASSWORD_RESET_URL: "https://portal.test/redefinir-senha-api" };
+  const script = path.join(__dirname, "..", "scripts", "issue-legacy-reset-link.js");
+  const out1 = execFileSync(process.execPath, [script, email], { env }).toString();
+  const out2 = execFileSync(process.execPath, [script, email], { env }).toString();
+  const link1 = out1.match(/https:\/\/portal\.test\/redefinir-senha-api#token=([A-Za-z0-9_-]{43})/);
+  const link2 = out2.match(/https:\/\/portal\.test\/redefinir-senha-api#token=([A-Za-z0-9_-]{43})/);
+  assert.ok(link1 && link2, "o script imprime o link");
+  assert.match(out2, /1 link\(s\) anterior\(es\) invalidado\(s\)/);
+  // só o hash no banco
+  assert.equal(JSON.stringify(db.prepare("SELECT * FROM password_reset_tokens").all()).includes(link2[1]), false);
+  // o primeiro link morreu com o segundo
+  assert.deepEqual((await request(app).post("/v1/auth/password-reset/check").send({ token: link1[1] })).body, { valid: false });
+  const newPassword = "senhaNovaPeloSuporte456";
+  const ok = await request(app).post("/v1/auth/password-reset/confirm").send({ token: link2[1], password: newPassword });
+  assert.equal(ok.status, 200);
+  assert.equal((await request(app).post("/v1/auth/login").send({ email, password })).status, 401);
+  assert.equal((await request(app).post("/v1/auth/login").send({ email, password: newPassword })).status, 200);
+  assert.equal((await request(app).post("/v1/auth/password-reset/confirm").send({ token: link2[1], password: "outraSenha789xyz" })).status, 400, "uso único");
+  const ev = db.prepare("SELECT event_type, metadata FROM audit_events WHERE event_type = 'admin.password_reset.manual_link'").all();
+  assert.equal(ev.length, 2);
+  assert.equal(JSON.stringify(ev).includes(link2[1]), false, "o link não vai para a auditoria");
+  // conta inexistente / criada pelo portal: nada feito
+  assert.throws(() => execFileSync(process.execPath, [script, "ninguem@test.com"], { env, stdio: "pipe" }));
+  // a recuperação self-service continua desligada
+  assert.deepEqual((await request(app).get("/v1/auth/password-reset/status")).body, { self_service: false });
 });

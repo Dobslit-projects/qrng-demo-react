@@ -144,3 +144,13 @@ Tokens de recuperação legados: tabela nova `password_reset_tokens(id INTEGER P
 - **Cópia antes de migrar**: as duas migrações gravam `<banco>.pre-migration-v<N>-<data>.bak` com `VACUUM INTO` antes de aplicar qualquer versão pendente; se a cópia falha, nada é migrado e o processo não sobe. `MIGRATION_BACKUP=off` desliga.
 - **Compose de produção do Bongo** repassa todas as variáveis novas (antes só `JWT_SECRET`, `ADMIN_SEED_PASSWORD`, `CORS_ORIGINS`, `TRUST_PROXY`).
 - **Retenção da auditoria na client-api** aceita só 1–3650 dias; outro valor volta para 365.
+
+## 8. Implantação sem e-mail (fase atual) e atendimento do suporte
+
+- **Recuperação self-service só com envio real.** Bongo: liga com `PASSWORD_RESET_ENABLED=1` **e** transporte ≠ `disabled`, `MAIL_OUTBOX_KEY` e `MAIL_WORKER_ENABLED=1`; client-api: `QRNG_PASSWORD_RESET_ENABLED=1`. Padrão: desligada.
+- **Desligada:** `GET /api/auth/password-reset/status` → `{selfService:false, supportContact}` e `GET /qrng/v1/auth/password-reset/status` → `{self_service:false}`; os pedidos respondem 503 `PASSWORD_RESET_UNAVAILABLE`, iguais para qualquer e-mail, antes de qualquer trabalho; nenhum token é gerado; admin "enviar link" → 409. A tela "Esqueci minha senha" mostra a orientação de suporte (sem formulário, sem prometer envio); status inacessível conta como indisponível.
+- **Suporte, conta do portal:** o admin define uma senha temporária (uso excepcional, já existente) depois de confirmar a identidade por outro canal; a pessoa troca a senha no perfil.
+- **Suporte, conta antiga da API:** `docker exec -it qrng-client-api node scripts/issue-legacy-reset-link.js <e-mail>` gera um link de uso único (mesmas regras do e-mail; auditado como `admin.password_reset.manual_link`, sem o link) para entrega por canal verificado. A confirmação na página pública troca a senha, revoga os JWTs e desfaz um vínculo.
+- **Redefinição não revoga chaves de API** (preserva integrações). Suspeita de comprometimento: ação explícita — o dono gira a chave (`/v1/me/token/rotate`) ou o admin a revoga.
+- **Sessões legadas abertas antes da atualização** (JWT sem a dica de modo, que não existia) são retomadas uma vez; depois de qualquer escolha explícita, um JWT que sobrou nunca sai em modo portal.
+- **Ativar o e-mail** é outra janela: domínio verificado, `MAIL_TRANSPORT=resend`, chaves, webhook, `MAIL_WORKER_ENABLED=1`, teste de entrega com endereço da equipe e só então os dois flags de recuperação.
