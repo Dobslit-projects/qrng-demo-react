@@ -29,32 +29,193 @@ export async function fetchHealth(apiPrefix = "/api") {
 // (que viviam aqui) foram consolidadas em lib/qrngHelper.js como
 // fetchQrngBytesViaToken/fetchQrngRandIntViaToken/fetchQrngRandIntsViaToken
 // -- ver item 3 da auditoria do pipeline QRNG (adaptador único).
+//
+// Credencial conforme o modo da área do desenvolvedor DESTA aba (doc 155,
+// §2.4) — nunca a do outro modo: em modo portal o JWT legado guardado em
+// qrng_auth_jwt (resto de uma sessão antiga, talvez de outra pessoa neste
+// navegador) NUNCA sai; vai a sessão do portal em X-Portal-Session.
+//  - legacy → Authorization: Bearer <qrng_auth_jwt>;
+//  - portal → X-Portal-Session: <JWT do portal> (nada se o usuário saiu da
+//    área do desenvolvedor nesta aba, ou se não há sessão do portal);
+//  - sessão fixada nesta aba trocada por outra aba → nada.
 export function getAuthHeaders() {
-  const jwt = localStorage.getItem("qrng_auth_jwt");
-  return jwt ? { Authorization: `Bearer ${jwt}` } : {};
+  if (devSessionChanged()) return {};
+  if (getDevSessionMode() === "legacy") {
+    const jwt = readLocal("qrng_auth_jwt");
+    return jwt ? { Authorization: `Bearer ${jwt}` } : {};
+  }
+  if (isPortalDevSignedOut()) return {};
+  const tok = portalToken();
+  return tok ? { "X-Portal-Session": tok } : {};
+}
+
+function readLocal(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+
+// ── Sessão do portal (Bongo) ───────────────────────────────────────────────────
+
+// JWT do portal: cookie bongo_session (o mesmo que o nginx usa para liberar o
+// /qrng/), senão localStorage bongo_token. Só leitura — a SPA do QRNG nunca
+// grava nem apaga a sessão do portal.
+export function portalToken() {
+  try {
+    const m = document.cookie.match(/(?:^|;\s*)bongo_session=([^;]+)/);
+    if (m) return decodeURIComponent(m[1]);
+  } catch { /* sem document (testes) */ }
+  try { return localStorage.getItem("bongo_token"); } catch { return null; }
+}
+
+// Modo da área do desenvolvedor (doc 155, §2.4):
+//  - "portal" (padrão): a identidade é a sessão do portal, enviada no cabeçalho
+//    explícito X-Portal-Session (nunca por cookie → sem CSRF);
+//  - "legacy": conta antiga da API (e-mail e senha), JWT em qrng_auth_jwt.
+// Só "legacy" é gravado; qualquer outro valor (ou nada) significa "portal".
+const DEV_AUTH_MODE_KEY = "qrng_dev_auth_mode";
+export function getDevAuthMode() {
+  try { return localStorage.getItem(DEV_AUTH_MODE_KEY) === "legacy" ? "legacy" : "portal"; } catch { return "portal"; }
+}
+export function setDevAuthMode(mode) {
+  try {
+    if (mode === "legacy") localStorage.setItem(DEV_AUTH_MODE_KEY, "legacy");
+    else localStorage.removeItem(DEV_AUTH_MODE_KEY);
+  } catch { /* localStorage indisponível: fica no padrão (portal) */ }
+}
+
+// ── Sessão fixada nesta aba ────────────────────────────────────────────────────
+//
+// qrng_dev_auth_mode (localStorage) é global ao navegador: qualquer outra aba o
+// troca a qualquer momento. Por isso ele é só uma DICA de retomada, lida na
+// montagem da página. A credencial que esta aba usa é fixada quando a página
+// autentica (bindDevSession): o modo E o valor exato da credencial (JWT legado
+// ou JWT do portal). Se a credencial viva deixar de ser a fixada — outra aba
+// entrou com outra conta, saiu, ou trocou de modo —, nenhuma chamada sai com
+// a credencial nova: devFetch devolve {sessionChanged: true} sem rede e avisa
+// os ouvintes (onDevSessionChanged), e a página volta à entrada. Assim um
+// "Revogar"/"Rotacionar" nunca age numa conta diferente da que está na tela.
+// A variável é do módulo (= desta aba); nada disto vai para o armazenamento.
+let boundSession = null; // { mode: "portal" | "legacy", credential: string|null }
+const sessionListeners = new Set();
+
+function liveCredential(mode) {
+  return mode === "legacy" ? readLocal("qrng_auth_jwt") : portalToken();
+}
+
+export function bindDevSession(mode) {
+  const m = mode === "legacy" ? "legacy" : "portal";
+  boundSession = { mode: m, credential: liveCredential(m) };
+}
+export function unbindDevSession() {
+  boundSession = null;
+}
+// Modo efetivo desta aba: o da sessão fixada; sem ela, a dica do localStorage.
+export function getDevSessionMode() {
+  return boundSession ? boundSession.mode : getDevAuthMode();
+}
+// true quando a credencial viva já não é a fixada nesta aba.
+export function devSessionChanged() {
+  return !!boundSession && liveCredential(boundSession.mode) !== boundSession.credential;
+}
+export function onDevSessionChanged(fn) {
+  sessionListeners.add(fn);
+  return () => { sessionListeners.delete(fn); };
+}
+function sessionChangedResult() {
+  sessionListeners.forEach((fn) => { try { fn(); } catch { /* ouvinte com erro não bloqueia os outros */ } });
+  return { ok: false, status: 0, data: { error: "DEV_SESSION_CHANGED" }, sessionChanged: true };
+}
+
+// "Sair" da área do desenvolvedor em modo portal (só nesta aba): a sessão do
+// portal continua válida — sair do portal é no portal —, mas um recarregamento
+// desta aba não reabre o painel até o usuário escolher "Continuar com minha
+// conta do portal". sessionStorage = por aba; só um marcador, sem segredo.
+const PORTAL_SIGNED_OUT_KEY = "qrng_dev_portal_signed_out";
+export function isPortalDevSignedOut() {
+  try { return sessionStorage.getItem(PORTAL_SIGNED_OUT_KEY) === "1"; } catch { return false; }
+}
+export function setPortalDevSignedOut(signedOut) {
+  try {
+    if (signedOut) sessionStorage.setItem(PORTAL_SIGNED_OUT_KEY, "1");
+    else sessionStorage.removeItem(PORTAL_SIGNED_OUT_KEY);
+  } catch { /* sessionStorage indisponível: o painel reabre ao recarregar */ }
 }
 
 // ── Auth & Developer API ───────────────────────────────────────────────────────
 
-// devFetch envia o JWT (qrng_auth_jwt) — usado para todos os endpoints autenticados da UI
+// devFetch: credencial conforme o modo da área do desenvolvedor — NUNCA as duas.
+//  - portal → X-Portal-Session: <JWT do portal> (sem Authorization);
+//  - legacy → Authorization: Bearer <qrng_auth_jwt> (sem X-Portal-Session);
+//  - _auth: "none" → nenhuma credencial (login/cadastro legados).
+// `_auth` força um modo para a chamada (ex.: rotas /identity/* são sempre portal).
+// Sem `_auth`, o modo é o da sessão fixada nesta aba (getDevSessionMode), não a
+// dica global do localStorage; se a credencial fixada foi trocada por outra
+// aba, a chamada NÃO sai (ver bindDevSession).
 async function devFetch(path, options = {}) {
-  const jwt  = localStorage.getItem("qrng_auth_jwt");
-  const headers = { "Content-Type": "application/json", ...options.headers };
-  if (jwt) headers["Authorization"] = `Bearer ${jwt}`;
-  const r = await fetch(`${CLIENT_API}${path}`, { ...options, headers, signal: AbortSignal.timeout(10000) });
-  const data = await r.json();
+  const { _auth, ...rest } = options;
+  const mode = _auth || getDevSessionMode();
+  if (boundSession && mode === boundSession.mode && devSessionChanged()) return sessionChangedResult();
+  const headers = { "Content-Type": "application/json", ...rest.headers };
+  delete headers["Authorization"];
+  delete headers["X-Portal-Session"];
+  if (mode === "portal") {
+    const tok = portalToken();
+    if (tok) headers["X-Portal-Session"] = tok;
+  } else if (mode === "legacy") {
+    const jwt = readLocal("qrng_auth_jwt");
+    if (jwt) headers["Authorization"] = `Bearer ${jwt}`;
+  }
+  const r = await fetch(`${CLIENT_API}${path}`, { ...rest, headers, signal: AbortSignal.timeout(10000) });
+  // corpo não-JSON (ex.: página de erro do nginx num 502/503) → {} em vez de exceção,
+  // para o chamador decidir pelo status
+  const data = await r.json().catch(() => ({}));
   return { ok: r.ok, status: r.status, data };
 }
 
-// Auth
+// Auth (conta antiga da API — e-mail e senha da client-api)
 export async function authRegister(email, password) {
-  return devFetch("/auth/register", { method: "POST", body: JSON.stringify({ email, password }) });
+  return devFetch("/auth/register", { method: "POST", body: JSON.stringify({ email, password }), _auth: "none" });
 }
 export async function authLogin(email, password) {
-  return devFetch("/auth/login", { method: "POST", body: JSON.stringify({ email, password }) });
+  return devFetch("/auth/login", { method: "POST", body: JSON.stringify({ email, password }), _auth: "none" });
 }
 export async function authMe() {
   return devFetch("/auth/me");
+}
+
+// Identidade integrada (doc 155, §2.5) — sempre com a sessão do portal
+export async function identityStatus() {
+  return devFetch("/identity/status", { _auth: "portal" });
+}
+export async function identityProvision() {
+  return devFetch("/identity/provision", { method: "POST", _auth: "portal" });
+}
+// `lang` (pt|en) = idioma do aviso de vínculo enviado ao e-mail da conta antiga.
+export async function identityLink({ reauthToken, legacyEmail, legacyPassword, lang }) {
+  const body = { reauthToken, legacyEmail, legacyPassword };
+  if (lang === "en" || lang === "pt") body.lang = lang;
+  return devFetch("/identity/link", {
+    method: "POST",
+    body: JSON.stringify(body),
+    _auth: "portal",
+  });
+}
+
+// Reautenticação no portal (Bongo, mesma origem): senha do portal → reauthToken
+// de uso único (5 min) com a finalidade link_qrng_developer. O token só vive na
+// memória do chamador até ser enviado a /identity/link.
+export async function portalReauth(password) {
+  if (boundSession && boundSession.mode === "portal" && devSessionChanged()) return sessionChangedResult();
+  const tok = portalToken();
+  const headers = { "Content-Type": "application/json" };
+  if (tok) headers["Authorization"] = `Bearer ${tok}`;
+  const r = await fetch("/api/auth/reauth", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ currentPassword: password, purpose: "link_qrng_developer" }),
+    signal: AbortSignal.timeout(10000),
+  });
+  const data = await r.json().catch(() => ({}));
+  return { ok: r.ok, status: r.status, data };
 }
 
 // Token management
@@ -80,7 +241,7 @@ export async function devGetUpstreamStatus() {
   return devFetch("/upstream/status");
 }
 
-// Admin (usa o mesmo JWT — o servidor valida role=admin)
+// Admin (mesma credencial fixada nesta aba — o servidor valida role=admin)
 export async function adminGetTokens()                { return devFetch("/admin/tokens"); }
 export async function adminRevokeToken(id)            { return devFetch(`/admin/tokens/${id}/revoke`, { method: "POST" }); }
 export async function adminSetQuota(id, quota_daily)  { return devFetch(`/admin/tokens/${id}/quota`, { method: "PATCH", body: JSON.stringify({ quota_daily }) }); }

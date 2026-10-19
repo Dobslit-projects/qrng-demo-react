@@ -19,6 +19,7 @@ import {
   resetPrecollectedCursor,
   onPrecollectedChange,
 } from "./qrngHelper";
+import { setDevAuthMode } from "../qrngApi";
 
 // SHA-256 utilitário (Node/jsdom expõe webcrypto)
 async function sha256Hex(u8) {
@@ -440,15 +441,32 @@ describe("fetchQrngRawBytes — binário real (item 2), não hex decodificado no
     await expect(fetchQrngRawBytes(8, "remote")).rejects.toThrow(/QRNG_UNAVAILABLE|503/);
   });
 
-  it("fetchQrngRawBytesViaToken usa CLIENT_API /random?format=raw com Authorization", async () => {
+  // doc 155 §2.4: o JWT legado só sai em modo legado (antes saía sempre).
+  it("fetchQrngRawBytesViaToken usa CLIENT_API /random?format=raw com Authorization (modo legado)", async () => {
     mockRawOnce([10, 20, 30, 40]);
     localStorage.setItem("qrng_auth_jwt", "jwt-xyz");
+    setDevAuthMode("legacy");
     const out = await fetchQrngRawBytesViaToken(4);
     const [url, opts] = globalThis.fetch.mock.calls[0];
     expect(url).toContain("/random?bytes=4&format=raw");
     expect(opts.headers.Authorization).toBe("Bearer jwt-xyz");
     expect(Array.from(out.bytes)).toEqual([10, 20, 30, 40]);
     localStorage.removeItem("qrng_auth_jwt");
+    setDevAuthMode("portal");
+  });
+
+  it("modo portal: fetchQrngRawBytesViaToken NUNCA envia o JWT legado que sobrou no navegador", async () => {
+    mockRawOnce([1, 2]);
+    localStorage.setItem("qrng_auth_jwt", "jwt-legado-de-outra-pessoa");
+    localStorage.setItem("bongo_token", "jwt-do-portal");
+    setDevAuthMode("portal");
+    await fetchQrngRawBytesViaToken(2);
+    const [, opts] = globalThis.fetch.mock.calls[0];
+    expect(opts.headers.Authorization).toBeUndefined();
+    expect(JSON.stringify(opts.headers)).not.toContain("jwt-legado-de-outra-pessoa");
+    expect(opts.headers["X-Portal-Session"]).toBe("jwt-do-portal");
+    localStorage.removeItem("qrng_auth_jwt");
+    localStorage.removeItem("bongo_token");
   });
 });
 

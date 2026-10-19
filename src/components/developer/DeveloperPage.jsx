@@ -1,8 +1,15 @@
 import { useState, useEffect, useCallback } from "react";
 import { theme } from "../../theme";
 import { useLanguage } from "../../contexts/LanguageContext";
-import { authMe, devGetToken, devGetUsage, devGetRequests, devGetUpstreamStatus } from "../../qrngApi";
+import {
+  authMe, devGetToken, devGetUsage, devGetRequests, devGetUpstreamStatus,
+  identityStatus, getDevAuthMode, setDevAuthMode, portalToken,
+  bindDevSession, unbindDevSession, getDevSessionMode, devSessionChanged, onDevSessionChanged,
+  isPortalDevSignedOut, setPortalDevSignedOut,
+} from "../../qrngApi";
+import { identityFailureState } from "../../lib/devIdentity";
 import AuthPage from "./AuthPage";
+import PortalIdentityCard from "./PortalIdentityCard";
 import TokenCard from "./TokenCard";
 import UsageCard from "./UsageCard";
 import RequestLogsTable from "./RequestLogsTable";
@@ -159,7 +166,11 @@ function DocsCard() {
 export default function DeveloperPage() {
   const { t } = useLanguage();
   const [authChecked, setAuthChecked] = useState(false);
-  const [user, setUser]               = useState(null); // { id, email, role }
+  const [user, setUser]               = useState(null); // { id, email, role, portal? }
+  // Entrada sem usuário: "portal" (padrão — conta do portal, sem segunda senha)
+  // ou "legacy" (login da conta antiga da API, caminho secundário)
+  const [view, setView]               = useState("portal");
+  const [identity, setIdentity]       = useState({ state: "checking", status: null });
   const [activeTab, setActiveTab]     = useState("token");
   const [tokenInfo, setTokenInfo]     = useState(null);
   const [usage, setUsage]             = useState(null);
@@ -169,34 +180,149 @@ export default function DeveloperPage() {
   const [upstreamStatus, setUpstreamStatus] = useState(null);
   const [quotaBannerDismissed, setQuotaBannerDismissed] = useState(false);
 
-  // Verifica JWT na montagem
-  useEffect(() => {
-    const jwt = localStorage.getItem("qrng_auth_jwt");
-    if (!jwt) { setAuthChecked(true); return; }
-    authMe()
-      .then((r) => {
-        if (r.ok) setUser(r.data);
-        else {
-          localStorage.removeItem("qrng_auth_jwt");
-          localStorage.removeItem("qrng_api_token");
+  // Modo portal (doc 155, §2.4): GET /v1/identity/status com X-Portal-Session.
+  // Conta de desenvolvedor existente → painel direto (sem segunda senha);
+  // sem conta → cartão de escolha (criar ou vincular a conta antiga).
+  // A credencial do portal é fixada nesta aba (bindDevSession): as chamadas
+  // seguintes do painel (token, admin) só saem com ESTA sessão.
+  const checkPortalIdentity = useCallback(async () => {
+    setPortalDevSignedOut(false);
+    setDevAuthMode("portal");
+    setIdentity((cur) => ({ state: "checking", status: cur.status }));
+    if (!portalToken()) {
+      unbindDevSession();
+      setIdentity({ state: "no_session", status: null });
+      setAuthChecked(true);
+      return;
+    }
+    bindDevSession("portal");
+    try {
+      const r = await identityStatus();
+      if (r.sessionChanged) return; // outra aba trocou a sessão: o ouvinte refaz a entrada
+      if (r.ok && r.data?.developer_account) {
+        // papel (admin/user) vem da conta de desenvolvedor: /v1/auth/me em modo portal
+        const me = await authMe();
+        if (me.sessionChanged) return;
+        if (me.ok) {
+          setUser({
+            id: me.data.id ?? r.data.developer_account.id,
+            email: r.data.portal?.email || me.data.email,
+            role: me.data.role,
+            portal: true,
+          });
+          setIdentity({ state: "ready", status: r.data });
+        } else {
+          setIdentity({ state: identityFailureState(me), status: r.data });
         }
-        setAuthChecked(true);
-      })
-      .catch(() => setAuthChecked(true));
+      } else if (r.ok) {
+        setIdentity({ state: "not_provisioned", status: r.data });
+      } else {
+        setIdentity({ state: identityFailureState(r), status: null });
+      }
+    } catch {
+      setIdentity({ state: "unavailable", status: null });
+    } finally {
+      setAuthChecked(true);
+    }
   }, []);
+
+  // Conta antiga da API: JWT em qrng_auth_jwt validado em /v1/auth/me (e
+  // fixado nesta aba).
+  const checkLegacySession = useCallback(async () => {
+    setDevAuthMode("legacy");
+    bindDevSession("legacy");
+    try {
+      const r = await authMe();
+      if (r.sessionChanged) return;
+      if (r.ok) { setUser(r.data); return; }
+      localStorage.removeItem("qrng_auth_jwt");
+      localStorage.removeItem("qrng_api_token");
+      unbindDevSession();
+      setDevAuthMode("portal");
+    } catch {
+      unbindDevSession();
+      setDevAuthMode("portal");
+    } finally {
+      setAuthChecked(true);
+    }
+  }, []);
+
+  // Entrada: sessão legada só se ela foi a última usada neste navegador
+  // (qrng_dev_auth_mode é só a dica de retomada); se o usuário saiu da área do
+  // desenvolvedor nesta aba, o painel não reabre sozinho; caso contrário, o
+  // padrão é a conta do portal.
+  const enter = useCallback(() => {
+    if (getDevAuthMode() === "legacy" && localStorage.getItem("qrng_auth_jwt")) {
+      setView("legacy");
+      checkLegacySession();
+    } else if (isPortalDevSignedOut()) {
+      unbindDevSession();
+      setView("portal");
+      setIdentity({ state: "signed_out", status: null });
+      setAuthChecked(true);
+    } else {
+      setView("portal");
+      checkPortalIdentity();
+    }
+  }, [checkPortalIdentity, checkLegacySession]);
+
+  useEffect(() => { enter(); }, [enter]);
+
+  // Outra aba trocou a credencial fixada nesta (entrou com outra conta, saiu,
+  // mudou de modo): limpa o painel — sem apagar a sessão nova da outra aba —
+  // e refaz a entrada com o que está guardado agora.
+  useEffect(() => {
+    function resetForSessionChange() {
+      setUser(null);
+      setTokenInfo(null);
+      setUsage(null);
+      setRequests(null);
+      setUpstreamStatus(null);
+      setApiError(null);
+      setQuotaBannerDismissed(false);
+      setActiveTab("token");
+      unbindDevSession();
+      enter();
+    }
+    const off = onDevSessionChanged(resetForSessionChange);
+    function onStorage() { if (devSessionChanged()) resetForSessionChange(); }
+    window.addEventListener("storage", onStorage);
+    return () => { off(); window.removeEventListener("storage", onStorage); };
+  }, [enter]);
+
+  function handleUseLegacy() {
+    setView("legacy");
+    // retoma uma sessão legada ainda guardada neste navegador, sem pedir a senha de novo
+    if (localStorage.getItem("qrng_auth_jwt")) checkLegacySession();
+  }
+
+  function handleBackToPortal() {
+    setView("portal");
+    checkPortalIdentity();
+  }
 
   const loadToken = useCallback(async () => {
     setLoading(true);
     setApiError(null);
     try {
       const res = await devGetToken();
+      if (res.sessionChanged) return;
       if (res.ok) {
         setTokenInfo(res.data);
         // Upstream status só carrega se autenticado
         devGetUpstreamStatus().then((r) => { if (r.ok) setUpstreamStatus(r.data); }).catch(() => {});
+      } else if (getDevSessionMode() === "portal" && [401, 403, 404, 503].includes(res.status)) {
+        // sessão do portal expirada/negada, conta não provisionada ou identidade
+        // indisponível: volta à entrada do portal (a sessão do portal nunca é apagada aqui)
+        localStorage.removeItem("qrng_api_token");
+        setUser(null);
+        setTokenInfo(null);
+        checkPortalIdentity();
       } else if (res.status === 401 || res.status === 403) {
         localStorage.removeItem("qrng_auth_jwt");
         localStorage.removeItem("qrng_api_token");
+        unbindDevSession();
+        setDevAuthMode("portal");
         setUser(null);
         setTokenInfo(null);
       } else {
@@ -207,7 +333,7 @@ export default function DeveloperPage() {
     } finally {
       setLoading(false);
     }
-  }, [t]);
+  }, [t, checkPortalIdentity]);
 
   const loadUsage = useCallback(async () => {
     try {
@@ -234,14 +360,28 @@ export default function DeveloperPage() {
     if (activeTab === "logs") loadRequests();
   }, [activeTab, user, loadUsage, loadRequests]);
 
+  // login/cadastro da conta antiga (AuthPage já gravou qrng_auth_jwt)
   function handleAuth(userInfo) {
+    setDevAuthMode("legacy");
+    bindDevSession("legacy");
     setUser(userInfo);
     setActiveTab("token");
   }
 
+  // Sair: apaga só as chaves do QRNG. Em modo portal a sessão do portal
+  // (cookie bongo_session / bongo_token) NUNCA é tocada — sair do portal é no
+  // portal —, mas esta aba marca a saída (sessionStorage) para o painel não
+  // reabrir ao recarregar; o cartão avisa que a sessão do portal continua ativa.
   function handleLogout() {
+    const wasPortal = user?.portal === true;
     localStorage.removeItem("qrng_auth_jwt");
     localStorage.removeItem("qrng_api_token");
+    unbindDevSession();
+    setDevAuthMode("portal");
+    if (wasPortal) {
+      setPortalDevSignedOut(true);
+      setIdentity({ state: "signed_out", status: null });
+    }
     setUser(null);
     setTokenInfo(null);
     setUsage(null);
@@ -297,7 +437,16 @@ export default function DeveloperPage() {
             <a href="/qrng/v1/docs/" target="_blank" rel="noopener" style={{ padding: "7px 14px", borderRadius: 8, border: `1px solid ${theme.border}`, color: theme.textDim, fontSize: 12, fontWeight: 600, textDecoration: "none" }}>{t("devDocsSwagger")}</a>
           </div>
         </div>
-        <AuthPage onAuth={handleAuth} />
+        {view === "legacy"
+          ? <AuthPage onAuth={handleAuth} onBack={handleBackToPortal} />
+          : (
+            <PortalIdentityCard
+              state={identity.state}
+              status={identity.status}
+              onReload={checkPortalIdentity}
+              onUseLegacy={handleUseLegacy}
+            />
+          )}
       </div>
     );
   }
@@ -325,6 +474,11 @@ export default function DeveloperPage() {
             </div>
             <div style={{ fontSize: 11, color: theme.textDim, marginTop: 3 }}>
               {user.email}
+              {user.portal && (
+                <span style={{ marginLeft: 8, fontSize: 10, color: theme.textMuted, fontFamily: mono, padding: "1px 6px", borderRadius: 4, border: `1px solid ${theme.border}` }}>
+                  {t("devIdPortalBadge")}
+                </span>
+              )}
               {user.role === "admin" && (
                 <span style={{ marginLeft: 8, fontSize: 10, color: theme.quantum, fontFamily: mono, background: theme.quantum + "14", padding: "1px 6px", borderRadius: 4, border: `1px solid ${theme.quantum}30` }}>
                   admin

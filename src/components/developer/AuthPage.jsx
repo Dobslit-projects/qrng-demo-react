@@ -5,8 +5,15 @@ import { authLogin, authRegister } from "../../qrngApi";
 
 const mono = "'IBM Plex Mono', monospace";
 const labelStyle = { fontSize: 10, color: theme.textMuted, fontFamily: mono, letterSpacing: "0.06em", textTransform: "uppercase" };
+// Recuperação de senha fica no portal Bongo (com a opção da conta antiga da API).
+// ?conta=api abre a aba da conta antiga da API; sem ele, a página do Bongo abre
+// na recuperação da conta do PORTAL (e redefiniria a senha da conta errada).
+const LEGACY_FORGOT_URL = "/esqueci-minha-senha?conta=api";
 
-export default function AuthPage({ onAuth }) {
+// Login/cadastro da conta ANTIGA da API (e-mail e senha da client-api). O padrão
+// da área do desenvolvedor é a conta do portal (PortalIdentityCard); esta tela é
+// o caminho secundário. `onBack` (opcional) volta para a conta do portal.
+export default function AuthPage({ onAuth, onBack }) {
   const { t } = useLanguage();
   const [mode, setMode]         = useState("login"); // "login" | "register"
   const [email, setEmail]       = useState("");
@@ -38,11 +45,13 @@ export default function AuthPage({ onAuth }) {
         localStorage.setItem("qrng_auth_jwt", res.data.token);
         onAuth({ email: res.data.email, role: res.data.role });
       } else {
+        // códigos do servidor (client-api) são MAIÚSCULOS: {error: "INVALID_CREDENTIALS", message}
         const msgs = {
-          invalid_credentials: t("authInvalidCredentials"),
-          email_taken:         t("authEmailTaken"),
-          weak_password:       t("authPasswordTooShort"),
-          missing_fields:      t("authMissingFields"),
+          INVALID_CREDENTIALS: t("authInvalidCredentials"),
+          EMAIL_TAKEN:         t("authEmailTaken"),
+          WEAK_PASSWORD:       t("authWeakPassword"),
+          MISSING_FIELDS:      t("authMissingFields"),
+          INVALID_EMAIL:       t("authInvalidEmail"),
         };
         setError(msgs[res.data.error] || res.data.message || t("authUnknownError"));
       }
@@ -76,6 +85,9 @@ export default function AuthPage({ onAuth }) {
       >
         <div style={{ fontSize: 15, fontWeight: 700, color: theme.text, fontFamily: mono, marginBottom: 6 }}>
           {t("devAreaTitle")}
+        </div>
+        <div style={{ fontSize: 10, color: theme.quantum, fontFamily: mono, marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.06em" }}>
+          {t("authLegacyBadge")}
         </div>
         <div style={{ fontSize: 11, color: theme.textDim, lineHeight: 1.7 }}>
           {mode === "login"
@@ -193,6 +205,21 @@ export default function AuthPage({ onAuth }) {
             </span>
           </div>
         )}
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, fontSize: 10, fontFamily: mono, textAlign: "center", lineHeight: 1.6 }}>
+          {mode === "login" && (
+            <a href={LEGACY_FORGOT_URL} style={{ color: theme.textMuted }}>{t("devIdForgotLegacy")}</a>
+          )}
+          {onBack && (
+            <button
+              type="button"
+              onClick={onBack}
+              style={{ background: "none", border: "none", padding: 0, color: theme.quantum, cursor: "pointer", textDecoration: "underline", fontFamily: mono, fontSize: 10 }}
+            >
+              {t("devIdBackToPortal")}
+            </button>
+          )}
+        </div>
       </div>
     </div>
   );

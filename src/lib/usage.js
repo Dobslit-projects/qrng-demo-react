@@ -5,10 +5,13 @@
 //   nginx usa para liberar o /qrng/. Só leitura; nada é gravado.
 // - Cota pública: GET /qrng/v1/public/quota (por endereço de rede, zera à
 //   meia-noite UTC). Atualizada a cada minuto e logo após cada download.
-// - Conta de desenvolvedor (token pessoal): /v1/me/usage, quando há sessão
-//   da área do Desenvolvedor neste navegador.
+// - Conta de desenvolvedor (token pessoal): /v1/me/usage, com a credencial do
+//   modo da área do Desenvolvedor DESTA aba (getAuthHeaders): sessão do portal
+//   em X-Portal-Session no modo portal, JWT legado só no modo legado — nunca o
+//   JWT legado guardado enquanto a aba está em modo portal. Portal sem conta de
+//   desenvolvedor (404 DEVELOPER_ACCOUNT_NOT_PROVISIONED) → só a cota pública.
 import { useSyncExternalStore, useEffect } from "react";
-import { CLIENT_API, getAuthHeaders } from "../qrngApi";
+import { CLIENT_API, getAuthHeaders, portalToken } from "../qrngApi";
 
 function makeStore(initial) {
   let value = initial;
@@ -22,14 +25,6 @@ function makeStore(initial) {
 
 const userStore = makeStore({ loading: true, user: null });
 const quotaStore = makeStore({ loading: true, quota: null, token: null, error: null });
-
-function portalToken() {
-  try {
-    const m = document.cookie.match(/(?:^|;\s*)bongo_session=([^;]+)/);
-    if (m) return decodeURIComponent(m[1]);
-  } catch { /* sem document (testes) */ }
-  try { return localStorage.getItem("bongo_token"); } catch { return null; }
-}
 
 let userRequested = false;
 export async function loadPortalUser() {
@@ -53,8 +48,9 @@ export function refreshQuota() {
       const r = await fetch(`${CLIENT_API}/public/quota`, { signal: AbortSignal.timeout(8000) });
       const quota = r.ok ? await r.json() : null;
       let token = null;
-      if (getAuthHeaders().Authorization) {
-        const t = await fetch(`${CLIENT_API}/me/usage`, { headers: getAuthHeaders(), signal: AbortSignal.timeout(8000) }).catch(() => null);
+      const devHeaders = getAuthHeaders();
+      if (Object.keys(devHeaders).length > 0) {
+        const t = await fetch(`${CLIENT_API}/me/usage`, { headers: devHeaders, signal: AbortSignal.timeout(8000) }).catch(() => null);
         const body = t && t.ok ? await t.json() : null;
         token = body && body.has_token ? body : null;
       }
