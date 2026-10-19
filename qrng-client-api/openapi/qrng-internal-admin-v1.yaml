@@ -37,6 +37,16 @@ components:
         Token de API pessoal (formato dobslit_qrng_live_<hex>, emitido por POST /v1/tokens). Usado
         pelos endpoints de consumo: /v1/random, /v1/health. Endpoints /v1/me/* aceitam tanto este
         token quanto o JWT de sessão.
+    portalSession:
+      type: apiKey
+      in: header
+      name: X-Portal-Session
+      description: >-
+        Sessão do portal Bongo (o mesmo JWT do login no portal), em cabeçalho explícito — nunca por
+        cookie. Validada no Bongo por introspecção a cada uso (cache curto). Aceita nas rotas
+        /identity/*, /auth/me, /tokens, /me/* e /admin/* (o papel de admin é o da conta da
+        client-api, não o do portal). Não envie junto um Authorization de OUTRA conta (400
+        AMBIGUOUS_CREDENTIALS).
     apiKeyHeader:
       type: apiKey
       in: header
@@ -531,15 +541,138 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/QoaExtension'
+    DeveloperAccount:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Id da conta na client-api (o mesmo de antes do vínculo).
+        auth_source:
+          type: string
+          enum:
+            - legacy
+            - portal
+          description: >-
+            legacy = conta antiga (e-mail e senha da client-api); portal = criada pela sessão do
+            portal.
+        linked_at:
+          type: string
+          format: date-time
+          nullable: true
+        has_token:
+          type: boolean
+          description: Se há token de API ativo.
+    IdentityStatus:
+      type: object
+      properties:
+        portal:
+          type: object
+          properties:
+            id:
+              type: string
+              description: Identificador estável da conta do portal (UUID).
+            email:
+              type: string
+              format: email
+              nullable: true
+              example: user@example.com
+            name:
+              type: string
+              nullable: true
+        developer_account:
+          allOf:
+            - $ref: '#/components/schemas/DeveloperAccount'
+          nullable: true
+        can_provision:
+          type: boolean
+        can_link:
+          type: boolean
+    AuditEvent:
+      type: object
+      properties:
+        id:
+          type: integer
+        occurred_at:
+          type: string
+          format: date-time
+        event_type:
+          type: string
+          example: auth.login
+        outcome:
+          type: string
+          enum:
+            - success
+            - failure
+            - denied
+        actor_user_id:
+          type: integer
+          nullable: true
+        target_user_id:
+          type: integer
+          nullable: true
+        request_id:
+          type: string
+          nullable: true
+        ip_prefix:
+          type: string
+          nullable: true
+          description: IPv4 /24 ou IPv6 /48.
+        subject_hash:
+          type: string
+          nullable: true
+          description: Pseudônimo HMAC do e-mail (32 hex), só em falhas/eventos anônimos.
+        metadata:
+          type: object
+          nullable: true
+          description: Só chaves permitidas (motivo, ids, cotas…); nunca segredos.
   responses:
+    PortalSessionInvalid:
+      description: Sessão do portal ausente, inválida, expirada ou revogada (PORTAL_SESSION_INVALID).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    QrngAccessDenied:
+      description: Sessão do portal válida, mas a conta não tem acesso ao QRNG (QRNG_ACCESS_DENIED).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    IdentityUnavailable:
+      description: >-
+        Serviço de identidade do portal indisponível (IDENTITY_UNAVAILABLE). Falha fechada: nenhum
+        acesso é concedido.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    AmbiguousPortalCredentials:
+      description: >-
+        X-Portal-Session enviado junto com um Authorization: Bearer de OUTRA conta (ou inválido)
+        (AMBIGUOUS_CREDENTIALS).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    DeveloperAccountNotProvisioned:
+      description: >-
+        Sessão do portal válida, mas sem conta de desenvolvedor do QRNG
+        (DEVELOPER_ACCOUNT_NOT_PROVISIONED): use POST /identity/provision ou POST /identity/link.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
     Unauthorized:
-      description: Token ausente, inválido ou expirado.
+      description: Token ausente, inválido ou expirado (com X-Portal-Session, PORTAL_SESSION_INVALID).
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     Forbidden:
-      description: 'Autenticado, mas sem permissão (ex.: rota de admin sem role=admin).'
+      description: >-
+        Autenticado, mas sem permissão (ex.: rota de admin sem role=admin; INVALID_TOKEN;
+        PORTAL_ACCESS_REVOKED quando a conta do portal dona da chave foi desabilitada, perdeu o QRNG
+        ou foi excluída).
       content:
         application/json:
           schema:
@@ -583,6 +716,7 @@ paths:
       summary: Lista todos os tokens de todos os usuários (requer role=admin).
       security:
         - bearerAuthJWT: []
+        - portalSession: []
       responses:
         '200':
           description: Lista de tokens com uso de hoje.
@@ -622,10 +756,22 @@ paths:
                           type: integer
                         bytes_today:
                           type: integer
+        '400':
+          $ref: '#/components/responses/AmbiguousPortalCredentials'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: >-
+            Sem permissão (FORBIDDEN, rota de admin sem role=admin). Com X-Portal-Session, também
+            QRNG_ACCESS_DENIED (conta do portal sem acesso ao QRNG).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/DeveloperAccountNotProvisioned'
+        '503':
+          $ref: '#/components/responses/IdentityUnavailable'
   /admin/tokens/{id}/revoke:
     post:
       tags:
@@ -633,6 +779,7 @@ paths:
       summary: Revoga o token de qualquer usuário (requer role=admin).
       security:
         - bearerAuthJWT: []
+        - portalSession: []
       parameters:
         - name: id
           in: path
@@ -642,16 +789,28 @@ paths:
       responses:
         '200':
           description: Token revogado.
+        '400':
+          $ref: '#/components/responses/AmbiguousPortalCredentials'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
-        '404':
-          description: Token não encontrado.
+          description: >-
+            Sem permissão (FORBIDDEN, rota de admin sem role=admin). Com X-Portal-Session, também
+            QRNG_ACCESS_DENIED (conta do portal sem acesso ao QRNG).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          description: >-
+            Token não encontrado. Com X-Portal-Session, também DEVELOPER_ACCOUNT_NOT_PROVISIONED
+            (identidade do portal sem conta de desenvolvedor).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/IdentityUnavailable'
   /admin/tokens/{id}/quota:
     patch:
       tags:
@@ -659,6 +818,7 @@ paths:
       summary: Ajusta a cota diária de requisições de um token (requer role=admin).
       security:
         - bearerAuthJWT: []
+        - portalSession: []
       parameters:
         - name: id
           in: path
@@ -681,7 +841,9 @@ paths:
         '200':
           description: Cota atualizada.
         '400':
-          description: quota_daily ausente ou inválida.
+          description: >-
+            quota_daily ausente ou inválida. Com X-Portal-Session, também AMBIGUOUS_CREDENTIALS
+            (Authorization de outra conta junto).
           content:
             application/json:
               schema:
@@ -689,15 +851,25 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: >-
+            Sem permissão (FORBIDDEN, rota de admin sem role=admin). Com X-Portal-Session, também
+            QRNG_ACCESS_DENIED (conta do portal sem acesso ao QRNG).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
-          description: Token não encontrado.
+          description: >-
+            Token não encontrado. Com X-Portal-Session, também DEVELOPER_ACCOUNT_NOT_PROVISIONED
+            (identidade do portal sem conta de desenvolvedor).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
         '413':
           $ref: '#/components/responses/PayloadTooLarge'
+        '503':
+          $ref: '#/components/responses/IdentityUnavailable'
   /admin/users:
     get:
       tags:
@@ -705,6 +877,7 @@ paths:
       summary: Lista todos os usuários (requer role=admin).
       security:
         - bearerAuthJWT: []
+        - portalSession: []
       responses:
         '200':
           description: Lista de usuários.
@@ -728,10 +901,22 @@ paths:
                         created_at:
                           type: string
                           format: date-time
+        '400':
+          $ref: '#/components/responses/AmbiguousPortalCredentials'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: >-
+            Sem permissão (FORBIDDEN, rota de admin sem role=admin). Com X-Portal-Session, também
+            QRNG_ACCESS_DENIED (conta do portal sem acesso ao QRNG).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/DeveloperAccountNotProvisioned'
+        '503':
+          $ref: '#/components/responses/IdentityUnavailable'
   /admin/users/{id}:
     delete:
       tags:
@@ -739,6 +924,7 @@ paths:
       summary: Exclui a conta de um usuário (atendimento a pedido de exclusão). Requer role=admin.
       security:
         - bearerAuthJWT: []
+        - portalSession: []
       parameters:
         - name: id
           in: path
@@ -749,10 +935,87 @@ paths:
         '200':
           description: Conta excluída.
         '400':
-          description: Tentativa de excluir a própria conta de administrador (CANNOT_DELETE_SELF).
+          description: >-
+            Tentativa de excluir a própria conta de administrador (CANNOT_DELETE_SELF). Com
+            X-Portal-Session, também AMBIGUOUS_CREDENTIALS (Authorization de outra conta junto).
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          $ref: '#/components/responses/Forbidden'
+          description: >-
+            Sem permissão (FORBIDDEN, rota de admin sem role=admin). Com X-Portal-Session, também
+            QRNG_ACCESS_DENIED (conta do portal sem acesso ao QRNG).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
         '404':
-          description: Usuário não encontrado.
+          description: >-
+            Usuário não encontrado. Com X-Portal-Session, também DEVELOPER_ACCOUNT_NOT_PROVISIONED
+            (identidade do portal sem conta de desenvolvedor).
+        '503':
+          $ref: '#/components/responses/IdentityUnavailable'
+  /admin/audit:
+    get:
+      tags:
+        - Admin
+      summary: Eventos de auditoria da client-api (requer role=admin).
+      description: >
+        Login legado, recuperação de senha, provisão/vínculo de identidade, negações e ações
+        administrativas. Nunca contém senha, JWT, token de recuperação/reauth, link nem e-mail
+        (falhas e eventos anônimos só têm subject_hash, um pseudônimo HMAC). Mais recentes primeiro.
+      security:
+        - bearerAuthJWT: []
+        - portalSession: []
+      parameters:
+        - name: type
+          in: query
+          schema:
+            type: string
+          description: 'Filtra por event_type (ex.: auth.login).'
+        - name: outcome
+          in: query
+          schema:
+            type: string
+            enum:
+              - success
+              - failure
+              - denied
+        - name: before
+          in: query
+          schema:
+            type: string
+          description: 'Paginação: id numérico (eventos com id menor) ou data ISO (eventos anteriores).'
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 500
+      responses:
+        '200':
+          description: Lista de eventos.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/AuditEvent'
+        '400':
+          $ref: '#/components/responses/AmbiguousPortalCredentials'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          description: >-
+            Sem permissão (FORBIDDEN, rota de admin sem role=admin). Com X-Portal-Session, também
+            QRNG_ACCESS_DENIED (conta do portal sem acesso ao QRNG).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/DeveloperAccountNotProvisioned'
+        '503':
+          $ref: '#/components/responses/IdentityUnavailable'

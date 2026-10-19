@@ -33,6 +33,18 @@ const app = express();
 // privada do bridge: TRUST_PROXY="loopback, uniquelocal".
 app.set("trust proxy", process.env.TRUST_PROXY || "loopback");
 
+// ── Identidade NUNCA por cabeçalho do cliente (doc 155, 2.4) ─────────────────
+// O gate do nginx (auth_request) devolve X-Bongo-User-Id / X-Bongo-Role ao
+// próprio nginx; um cliente pode tentar enviá-los (ou X-Portal-User) direto.
+// A client-api nunca confia em identidade por cabeçalho: eles são REMOVIDOS
+// aqui, antes de qualquer outro middleware. A sessão do portal só vale via
+// X-Portal-Session + introspecção no Bongo.
+const UNTRUSTED_IDENTITY_HEADERS = ["x-bongo-user-id", "x-bongo-role", "x-portal-user"];
+app.use((req, _res, next) => {
+  for (const h of UNTRUSTED_IDENTITY_HEADERS) delete req.headers[h];
+  next();
+});
+
 // ── Cabeçalhos de segurança (preparação para pentest, 2026-09-30) ────────────
 // helmet: nosniff, frameguard, Referrer-Policy, COOP etc. Ajustes:
 //  - hsts: false — TLS termina no nginx do host, que envia o HSTS uma vez
@@ -167,6 +179,34 @@ const LIVE_SAMPLE_MAX_AGE_MS = parseInt(process.env.LIVE_SAMPLE_MAX_AGE_MS || "3
 // bytes" como live (com live_verified=false) -- necessário enquanto o
 // server_api.py de produção não carimbar captured_at.
 const LIVE_ALLOW_WITHOUT_CAPTURE_EVIDENCE = process.env.LIVE_ALLOW_WITHOUT_CAPTURE_EVIDENCE === "1";
+
+// ── Identidade integrada, recuperação de senha legada e auditoria (doc 155) ──
+// Bongo = autoridade de identidade e dono da fila de e-mail. A client-api fala
+// com ele só pelas APIs internas, autenticada por INTERNAL_SERVICE_TOKEN (o
+// mesmo valor configurado nos dois serviços). Sem o token, a sessão do portal
+// falha FECHADA (503 IDENTITY_UNAVAILABLE) e os e-mails de recuperação não
+// são enfileirados; chaves de API e login legado continuam funcionando.
+const BONGO_INTERNAL_URL              = process.env.BONGO_INTERNAL_URL || "http://127.0.0.1:3101";
+const INTERNAL_SERVICE_TOKEN          = process.env.INTERNAL_SERVICE_TOKEN || null;
+// O mesmo prazo vale para a chamada de enfileiramento de e-mail.
+const PORTAL_INTROSPECTION_TIMEOUT_MS = parseInt(process.env.PORTAL_INTROSPECTION_TIMEOUT_MS || "3000", 10);
+const PORTAL_INTROSPECTION_CACHE_MS   = parseInt(process.env.PORTAL_INTROSPECTION_CACHE_MS || "30000", 10);
+const QRNG_RESET_TOKEN_TTL_MINUTES    = parseInt(process.env.QRNG_RESET_TOKEN_TTL_MINUTES || "30", 10);
+// Página PÚBLICA do portal (fora de /qrng/, que passa pelo gate de autorização
+// no nginx) que lê o token do FRAGMENTO (#token=...): o fragmento não vai ao
+// servidor, então fica fora de logs de acesso, proxies e Referer.
+const QRNG_PASSWORD_RESET_URL         = process.env.QRNG_PASSWORD_RESET_URL || "https://bongo.dobslit.com/redefinir-senha-api";
+const AUDIT_PSEUDONYM_KEY             = process.env.AUDIT_PSEUDONYM_KEY || null;
+// 1..3650; qualquer outro valor (negativo, "1e3", texto) volta para 365 — um
+// valor negativo jogaria o corte para o futuro e apagaria a auditoria inteira.
+const AUDIT_RETENTION_DAYS            = (() => {
+  const raw = process.env.AUDIT_RETENTION_DAYS;
+  const n = raw === undefined || raw === "" ? 365 : Number(raw);
+  return Number.isInteger(n) && n >= 1 && n <= 3650 ? n : 365;
+})();
+// Estado da conta do portal por trás das chaves de API das contas CRIADAS PELO
+// PORTAL (auth_source='portal'): consultado no Bongo e guardado por este tempo.
+const PORTAL_ACCOUNT_STATUS_CACHE_MS  = parseInt(process.env.PORTAL_ACCOUNT_STATUS_CACHE_MS || "60000", 10);
 
 const { resolveProvenance: _resolveProvenance } = require("./lib/provenance");
 
@@ -349,6 +389,25 @@ db.exec(`
 try { db.exec("ALTER TABLE api_tokens ADD COLUMN user_id INTEGER"); }         catch (_) {}
 try { db.exec("ALTER TABLE api_usage_logs ADD COLUMN duration_ms INTEGER"); } catch (_) {}
 
+// Migrações versionadas (doc 155, seção 6): o bloco acima é a linha de base;
+// daqui em diante cada versão roda numa transação e fica em schema_migrations.
+const { runMigrations } = require("./lib/migrations");
+runMigrations(db);
+
+const { createAudit } = require("./lib/audit");
+const { createBongoInternalClient, IdentityUnavailableError } = require("./lib/bongo-internal");
+const audit = createAudit(db, {
+  pseudonymKey: AUDIT_PSEUDONYM_KEY,
+  retentionDays: AUDIT_RETENTION_DAYS,
+  truncateIp: (ip) => truncateIp(ip),
+});
+const bongo = createBongoInternalClient({
+  baseUrl: BONGO_INTERNAL_URL,
+  serviceToken: INTERNAL_SERVICE_TOKEN,
+  timeoutMs: PORTAL_INTROSPECTION_TIMEOUT_MS,
+  cacheMs: PORTAL_INTROSPECTION_CACHE_MS,
+});
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 function newRequestId()  { return `req_${crypto.randomBytes(8).toString("hex")}`; }
@@ -415,7 +474,10 @@ function purgeUsageLogs(nowMs = Date.now()) {
 // Remove a conta e tudo que a identifica: tokens e cotas são apagados; os
 // registros de uso ficam só como estatística anônima (sem token, IP ou UA).
 function deleteUserData(userId) {
+  let resetTokenIds = [];
   db.transaction(() => {
+    resetTokenIds = db.prepare("SELECT id FROM password_reset_tokens WHERE user_id = ? AND used_at IS NULL AND invalidated_at IS NULL")
+      .all(userId).map((r) => r.id);
     const tokenIds = db.prepare("SELECT id FROM api_tokens WHERE user_id = ?").all(userId).map((t) => t.id);
     for (const id of tokenIds) {
       db.prepare("UPDATE api_usage_logs SET token_id = NULL, ip_address = NULL, user_agent = NULL WHERE token_id = ?").run(id);
@@ -423,8 +485,14 @@ function deleteUserData(userId) {
       tokenRateMap.delete(id);
     }
     db.prepare("DELETE FROM api_tokens WHERE user_id = ?").run(userId);
+    // Tokens de recuperação também; as mensagens deles ainda na fila do Bongo
+    // são canceladas logo abaixo (cancelamento ativo — o Bongo, em contêiner,
+    // não consulta a client-api em produção).
+    db.prepare("DELETE FROM password_reset_tokens WHERE user_id = ?").run(userId);
     db.prepare("DELETE FROM users WHERE id = ?").run(userId);
   })();
+  portalAccountStatusCache.clear();
+  cancelLegacyResetMails(resetTokenIds);
 }
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
@@ -432,7 +500,8 @@ function deleteUserData(userId) {
 app.use((req, res, next) => {
   res.header("Access-Control-Allow-Origin",  "*");
   // X-API-Key: forma alternativa de enviar o MESMO token pessoal, aceita só nas rotas QRNG Open API (contrato).
-  res.header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-API-Key");
+  // X-Portal-Session: JWT do portal Bongo em cabeçalho EXPLÍCITO (nunca cookie → sem CSRF), validado por introspecção.
+  res.header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-API-Key, X-Portal-Session");
   res.header("Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS");
   if (req.method === "OPTIONS") return res.sendStatus(200);
   next();
@@ -757,20 +826,183 @@ function checkQuota(req, res, next) {
 
 // ── Middleware de autenticação ────────────────────────────────────────────────
 
-function requireAuth(req, res, next) {
+// Ordem aceita (doc 155, 2.4): X-Portal-Session (introspecção no Bongo) →
+// Authorization: Bearer <JWT legado> → (só resolveUser) chave de API.
+// Os dois juntos só passam se apontarem para o MESMO usuário; senão 400
+// AMBIGUOUS_CREDENTIALS (nunca "escolher um" em silêncio).
+
+function portalSessionToken(req) {
+  const v = req.headers["x-portal-session"];
+  if (typeof v !== "string") return null;
+  const t = v.trim().replace(/^Bearer\s+/i, "");
+  return t || null;
+}
+
+function bearerToken(req) {
   const auth = req.headers.authorization || "";
-  if (!auth.startsWith("Bearer ")) {
+  return auth.startsWith("Bearer ") ? (auth.slice(7).trim() || null) : null;
+}
+
+// JWT legado → { payload, row } ou null. Rejeita: assinatura/validade
+// inválidas, conta excluída (o JWT vale 30 dias), conta criada pelo portal
+// (não tem JWT legado) e JWT emitido ANTES da última redefinição de senha.
+// A comparação usa `iat_ms` (milissegundos, gravado no login desde o pacote 1):
+// um JWT emitido no mesmo segundo, mas antes, da redefinição também cai. JWT
+// sem `iat_ms` (emitido antes deste código) cai se iat <= segundo da redefinição.
+function signLegacyJwt(claims) {
+  return jwt.sign({ ...claims, iat_ms: Date.now() }, JWT_SECRET, { expiresIn: "30d" });
+}
+function legacyJwtUser(raw) {
+  let payload;
+  try { payload = jwt.verify(raw, JWT_SECRET, { algorithms: ["HS256"] }); } catch { return null; }
+  const row = db.prepare("SELECT id, role, auth_source, password_changed_at FROM users WHERE id = ?").get(payload.sub);
+  if (!row || row.auth_source !== "legacy") return null;
+  if (row.password_changed_at) {
+    const changedMs = Date.parse(row.password_changed_at);
+    if (typeof payload.iat_ms === "number") {
+      if (payload.iat_ms < changedMs) return null;
+    } else if (typeof payload.iat !== "number" || payload.iat <= Math.floor(changedMs / 1000)) {
+      return null;
+    }
+  }
+  return { payload, row };
+}
+
+// Usuário (id da client-api) por trás de um Authorization: Bearer, só para
+// comparar com o da sessão do portal: JWT legado válido ou chave de API ativa.
+function bearerUserId(raw) {
+  const j = legacyJwtUser(raw);
+  if (j) return j.row.id;
+  const t = lookupActiveToken(raw);
+  return t && t.user_id != null ? t.user_id : null;
+}
+
+function identityError(status, error, message) {
+  return { error: { status, body: { error, message } } };
+}
+
+// Valida X-Portal-Session no Bongo. Não exige conta de desenvolvedor.
+// Devolve { error } ou { portal, devUser }.
+async function resolvePortalSession(req, token) {
+  let info;
+  try {
+    info = await bongo.introspect(token);
+  } catch (e) {
+    if (!(e instanceof IdentityUnavailableError)) throw e;
+    console.warn(`[identity] introspecção no Bongo indisponível (${e.code}) — acesso negado (falha fechada)`);
+    return identityError(503, "IDENTITY_UNAVAILABLE", "Serviço de identidade do portal indisponível. Tente novamente em instantes.");
+  }
+  if (!info.active) {
+    return identityError(401, "PORTAL_SESSION_INVALID", "Sessão do portal inválida ou expirada. Entre novamente no portal.");
+  }
+  const u = info.user;
+  if (!info.authorization || info.authorization.qrng !== true) {
+    audit.recordDeduped(`identity.denied:${u.id}:qrng_not_granted`, {
+      type: "identity.denied", outcome: "denied", req, metadata: { reason: "qrng_not_granted", portal_user_id: u.id },
+    });
+    return identityError(403, "QRNG_ACCESS_DENIED", "Sua conta do portal não tem acesso ao QRNG.");
+  }
+  const portal = {
+    id: u.id,
+    email: typeof u.email === "string" ? u.email : null,
+    name: typeof u.name === "string" ? u.name : null,
+  };
+  const devUser = db.prepare("SELECT * FROM users WHERE bongo_user_id = ?").get(portal.id) || null;
+  return { portal, devUser };
+}
+
+// portal_email = cópia de exibição (nunca usada para autenticar), gravada só
+// quando muda; last_login_at no primeiro uso da sessão do portal a cada hora
+// (sem escrita por requisição).
+const PORTAL_TOUCH_INTERVAL_MS = 60 * 60 * 1000;
+function touchPortalUse(devUser, portal) {
+  if (portal.email && portal.email !== devUser.portal_email) {
+    db.prepare("UPDATE users SET portal_email = ? WHERE id = ?").run(portal.email, devUser.id);
+  }
+  const last = devUser.last_login_at ? Date.parse(devUser.last_login_at) : 0;
+  if (!(Date.now() - last < PORTAL_TOUCH_INTERVAL_MS)) {
+    db.prepare("UPDATE users SET last_login_at = ? WHERE id = ?").run(new Date().toISOString(), devUser.id);
+  }
+}
+
+// Sessão do portal que PRECISA de conta de desenvolvedor (todas as rotas
+// exceto /v1/identity/*). `bearer` = Authorization presente junto, se houver.
+// X-Portal-Session junto com um Authorization: Bearer só passa se o Bearer for
+// da MESMA conta de desenvolvedor da sessão (sem conta ainda → nunca é a
+// mesma). Vale também para /v1/identity/*. Devolve { error } ou null.
+function ambiguousCredentials(req, r, bearer) {
+  if (!bearer || (r.devUser && bearerUserId(bearer) === r.devUser.id)) return null;
+  audit.recordDeduped(`identity.denied:${r.portal.id}:ambiguous_credentials`, {
+    type: "identity.denied", outcome: "denied", req, actorUserId: r.devUser ? r.devUser.id : null,
+    metadata: { reason: "ambiguous_credentials", portal_user_id: r.portal.id },
+  });
+  return identityError(400, "AMBIGUOUS_CREDENTIALS",
+    "X-Portal-Session e Authorization apontam para contas diferentes. Envie só uma credencial.");
+}
+
+async function authenticatePortalDeveloper(req, portalTok, bearer) {
+  const r = await resolvePortalSession(req, portalTok);
+  if (r.error) return r;
+  const amb = ambiguousCredentials(req, r, bearer);
+  if (amb) return amb;
+  if (!r.devUser) {
+    return identityError(404, "DEVELOPER_ACCOUNT_NOT_PROVISIONED",
+      "Sua conta do portal ainda não tem conta de desenvolvedor do QRNG. Crie uma (POST /v1/identity/provision) ou vincule a conta antiga (POST /v1/identity/link).");
+  }
+  touchPortalUse(r.devUser, r.portal);
+  return {
+    portal: r.portal,
+    devUser: r.devUser,
+    // Mesmo formato do payload do JWT legado; o papel efetivo é SEMPRE o da
+    // linha da client-api (requireAdmin relê do banco) — nunca o do portal.
+    user: { sub: r.devUser.id, email: r.devUser.email || r.devUser.portal_email || null, role: r.devUser.role, via: "portal" },
+  };
+}
+
+// Express 4 não captura rejeições de middlewares async: encaminha ao handler de erro.
+function requireAuth(req, res, next) {
+  requireAuthAsync(req, res, next).catch(next);
+}
+async function requireAuthAsync(req, res, next) {
+  const portalTok = portalSessionToken(req);
+  const bearer = bearerToken(req);
+  if (portalTok) {
+    const r = await authenticatePortalDeveloper(req, portalTok, bearer);
+    if (r.error) return res.status(r.error.status).json(r.error.body);
+    req.user = r.user;
+    req.portal = r.portal;
+    req.authMode = "portal";
+    return next();
+  }
+  if (!bearer) {
     return res.status(401).json({ error: "MISSING_TOKEN", message: "Faça login primeiro." });
   }
-  try {
-    req.user = jwt.verify(auth.slice(7).trim(), JWT_SECRET, { algorithms: ["HS256"] });
-  } catch {
+  const j = legacyJwtUser(bearer);
+  if (!j) {
     return res.status(401).json({ error: "SESSION_EXPIRED", message: "Sessão expirada. Faça login novamente." });
   }
-  // O JWT vale 30 dias; a conta pode ter sido excluída nesse meio-tempo.
-  if (!db.prepare("SELECT 1 FROM users WHERE id = ?").get(req.user.sub)) {
-    return res.status(401).json({ error: "SESSION_EXPIRED", message: "Sessão expirada. Faça login novamente." });
+  req.user = j.payload;
+  req.authMode = "jwt";
+  next();
+}
+
+// Só a sessão do portal, SEM exigir conta de desenvolvedor (rotas /v1/identity/*).
+function requirePortalSession(req, res, next) {
+  requirePortalSessionAsync(req, res, next).catch(next);
+}
+async function requirePortalSessionAsync(req, res, next) {
+  const tok = portalSessionToken(req);
+  if (!tok) {
+    return res.status(401).json({ error: "PORTAL_SESSION_INVALID", message: "Envie a sessão do portal no cabeçalho X-Portal-Session." });
   }
+  const r = await resolvePortalSession(req, tok);
+  if (r.error) return res.status(r.error.status).json(r.error.body);
+  const amb = ambiguousCredentials(req, r, bearerToken(req));
+  if (amb) return res.status(amb.error.status).json(amb.error.body);
+  req.portal = r.portal;
+  req.devUser = r.devUser;
+  req.portalToken = tok;
+  if (r.devUser) touchPortalUse(r.devUser, r.portal);
   next();
 }
 
@@ -806,14 +1038,55 @@ function lookupActiveToken(raw) {
   return db.prepare("SELECT * FROM api_tokens WHERE token_hash = ? AND status = 'active'").get(hashToken(raw));
 }
 
+// Contas de desenvolvedor CRIADAS PELO PORTAL (auth_source='portal') existem
+// por causa da autorização do portal: se a conta do portal for desabilitada,
+// perder o serviço qrng ou for excluída, a chave de API dela para de valer.
+// O estado vem do Bongo (POST /api/internal/v1/accounts/status) e fica em
+// cache por PORTAL_ACCOUNT_STATUS_CACHE_MS. Bongo fora do ar: vale o último
+// estado conhecido e, sem nenhum, a chave continua valendo — a disponibilidade
+// das chaves de API não passa a depender do Bongo. Contas legadas (vinculadas
+// ou não) não são afetadas.
+const portalAccountStatusCache = new Map(); // bongo_user_id → { at, allowed }
+async function apiKeyAllowed(tokenRow) {
+  if (!tokenRow || tokenRow.user_id == null) return true;
+  const u = db.prepare("SELECT id, auth_source, bongo_user_id FROM users WHERE id = ?").get(tokenRow.user_id);
+  if (!u || u.auth_source !== "portal" || !u.bongo_user_id) return true;
+  const now = Date.now();
+  const hit = portalAccountStatusCache.get(u.bongo_user_id);
+  if (hit && now - hit.at < PORTAL_ACCOUNT_STATUS_CACHE_MS) return hit.allowed;
+  let status;
+  try {
+    status = await bongo.accountStatus(u.bongo_user_id);
+  } catch (e) {
+    if (!(e instanceof IdentityUnavailableError)) throw e;
+    return hit ? hit.allowed : true;
+  }
+  const allowed = Boolean(status && status.exists && status.active && status.qrng);
+  if (portalAccountStatusCache.size > 10000) portalAccountStatusCache.clear();
+  portalAccountStatusCache.set(u.bongo_user_id, { at: now, allowed });
+  if (status && status.exists === false) {
+    // Conta do portal excluída: o e-mail dela não fica guardado aqui.
+    db.prepare("UPDATE users SET portal_email = NULL WHERE id = ? AND portal_email IS NOT NULL").run(u.id);
+  }
+  return allowed;
+}
+function portalAccessRevoked(req, res) {
+  return res.status(403).json({ request_id: req.requestId, error: "PORTAL_ACCESS_REVOKED",
+    message: "A conta do portal dona desta chave está desabilitada, sem acesso ao QRNG ou foi excluída." });
+}
+
 // API token — para /random e /health (machine-to-machine)
 function requireToken(req, res, next) {
+  requireTokenAsync(req, res, next).catch(next);
+}
+async function requireTokenAsync(req, res, next) {
   const auth = req.headers.authorization || "";
   if (!auth.startsWith("Bearer ")) {
     return res.status(401).json({ request_id: req.requestId, error: "MISSING_TOKEN", message: "Use Authorization: Bearer <api_token>" });
   }
   const row = lookupActiveToken(auth.slice(7).trim());
   if (!row) return res.status(403).json({ request_id: req.requestId, error: "INVALID_TOKEN", message: "Token inválido ou revogado." });
+  if (!(await apiKeyAllowed(row))) return portalAccessRevoked(req, res);
   req.tokenRow = row;
   next();
 }
@@ -821,6 +1094,9 @@ function requireToken(req, res, next) {
 // Rotas QRNG Open API: o MESMO token pessoal, em Authorization: Bearer (como as rotas atuais) ou em X-API-Key
 // (forma também prevista pelo contrato). Não há contas nem chaves próprias desta interface.
 function requireApiCredential(req, res, next) {
+  requireApiCredentialAsync(req, res, next).catch(next);
+}
+async function requireApiCredentialAsync(req, res, next) {
   const auth = req.headers.authorization || "";
   const bearer = auth.startsWith("Bearer ") ? auth.slice(7).trim() : null;
   const xkey = typeof req.headers["x-api-key"] === "string" ? req.headers["x-api-key"].trim() : null;
@@ -835,29 +1111,42 @@ function requireApiCredential(req, res, next) {
   }
   const row = lookupActiveToken(raw);
   if (!row) return res.status(403).json({ request_id: req.requestId, error: "INVALID_TOKEN", message: "Token inválido ou revogado." });
+  if (!(await apiKeyAllowed(row))) return portalAccessRevoked(req, res);
   req.tokenRow = row;
   next();
 }
 
-// Dual auth — para /me/* (aceita JWT ou API token)
+// Dual auth — para /me/* (aceita sessão do portal, JWT legado ou API token)
 function resolveUser(req, res, next) {
-  const auth = req.headers.authorization || "";
-  if (!auth.startsWith("Bearer ")) {
+  resolveUserAsync(req, res, next).catch(next);
+}
+async function resolveUserAsync(req, res, next) {
+  const portalTok = portalSessionToken(req);
+  const raw = bearerToken(req);
+  if (portalTok) {
+    const r = await authenticatePortalDeveloper(req, portalTok, raw);
+    if (r.error) return res.status(r.error.status).json(r.error.body);
+    req.user     = r.user;
+    req.portal   = r.portal;
+    req.tokenRow = db.prepare("SELECT * FROM api_tokens WHERE user_id = ? AND status = 'active'").get(r.devUser.id) || null;
+    req.authMode = "portal";
+    return next();
+  }
+  if (!raw) {
     return res.status(401).json({ error: "UNAUTHORIZED", message: "Autenticação necessária." });
   }
-  const raw = auth.slice(7).trim();
-  try {
-    const payload = jwt.verify(raw, JWT_SECRET, { algorithms: ["HS256"] });
-    if (!db.prepare("SELECT 1 FROM users WHERE id = ?").get(payload.sub)) {
-      return res.status(401).json({ error: "UNAUTHORIZED", message: "Autenticação necessária." });
-    }
-    req.user     = payload;
-    req.tokenRow = db.prepare("SELECT * FROM api_tokens WHERE user_id = ? AND status = 'active'").get(payload.sub) || null;
+  const j = legacyJwtUser(raw);
+  if (j) {
+    req.user     = j.payload;
+    req.tokenRow = db.prepare("SELECT * FROM api_tokens WHERE user_id = ? AND status = 'active'").get(j.row.id) || null;
     req.authMode = "jwt";
     return next();
-  } catch (_) {}
-  const row = db.prepare("SELECT * FROM api_tokens WHERE token_hash = ? AND status = 'active'").get(hashToken(raw));
-  if (row) { req.tokenRow = row; req.authMode = "token"; return next(); }
+  }
+  const row = lookupActiveToken(raw);
+  if (row) {
+    if (!(await apiKeyAllowed(row))) return portalAccessRevoked(req, res);
+    req.tokenRow = row; req.authMode = "token"; return next();
+  }
   return res.status(401).json({ error: "UNAUTHORIZED", message: "Token ou sessão inválidos." });
 }
 
@@ -893,12 +1182,28 @@ function passwordProblem(password) {
 function authLimitHandler(req, res) {
   res.status(429).json({ error: "TOO_MANY_ATTEMPTS", message: "Muitas tentativas. Tente novamente mais tarde." });
 }
+// Login bloqueado pelo limitador também vira evento (auth.login failure
+// rate_limited), com o e-mail só como pseudônimo (subject_hash).
+function loginLimitHandler(req, res) {
+  const email = (req.body || {}).email;
+  audit.record({ type: "auth.login", outcome: "failure", req, subjectEmail: typeof email === "string" ? email : null,
+    metadata: { reason: "rate_limited" } });
+  authLimitHandler(req, res);
+}
 const loginLimiterByIp = rateLimit({
-  windowMs: 15 * 60 * 1000, max: 50, standardHeaders: true, legacyHeaders: false, handler: authLimitHandler,
+  windowMs: 15 * 60 * 1000, max: 50, standardHeaders: true, legacyHeaders: false, handler: loginLimitHandler,
 });
+// Teto de tentativas de senha por conta legada, em UM balde só (store próprio)
+// para o login e para o vínculo (POST /v1/identity/link também confere a senha
+// legada com bcrypt): várias contas do portal ou vários IPs não somam
+// tentativas extras contra o mesmo e-mail.
+const LOGIN_EMAIL_MAX_PER_WINDOW = 10;
+const legacyEmailGuessStore = new rateLimit.MemoryStore();
+const legacyEmailGuessKey = (email) => `email:${String(email || "").trim().toLowerCase()}`;
 const loginLimiterByEmail = rateLimit({
-  windowMs: 15 * 60 * 1000, max: 10, standardHeaders: true, legacyHeaders: false, handler: authLimitHandler,
-  keyGenerator: (req) => `email:${String((req.body || {}).email || "").trim().toLowerCase()}`,
+  windowMs: 15 * 60 * 1000, max: LOGIN_EMAIL_MAX_PER_WINDOW, standardHeaders: true, legacyHeaders: false, handler: loginLimitHandler,
+  store: legacyEmailGuessStore,
+  keyGenerator: (req) => legacyEmailGuessKey((req.body || {}).email),
 });
 const registerLimiterByIp = rateLimit({
   windowMs: 60 * 60 * 1000, max: 20, standardHeaders: true, legacyHeaders: false, handler: authLimitHandler,
@@ -953,7 +1258,7 @@ app.post("/v1/auth/register", registerLimiterByIp, async (req, res) => {
   try {
     const hash   = await bcrypt.hash(password, 12);
     const result = db.prepare("INSERT INTO users (email, password_hash, role, created_at) VALUES (?, ?, ?, ?)").run(email.toLowerCase(), hash, role, now);
-    const token  = jwt.sign({ sub: result.lastInsertRowid, email: email.toLowerCase(), role }, JWT_SECRET, { expiresIn: "30d" });
+    const token  = signLegacyJwt({ sub: result.lastInsertRowid, email: email.toLowerCase(), role });
     res.json({ token, email: email.toLowerCase(), role });
   } catch (err) {
     if (err.message.includes("UNIQUE")) return res.status(409).json({ error: "EMAIL_TAKEN", message: "Este e-mail já está cadastrado." });
@@ -989,17 +1294,21 @@ app.post("/v1/auth/register", registerLimiterByIp, async (req, res) => {
  *         description: Muitas tentativas (50/15 min por IP, 10/15 min por e-mail). error=TOO_MANY_ATTEMPTS.
  *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
  */
-app.post("/v1/auth/login", loginLimiterByIp, loginLimiterByEmail, async (req, res) => {
+app.post("/v1/auth/login", attachRequestId, loginLimiterByIp, loginLimiterByEmail, async (req, res) => {
   const { email, password } = req.body || {};
   if (!email || !password || typeof email !== "string" || typeof password !== "string") {
     return res.status(400).json({ error: "MISSING_FIELDS" });
   }
-  const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email.toLowerCase());
+  // Só contas LEGADAS têm e-mail/senha aqui (as do portal têm email NULL e nunca casam).
+  const user = db.prepare("SELECT * FROM users WHERE email = ? AND auth_source = 'legacy' AND password_hash IS NOT NULL").get(email.toLowerCase());
   const valid = await bcrypt.compare(password, user ? user.password_hash : DUMMY_PASSWORD_HASH);
   if (!user || !valid) {
+    audit.record({ type: "auth.login", outcome: "failure", req, subjectEmail: email, metadata: { reason: "bad_credentials" } });
     return res.status(401).json({ error: "INVALID_CREDENTIALS", message: "E-mail ou senha incorretos." });
   }
-  const token = jwt.sign({ sub: user.id, email: user.email, role: user.role }, JWT_SECRET, { expiresIn: "30d" });
+  db.prepare("UPDATE users SET last_login_at = ? WHERE id = ?").run(new Date().toISOString(), user.id);
+  audit.record({ type: "auth.login", outcome: "success", req, actorUserId: user.id, metadata: { auth_mode: "legacy" } });
+  const token = signLegacyJwt({ sub: user.id, email: user.email, role: user.role });
   res.json({ token, email: user.email, role: user.role });
 });
 
@@ -1009,7 +1318,7 @@ app.post("/v1/auth/login", loginLimiterByIp, loginLimiterByEmail, async (req, re
  *   get:
  *     tags: [Auth]
  *     summary: Retorna os dados da conta autenticada.
- *     security: [{ bearerAuthJWT: [] }]
+ *     security: [{ bearerAuthJWT: [] }, { portalSession: [] }]
  *     responses:
  *       200:
  *         description: Dados do usuário.
@@ -1022,7 +1331,11 @@ app.post("/v1/auth/login", loginLimiterByIp, loginLimiterByEmail, async (req, re
  *                 email: { type: string, format: email }
  *                 role: { type: string, enum: [user, admin] }
  *                 created_at: { type: string, format: date-time }
+ *       400: { $ref: '#/components/responses/AmbiguousPortalCredentials' }
  *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       403: { $ref: '#/components/responses/QrngAccessDenied' }
+ *       404: { $ref: '#/components/responses/DeveloperAccountNotProvisioned' }
+ *       503: { $ref: '#/components/responses/IdentityUnavailable' }
  */
 app.get("/v1/auth/me", requireAuth, (req, res) => {
   const user = db.prepare("SELECT id, email, role, created_at FROM users WHERE id = ?").get(req.user.sub);
@@ -1036,7 +1349,7 @@ app.get("/v1/auth/me", requireAuth, (req, res) => {
  *   delete:
  *     tags: [Auth]
  *     summary: Exclui a própria conta (exige a senha). Tokens são apagados; registros de uso ficam anônimos.
- *     security: [{ bearerAuthJWT: [] }]
+ *     security: [{ bearerAuthJWT: [] }, { portalSession: [] }]
  *     requestBody:
  *       required: true
  *       content:
@@ -1055,14 +1368,22 @@ app.get("/v1/auth/me", requireAuth, (req, res) => {
  *               type: object
  *               properties:
  *                 deleted: { type: boolean }
+ *       400: { $ref: '#/components/responses/AmbiguousPortalCredentials' }
  *       401: { $ref: '#/components/responses/Unauthorized' }
  *       403:
- *         description: Senha incorreta (INVALID_PASSWORD).
+ *         description: Senha incorreta (INVALID_PASSWORD). Com X-Portal-Session, também QRNG_ACCESS_DENIED (conta do portal sem acesso ao QRNG).
  *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       404: { $ref: '#/components/responses/DeveloperAccountNotProvisioned' }
+ *       503: { $ref: '#/components/responses/IdentityUnavailable' }
  */
 app.delete("/v1/auth/me", requireAuth, async (req, res) => {
   const { password } = req.body || {};
   const user = db.prepare("SELECT id, password_hash FROM users WHERE id = ?").get(req.user.sub);
+  // Conta criada pelo portal não tem senha local: não há o que conferir aqui
+  // (bcrypt.compare com hash NULL lançaria). A exclusão dela é pelo administrador.
+  if (!user.password_hash) {
+    return res.status(403).json({ error: "INVALID_PASSWORD", message: "Conta criada pelo portal: peça a exclusão ao administrador." });
+  }
   if (typeof password !== "string" || !(await bcrypt.compare(password, user.password_hash))) {
     return res.status(403).json({ error: "INVALID_PASSWORD", message: "Senha incorreta." });
   }
@@ -1082,15 +1403,19 @@ app.delete("/v1/auth/me", requireAuth, async (req, res) => {
  *       O valor completo do token só é retornado nesta chamada -- apenas o
  *       prefixo fica recuperável depois via GET /me/token. Use
  *       /me/token/rotate para gerar um novo se perdê-lo.
- *     security: [{ bearerAuthJWT: [] }]
+ *     security: [{ bearerAuthJWT: [] }, { portalSession: [] }]
  *     responses:
  *       200:
  *         description: Token criado.
  *         content: { application/json: { schema: { $ref: '#/components/schemas/TokenIssued' } } }
+ *       400: { $ref: '#/components/responses/AmbiguousPortalCredentials' }
  *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       403: { $ref: '#/components/responses/QrngAccessDenied' }
+ *       404: { $ref: '#/components/responses/DeveloperAccountNotProvisioned' }
  *       409:
  *         description: Usuário já tem um token ativo.
  *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       503: { $ref: '#/components/responses/IdentityUnavailable' }
  */
 app.post("/v1/tokens", requireAuth, (req, res) => {
   const existing = db.prepare("SELECT id FROM api_tokens WHERE user_id = ? AND status = 'active'").get(req.user.sub);
@@ -1114,12 +1439,16 @@ app.post("/v1/tokens", requireAuth, (req, res) => {
  *   get:
  *     tags: [Tokens]
  *     summary: Retorna metadados do token ativo (nunca o valor completo).
- *     security: [{ bearerAuthJWT: [] }, { bearerAuthToken: [] }]
+ *     security: [{ bearerAuthJWT: [] }, { bearerAuthToken: [] }, { portalSession: [] }]
  *     responses:
  *       200:
  *         description: Metadados do token, ou { has_token false } se nenhum existir.
  *         content: { application/json: { schema: { $ref: '#/components/schemas/TokenInfo' } } }
+ *       400: { $ref: '#/components/responses/AmbiguousPortalCredentials' }
  *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       403: { $ref: '#/components/responses/QrngAccessDenied' }
+ *       404: { $ref: '#/components/responses/DeveloperAccountNotProvisioned' }
+ *       503: { $ref: '#/components/responses/IdentityUnavailable' }
  */
 app.get("/v1/me/token", resolveUser, (req, res) => {
   const row = req.tokenRow;
@@ -1147,15 +1476,18 @@ app.get("/v1/me/token", resolveUser, (req, res) => {
  *   post:
  *     tags: [Tokens]
  *     summary: Revoga o token atual e emite um novo (mesma cota/nome).
- *     security: [{ bearerAuthJWT: [] }, { bearerAuthToken: [] }]
+ *     security: [{ bearerAuthJWT: [] }, { bearerAuthToken: [] }, { portalSession: [] }]
  *     responses:
  *       200:
  *         description: Novo token emitido.
  *         content: { application/json: { schema: { $ref: '#/components/schemas/TokenIssued' } } }
+ *       400: { $ref: '#/components/responses/AmbiguousPortalCredentials' }
  *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       403: { $ref: '#/components/responses/QrngAccessDenied' }
  *       404:
- *         description: Nenhum token ativo encontrado.
+ *         description: Nenhum token ativo encontrado. Com X-Portal-Session, também DEVELOPER_ACCOUNT_NOT_PROVISIONED (identidade do portal sem conta de desenvolvedor).
  *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       503: { $ref: '#/components/responses/IdentityUnavailable' }
  */
 app.post("/v1/me/token/rotate", resolveUser, (req, res) => {
   const old = req.tokenRow;
@@ -1178,7 +1510,7 @@ app.post("/v1/me/token/rotate", resolveUser, (req, res) => {
  *   post:
  *     tags: [Tokens]
  *     summary: Revoga o token ativo (sem emitir um novo).
- *     security: [{ bearerAuthJWT: [] }, { bearerAuthToken: [] }]
+ *     security: [{ bearerAuthJWT: [] }, { bearerAuthToken: [] }, { portalSession: [] }]
  *     responses:
  *       200:
  *         description: Token revogado.
@@ -1189,10 +1521,13 @@ app.post("/v1/me/token/rotate", resolveUser, (req, res) => {
  *               properties:
  *                 message: { type: string }
  *                 revoked_at: { type: string, format: date-time }
+ *       400: { $ref: '#/components/responses/AmbiguousPortalCredentials' }
  *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       403: { $ref: '#/components/responses/QrngAccessDenied' }
  *       404:
- *         description: Nenhum token ativo encontrado.
+ *         description: Nenhum token ativo encontrado. Com X-Portal-Session, também DEVELOPER_ACCOUNT_NOT_PROVISIONED (identidade do portal sem conta de desenvolvedor).
  *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       503: { $ref: '#/components/responses/IdentityUnavailable' }
  */
 app.post("/v1/me/token/revoke", resolveUser, (req, res) => {
   const row = req.tokenRow;
@@ -1210,12 +1545,16 @@ app.post("/v1/me/token/revoke", resolveUser, (req, res) => {
  *   get:
  *     tags: [Usage]
  *     summary: Cota diária, uso hoje/7d/30d e histórico diário do token.
- *     security: [{ bearerAuthJWT: [] }, { bearerAuthToken: [] }]
+ *     security: [{ bearerAuthJWT: [] }, { bearerAuthToken: [] }, { portalSession: [] }]
  *     responses:
  *       200:
  *         description: Resumo de uso.
  *         content: { application/json: { schema: { $ref: '#/components/schemas/UsageResponse' } } }
+ *       400: { $ref: '#/components/responses/AmbiguousPortalCredentials' }
  *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       403: { $ref: '#/components/responses/QrngAccessDenied' }
+ *       404: { $ref: '#/components/responses/DeveloperAccountNotProvisioned' }
+ *       503: { $ref: '#/components/responses/IdentityUnavailable' }
  */
 app.get("/v1/me/usage", resolveUser, (req, res) => {
   const row = req.tokenRow;
@@ -1262,7 +1601,7 @@ app.get("/v1/me/usage", resolveUser, (req, res) => {
  *   get:
  *     tags: [Usage]
  *     summary: Histórico das últimas chamadas feitas com o token.
- *     security: [{ bearerAuthJWT: [] }, { bearerAuthToken: [] }]
+ *     security: [{ bearerAuthJWT: [] }, { bearerAuthToken: [] }, { portalSession: [] }]
  *     parameters:
  *       - name: limit
  *         in: query
@@ -1279,7 +1618,11 @@ app.get("/v1/me/usage", resolveUser, (req, res) => {
  *                 requests:
  *                   type: array
  *                   items: { $ref: '#/components/schemas/RequestLogEntry' }
+ *       400: { $ref: '#/components/responses/AmbiguousPortalCredentials' }
  *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       403: { $ref: '#/components/responses/QrngAccessDenied' }
+ *       404: { $ref: '#/components/responses/DeveloperAccountNotProvisioned' }
+ *       503: { $ref: '#/components/responses/IdentityUnavailable' }
  */
 app.get("/v1/me/requests", resolveUser, (req, res) => {
   const row = req.tokenRow;
@@ -1300,7 +1643,7 @@ app.get("/v1/me/requests", resolveUser, (req, res) => {
  *   get:
  *     tags: [Health]
  *     summary: Histórico de disponibilidade do upstream FPGA (últimas 500 transições, uptime 24h).
- *     security: [{ bearerAuthJWT: [] }, { bearerAuthToken: [] }]
+ *     security: [{ bearerAuthJWT: [] }, { bearerAuthToken: [] }, { portalSession: [] }]
  *     responses:
  *       200:
  *         description: Status atual, uptime estimado nas últimas 24h e eventos recentes.
@@ -1325,7 +1668,11 @@ app.get("/v1/me/requests", resolveUser, (req, res) => {
  *                       response_ms: { type: integer, nullable: true }
  *                       detail: { type: string, nullable: true }
  *                       checked_at: { type: string, format: date-time }
+ *       400: { $ref: '#/components/responses/AmbiguousPortalCredentials' }
  *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       403: { $ref: '#/components/responses/QrngAccessDenied' }
+ *       404: { $ref: '#/components/responses/DeveloperAccountNotProvisioned' }
+ *       503: { $ref: '#/components/responses/IdentityUnavailable' }
  */
 app.get("/v1/upstream/status", resolveUser, (req, res) => {
   const events = db.prepare("SELECT status, response_ms, detail, checked_at FROM upstream_health_log ORDER BY id DESC LIMIT 50").all();
@@ -1356,7 +1703,7 @@ app.get("/v1/upstream/status", resolveUser, (req, res) => {
  *   get:
  *     tags: [Admin]
  *     summary: Lista todos os tokens de todos os usuários (requer role=admin).
- *     security: [{ bearerAuthJWT: [] }]
+ *     security: [{ bearerAuthJWT: [] }, { portalSession: [] }]
  *     responses:
  *       200:
  *         description: Lista de tokens com uso de hoje.
@@ -1381,8 +1728,13 @@ app.get("/v1/upstream/status", resolveUser, (req, res) => {
  *                       email: { type: string, format: email }
  *                       requests_today: { type: integer }
  *                       bytes_today: { type: integer }
+ *       400: { $ref: '#/components/responses/AmbiguousPortalCredentials' }
  *       401: { $ref: '#/components/responses/Unauthorized' }
- *       403: { $ref: '#/components/responses/Forbidden' }
+ *       403:
+ *         description: Sem permissão (FORBIDDEN, rota de admin sem role=admin). Com X-Portal-Session, também QRNG_ACCESS_DENIED (conta do portal sem acesso ao QRNG).
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       404: { $ref: '#/components/responses/DeveloperAccountNotProvisioned' }
+ *       503: { $ref: '#/components/responses/IdentityUnavailable' }
  */
 app.get("/v1/admin/tokens", requireAuth, requireAdmin, (req, res) => {
   const today  = new Date().toISOString().slice(0, 10);
@@ -1405,7 +1757,7 @@ app.get("/v1/admin/tokens", requireAuth, requireAdmin, (req, res) => {
  *   post:
  *     tags: [Admin]
  *     summary: Revoga o token de qualquer usuário (requer role=admin).
- *     security: [{ bearerAuthJWT: [] }]
+ *     security: [{ bearerAuthJWT: [] }, { portalSession: [] }]
  *     parameters:
  *       - name: id
  *         in: path
@@ -1414,16 +1766,23 @@ app.get("/v1/admin/tokens", requireAuth, requireAdmin, (req, res) => {
  *     responses:
  *       200:
  *         description: Token revogado.
+ *       400: { $ref: '#/components/responses/AmbiguousPortalCredentials' }
  *       401: { $ref: '#/components/responses/Unauthorized' }
- *       403: { $ref: '#/components/responses/Forbidden' }
- *       404:
- *         description: Token não encontrado.
+ *       403:
+ *         description: Sem permissão (FORBIDDEN, rota de admin sem role=admin). Com X-Portal-Session, também QRNG_ACCESS_DENIED (conta do portal sem acesso ao QRNG).
  *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       404:
+ *         description: Token não encontrado. Com X-Portal-Session, também DEVELOPER_ACCOUNT_NOT_PROVISIONED (identidade do portal sem conta de desenvolvedor).
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       503: { $ref: '#/components/responses/IdentityUnavailable' }
  */
 app.post("/v1/admin/tokens/:id/revoke", requireAuth, requireAdmin, (req, res) => {
   const now    = new Date().toISOString();
   const result = db.prepare("UPDATE api_tokens SET status = 'revoked', revoked_at = ? WHERE id = ?").run(now, req.params.id);
   if (result.changes === 0) return res.status(404).json({ error: "NOT_FOUND" });
+  const owner = db.prepare("SELECT user_id FROM api_tokens WHERE id = ?").get(req.params.id);
+  audit.record({ type: "admin.token.revoked", outcome: "success", req, actorUserId: Number(req.user.sub),
+    targetUserId: owner ? owner.user_id : null, metadata: { token_id: Number(req.params.id) } });
   res.json({ message: "Token revogado.", revoked_at: now });
 });
 
@@ -1433,7 +1792,7 @@ app.post("/v1/admin/tokens/:id/revoke", requireAuth, requireAdmin, (req, res) =>
  *   patch:
  *     tags: [Admin]
  *     summary: Ajusta a cota diária de requisições de um token (requer role=admin).
- *     security: [{ bearerAuthJWT: [] }]
+ *     security: [{ bearerAuthJWT: [] }, { portalSession: [] }]
  *     parameters:
  *       - name: id
  *         in: path
@@ -1452,20 +1811,27 @@ app.post("/v1/admin/tokens/:id/revoke", requireAuth, requireAdmin, (req, res) =>
  *       200:
  *         description: Cota atualizada.
  *       400:
- *         description: quota_daily ausente ou inválida.
+ *         description: quota_daily ausente ou inválida. Com X-Portal-Session, também AMBIGUOUS_CREDENTIALS (Authorization de outra conta junto).
  *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
  *       401: { $ref: '#/components/responses/Unauthorized' }
- *       403: { $ref: '#/components/responses/Forbidden' }
+ *       403:
+ *         description: Sem permissão (FORBIDDEN, rota de admin sem role=admin). Com X-Portal-Session, também QRNG_ACCESS_DENIED (conta do portal sem acesso ao QRNG).
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
  *       404:
- *         description: Token não encontrado.
+ *         description: Token não encontrado. Com X-Portal-Session, também DEVELOPER_ACCOUNT_NOT_PROVISIONED (identidade do portal sem conta de desenvolvedor).
  *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
  *       413: { $ref: '#/components/responses/PayloadTooLarge' }
+ *       503: { $ref: '#/components/responses/IdentityUnavailable' }
  */
 app.patch("/v1/admin/tokens/:id/quota", requireAuth, requireAdmin, (req, res) => {
   const quota  = parseInt(req.body.quota_daily, 10);
   if (!quota || quota < 1) return res.status(400).json({ error: "INVALID_QUOTA" });
+  const prev = db.prepare("SELECT user_id, quota_daily FROM api_tokens WHERE id = ?").get(req.params.id);
   const result = db.prepare("UPDATE api_tokens SET quota_daily = ? WHERE id = ?").run(quota, req.params.id);
   if (result.changes === 0) return res.status(404).json({ error: "NOT_FOUND" });
+  audit.record({ type: "admin.token.quota_changed", outcome: "success", req, actorUserId: Number(req.user.sub),
+    targetUserId: prev ? prev.user_id : null,
+    metadata: { token_id: Number(req.params.id), quota_before: prev ? prev.quota_daily : null, quota_after: quota } });
   res.json({ message: "Cota atualizada.", quota_daily: quota });
 });
 
@@ -1475,7 +1841,7 @@ app.patch("/v1/admin/tokens/:id/quota", requireAuth, requireAdmin, (req, res) =>
  *   get:
  *     tags: [Admin]
  *     summary: Lista todos os usuários (requer role=admin).
- *     security: [{ bearerAuthJWT: [] }]
+ *     security: [{ bearerAuthJWT: [] }, { portalSession: [] }]
  *     responses:
  *       200:
  *         description: Lista de usuários.
@@ -1493,8 +1859,13 @@ app.patch("/v1/admin/tokens/:id/quota", requireAuth, requireAdmin, (req, res) =>
  *                       email: { type: string, format: email }
  *                       role: { type: string }
  *                       created_at: { type: string, format: date-time }
+ *       400: { $ref: '#/components/responses/AmbiguousPortalCredentials' }
  *       401: { $ref: '#/components/responses/Unauthorized' }
- *       403: { $ref: '#/components/responses/Forbidden' }
+ *       403:
+ *         description: Sem permissão (FORBIDDEN, rota de admin sem role=admin). Com X-Portal-Session, também QRNG_ACCESS_DENIED (conta do portal sem acesso ao QRNG).
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       404: { $ref: '#/components/responses/DeveloperAccountNotProvisioned' }
+ *       503: { $ref: '#/components/responses/IdentityUnavailable' }
  */
 app.get("/v1/admin/users", requireAuth, requireAdmin, (req, res) => {
   const users = db.prepare("SELECT id, email, role, created_at FROM users ORDER BY created_at DESC").all();
@@ -1507,7 +1878,7 @@ app.get("/v1/admin/users", requireAuth, requireAdmin, (req, res) => {
  *   delete:
  *     tags: [Admin]
  *     summary: Exclui a conta de um usuário (atendimento a pedido de exclusão). Requer role=admin.
- *     security: [{ bearerAuthJWT: [] }]
+ *     security: [{ bearerAuthJWT: [] }, { portalSession: [] }]
  *     parameters:
  *       - name: id
  *         in: path
@@ -1517,11 +1888,14 @@ app.get("/v1/admin/users", requireAuth, requireAdmin, (req, res) => {
  *       200:
  *         description: Conta excluída.
  *       400:
- *         description: Tentativa de excluir a própria conta de administrador (CANNOT_DELETE_SELF).
+ *         description: Tentativa de excluir a própria conta de administrador (CANNOT_DELETE_SELF). Com X-Portal-Session, também AMBIGUOUS_CREDENTIALS (Authorization de outra conta junto).
  *       401: { $ref: '#/components/responses/Unauthorized' }
- *       403: { $ref: '#/components/responses/Forbidden' }
+ *       403:
+ *         description: Sem permissão (FORBIDDEN, rota de admin sem role=admin). Com X-Portal-Session, também QRNG_ACCESS_DENIED (conta do portal sem acesso ao QRNG).
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
  *       404:
- *         description: Usuário não encontrado.
+ *         description: Usuário não encontrado. Com X-Portal-Session, também DEVELOPER_ACCOUNT_NOT_PROVISIONED (identidade do portal sem conta de desenvolvedor).
+ *       503: { $ref: '#/components/responses/IdentityUnavailable' }
  */
 app.delete("/v1/admin/users/:id", requireAuth, requireAdmin, (req, res) => {
   const id = Number(req.params.id);
@@ -1529,9 +1903,698 @@ app.delete("/v1/admin/users/:id", requireAuth, requireAdmin, (req, res) => {
   if (id === Number(req.user.sub)) {
     return res.status(400).json({ error: "CANNOT_DELETE_SELF", message: "Use outro administrador para remover esta conta." });
   }
-  if (!db.prepare("SELECT 1 FROM users WHERE id = ?").get(id)) return res.status(404).json({ error: "USER_NOT_FOUND" });
+  const target = db.prepare("SELECT auth_source FROM users WHERE id = ?").get(id);
+  if (!target) return res.status(404).json({ error: "USER_NOT_FOUND" });
   deleteUserData(id);
+  audit.record({ type: "admin.user.deleted", outcome: "success", req, actorUserId: Number(req.user.sub), targetUserId: id,
+    metadata: { auth_source: target.auth_source } });
   res.json({ deleted: true });
+});
+
+/**
+ * @openapi
+ * /admin/audit:
+ *   get:
+ *     tags: [Admin]
+ *     summary: Eventos de auditoria da client-api (requer role=admin).
+ *     description: >
+ *       Login legado, recuperação de senha, provisão/vínculo de identidade,
+ *       negações e ações administrativas. Nunca contém senha, JWT, token de
+ *       recuperação/reauth, link nem e-mail (falhas e eventos anônimos só têm
+ *       subject_hash, um pseudônimo HMAC). Mais recentes primeiro.
+ *     security: [{ bearerAuthJWT: [] }, { portalSession: [] }]
+ *     parameters:
+ *       - { name: type, in: query, schema: { type: string }, description: "Filtra por event_type (ex.: auth.login)." }
+ *       - { name: outcome, in: query, schema: { type: string, enum: [success, failure, denied] } }
+ *       - { name: before, in: query, schema: { type: string }, description: "Paginação: id numérico (eventos com id menor) ou data ISO (eventos anteriores)." }
+ *       - { name: limit, in: query, schema: { type: integer, default: 100, maximum: 500 } }
+ *     responses:
+ *       200:
+ *         description: Lista de eventos.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 events:
+ *                   type: array
+ *                   items: { $ref: '#/components/schemas/AuditEvent' }
+ *       400: { $ref: '#/components/responses/AmbiguousPortalCredentials' }
+ *       401: { $ref: '#/components/responses/Unauthorized' }
+ *       403:
+ *         description: Sem permissão (FORBIDDEN, rota de admin sem role=admin). Com X-Portal-Session, também QRNG_ACCESS_DENIED (conta do portal sem acesso ao QRNG).
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       404: { $ref: '#/components/responses/DeveloperAccountNotProvisioned' }
+ *       503: { $ref: '#/components/responses/IdentityUnavailable' }
+ */
+app.get("/v1/admin/audit", requireAuth, requireAdmin, (req, res) => {
+  const q = req.query || {};
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ events: audit.list({ type: q.type, outcome: q.outcome, before: q.before, limit: q.limit }) });
+});
+
+// ── Tarefas em segundo plano (respostas que não podem depender do resultado) ──
+// O pedido de recuperação responde 202 ANTES de procurar a conta e falar com a
+// fila de e-mail do Bongo: o tempo de resposta é o mesmo exista a conta ou não
+// (sem enumeração por latência). Os testes esperam com waitForBackgroundJobs().
+const backgroundJobs = new Set();
+function runInBackground(fn) {
+  const p = Promise.resolve()
+    .then(fn)
+    .catch((e) => console.error(`[background] tarefa falhou: ${e && e.code ? e.code : (e && e.name) || "erro"}`))
+    .finally(() => backgroundJobs.delete(p));
+  backgroundJobs.add(p);
+}
+async function waitForBackgroundJobs() {
+  while (backgroundJobs.size > 0) await Promise.allSettled([...backgroundJobs]);
+}
+
+// ── Identidade integrada: sessão do portal ↔ conta de desenvolvedor ──────────
+// (doc 155, 2.5). Autenticação = X-Portal-Session (introspecção). Vínculo de
+// uma conta legada só com prova de controle das DUAS contas: reauth recente no
+// Bongo (reauthToken de uso único, finalidade link_qrng_developer) E e-mail +
+// senha da conta legada. NUNCA por igualdade de e-mail.
+
+const LINK_REAUTH_PURPOSE = "link_qrng_developer";
+
+function developerAccountView(row) {
+  if (!row) return null;
+  const tok = db.prepare("SELECT 1 FROM api_tokens WHERE user_id = ? AND status = 'active'").get(row.id);
+  return { id: row.id, auth_source: row.auth_source, linked_at: row.linked_at, has_token: Boolean(tok) };
+}
+
+function newRateStore() { return new rateLimit.MemoryStore(); }
+const identityRateStores = [legacyEmailGuessStore];
+function identityLimiter(opts) {
+  const store = newRateStore();
+  identityRateStores.push(store);
+  return rateLimit({ standardHeaders: true, legacyHeaders: false, handler: authLimitHandler, store, ...opts });
+}
+
+// Tentativas de vínculo: só FALHAS contam (como o limitador de senha do Bongo).
+const linkLimiterByIp = identityLimiter({ windowMs: 15 * 60 * 1000, max: 20, skipSuccessfulRequests: true });
+const linkLimiterByPortalUser = identityLimiter({
+  windowMs: 15 * 60 * 1000, max: 10, skipSuccessfulRequests: true,
+  keyGenerator: (req) => `portal:${req.portal ? req.portal.id : "?"}`,
+});
+
+/**
+ * @openapi
+ * /identity/status:
+ *   get:
+ *     tags: [Identity]
+ *     summary: Identidade do portal e a conta de desenvolvedor do QRNG ligada a ela (se houver).
+ *     description: >
+ *       Autentica pela sessão do portal (cabeçalho X-Portal-Session), validada
+ *       no Bongo por introspecção. Não cria nem vincula nada: uma conta antiga
+ *       com o MESMO e-mail não é vinculada automaticamente (use /identity/link).
+ *     security: [{ portalSession: [] }]
+ *     responses:
+ *       200:
+ *         description: Estado da identidade.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/IdentityStatus' } } }
+ *       400: { $ref: '#/components/responses/AmbiguousPortalCredentials' }
+ *       401: { $ref: '#/components/responses/PortalSessionInvalid' }
+ *       403: { $ref: '#/components/responses/QrngAccessDenied' }
+ *       503: { $ref: '#/components/responses/IdentityUnavailable' }
+ */
+app.get("/v1/identity/status", attachRequestId, requirePortalSession, (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const dev = developerAccountView(req.devUser);
+  res.json({
+    portal: { id: req.portal.id, email: req.portal.email, name: req.portal.name },
+    developer_account: dev,
+    can_provision: !dev,
+    can_link: !dev,
+  });
+});
+
+/**
+ * @openapi
+ * /identity/provision:
+ *   post:
+ *     tags: [Identity]
+ *     summary: Cria a conta de desenvolvedor do QRNG para a identidade do portal (sem senha local).
+ *     description: >
+ *       A conta nasce vinculada (auth_source=portal), sem e-mail/senha locais —
+ *       não colide com uma conta antiga de mesmo e-mail e não tem login legado.
+ *       Papel sempre "user" (o papel de administrador da client-api não vem do portal).
+ *       Depois, emita o token de API com POST /tokens usando a mesma sessão do portal.
+ *     security: [{ portalSession: [] }]
+ *     responses:
+ *       201:
+ *         description: Conta criada.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 developer_account: { $ref: '#/components/schemas/DeveloperAccount' }
+ *       400: { $ref: '#/components/responses/AmbiguousPortalCredentials' }
+ *       401: { $ref: '#/components/responses/PortalSessionInvalid' }
+ *       403: { $ref: '#/components/responses/QrngAccessDenied' }
+ *       409:
+ *         description: A identidade do portal já tem conta de desenvolvedor (PORTAL_ALREADY_LINKED).
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       503: { $ref: '#/components/responses/IdentityUnavailable' }
+ */
+app.post("/v1/identity/provision", attachRequestId, requirePortalSession, (req, res) => {
+  const portal = req.portal;
+  if (req.devUser) {
+    audit.record({ type: "identity.provisioned", outcome: "failure", req, actorUserId: req.devUser.id,
+      metadata: { reason: "portal_already_linked", portal_user_id: portal.id } });
+    return res.status(409).json({ error: "PORTAL_ALREADY_LINKED", message: "Esta conta do portal já tem conta de desenvolvedor." });
+  }
+  const now = new Date().toISOString();
+  let id;
+  try {
+    id = Number(db.prepare(`
+      INSERT INTO users (email, password_hash, role, created_at, bongo_user_id, auth_source, linked_at, portal_email, last_login_at)
+      VALUES (NULL, NULL, 'user', ?, ?, 'portal', ?, ?, ?)
+    `).run(now, portal.id, now, portal.email, now).lastInsertRowid);
+  } catch (err) {
+    if (String(err.message).includes("UNIQUE")) {
+      return res.status(409).json({ error: "PORTAL_ALREADY_LINKED", message: "Esta conta do portal já tem conta de desenvolvedor." });
+    }
+    throw err;
+  }
+  audit.record({ type: "identity.provisioned", outcome: "success", req, actorUserId: id, targetUserId: id,
+    metadata: { portal_user_id: portal.id } });
+  const row = db.prepare("SELECT * FROM users WHERE id = ?").get(id);
+  res.status(201).json({ developer_account: developerAccountView(row) });
+});
+
+/**
+ * @openapi
+ * /identity/link:
+ *   post:
+ *     tags: [Identity]
+ *     summary: Vincula uma conta de desenvolvedor ANTIGA (e-mail e senha da client-api) à identidade do portal.
+ *     description: >
+ *       Exige prova de controle das duas contas: (1) sessão do portal +
+ *       reautenticação recente no portal (reauthToken de uso único, finalidade
+ *       link_qrng_developer, obtido em POST /api/auth/reauth do portal) e (2)
+ *       e-mail + senha da conta antiga. Igualdade de e-mail não basta. O vínculo
+ *       mantém id, token de API, cota e histórico; o login antigo continua
+ *       funcionando. Desvinculação só por script administrativo ou pela
+ *       redefinição de senha da conta antiga (POST /auth/password-reset/confirm).
+ *       Não envie Authorization de outra conta junto (400 AMBIGUOUS_CREDENTIALS).
+ *     security: [{ portalSession: [] }]
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [reauthToken, legacyEmail, legacyPassword]
+ *             properties:
+ *               reauthToken: { type: string }
+ *               legacyEmail: { type: string, format: email }
+ *               legacyPassword: { type: string }
+ *               lang: { type: string, enum: [pt, en], description: Idioma do aviso de vínculo enviado ao e-mail da conta antiga (padrão pt). }
+ *     responses:
+ *       200:
+ *         description: Conta vinculada. Um aviso (sem link) é enfileirado para o e-mail da conta antiga.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 linked: { type: boolean }
+ *                 developer_account: { $ref: '#/components/schemas/DeveloperAccount' }
+ *       400:
+ *         description: Campos ausentes (MISSING_FIELDS) ou Authorization de outra conta junto com X-Portal-Session (AMBIGUOUS_CREDENTIALS).
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       401: { $ref: '#/components/responses/PortalSessionInvalid' }
+ *       403:
+ *         description: >
+ *           REAUTH_REQUIRED (reauthToken ausente, inválido, vencido, já usado ou de outra finalidade),
+ *           INVALID_LEGACY_CREDENTIALS (e-mail/senha da conta antiga incorretos) ou QRNG_ACCESS_DENIED.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       409:
+ *         description: PORTAL_ALREADY_LINKED (esta identidade já tem conta) ou ACCOUNT_ALREADY_LINKED (a conta antiga já está vinculada).
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       413: { $ref: '#/components/responses/PayloadTooLarge' }
+ *       429:
+ *         description: >
+ *           Muitas tentativas de vínculo malsucedidas (TOO_MANY_ATTEMPTS): por IP, por conta do portal e
+ *           por conta antiga — este último no MESMO limite do login por e-mail (10/15 min somando login e vínculo).
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       503: { $ref: '#/components/responses/IdentityUnavailable' }
+ */
+app.post("/v1/identity/link", attachRequestId, linkLimiterByIp, requirePortalSession, linkLimiterByPortalUser, (req, res, next) => {
+  identityLink(req, res).catch(next);
+});
+async function identityLink(req, res) {
+  const portal = req.portal;
+  const { reauthToken, legacyEmail, legacyPassword } = req.body || {};
+  const fail = (status, error, message, reason, extra = {}) => {
+    audit.record({ type: "identity.linked", outcome: "failure", req, metadata: { reason, portal_user_id: portal.id }, ...extra });
+    return res.status(status).json({ error, message });
+  };
+  if (typeof legacyEmail !== "string" || typeof legacyPassword !== "string" || !legacyEmail || !legacyPassword) {
+    return res.status(400).json({ error: "MISSING_FIELDS", message: "Informe reauthToken, legacyEmail e legacyPassword." });
+  }
+  if (req.devUser) {
+    return fail(409, "PORTAL_ALREADY_LINKED", "Esta conta do portal já tem conta de desenvolvedor.", "portal_already_linked",
+      { actorUserId: req.devUser.id });
+  }
+  if (typeof reauthToken !== "string" || !reauthToken) {
+    return fail(403, "REAUTH_REQUIRED", "Confirme sua senha do portal antes de vincular a conta.", "reauth_missing");
+  }
+  // Mesmo balde do limite de login por e-mail: checado antes de gastar o
+  // reauth; só tentativas com senha legada ERRADA somam (abaixo).
+  const guessKey = legacyEmailGuessKey(legacyEmail);
+  const guesses = await legacyEmailGuessStore.get(guessKey);
+  if (guesses && guesses.totalHits >= LOGIN_EMAIL_MAX_PER_WINDOW) {
+    return fail(429, "TOO_MANY_ATTEMPTS", "Muitas tentativas. Tente novamente mais tarde.", "rate_limited",
+      { subjectEmail: legacyEmail });
+  }
+
+  // (1) Reautenticação no Bongo: uso único, mesma pessoa, mesma finalidade.
+  let info;
+  try {
+    info = await bongo.introspect(req.portalToken, { reauthToken, reauthPurpose: LINK_REAUTH_PURPOSE });
+  } catch (e) {
+    if (!(e instanceof IdentityUnavailableError)) throw e;
+    console.warn(`[identity] introspecção no Bongo indisponível (${e.code}) — vínculo recusado (falha fechada)`);
+    return res.status(503).json({ error: "IDENTITY_UNAVAILABLE", message: "Serviço de identidade do portal indisponível. Tente novamente em instantes." });
+  }
+  if (!info.active) return res.status(401).json({ error: "PORTAL_SESSION_INVALID", message: "Sessão do portal inválida ou expirada. Entre novamente no portal." });
+  if (!info.authorization || info.authorization.qrng !== true) {
+    return res.status(403).json({ error: "QRNG_ACCESS_DENIED", message: "Sua conta do portal não tem acesso ao QRNG." });
+  }
+  const reauthOk = info.user && info.user.id === portal.id && info.reauth && info.reauth.verified === true
+    && info.reauth.purpose === LINK_REAUTH_PURPOSE;
+  if (!reauthOk) {
+    audit.record({ type: "auth.reauth", outcome: "failure", req, metadata: { reason: "reauth_invalid", portal_user_id: portal.id } });
+    return fail(403, "REAUTH_REQUIRED", "Confirmação de senha do portal inválida ou vencida. Confirme de novo.", "reauth_invalid");
+  }
+
+  // (2) Credenciais da conta legada (bcrypt contra hash fictício se não existir:
+  // mesma latência com ou sem conta).
+  const legacy = db.prepare("SELECT * FROM users WHERE email = ? AND auth_source = 'legacy' AND password_hash IS NOT NULL")
+    .get(legacyEmail.trim().toLowerCase());
+  const valid = await bcrypt.compare(legacyPassword, legacy ? legacy.password_hash : DUMMY_PASSWORD_HASH);
+  if (!legacy || !valid) {
+    await legacyEmailGuessStore.increment(guessKey);
+    return fail(403, "INVALID_LEGACY_CREDENTIALS", "E-mail ou senha da conta de desenvolvedor incorretos.", "bad_legacy_credentials",
+      { subjectEmail: legacyEmail });
+  }
+  if (legacy.bongo_user_id) {
+    return fail(409, "ACCOUNT_ALREADY_LINKED", "Esta conta de desenvolvedor já está vinculada a outra conta do portal.",
+      "account_already_linked", { targetUserId: legacy.id });
+  }
+
+  const now = new Date().toISOString();
+  let changes;
+  try {
+    changes = db.prepare(`
+      UPDATE users SET bongo_user_id = ?, linked_at = ?, portal_email = ?
+      WHERE id = ? AND auth_source = 'legacy' AND bongo_user_id IS NULL
+    `).run(portal.id, now, portal.email, legacy.id).changes;
+  } catch (err) {
+    // UNIQUE(bongo_user_id): a mesma identidade do portal foi vinculada/provisionada em paralelo.
+    if (String(err.message).includes("UNIQUE")) {
+      return fail(409, "PORTAL_ALREADY_LINKED", "Esta conta do portal já tem conta de desenvolvedor.", "portal_already_linked",
+        { targetUserId: legacy.id });
+    }
+    throw err;
+  }
+  if (changes !== 1) {
+    return fail(409, "ACCOUNT_ALREADY_LINKED", "Esta conta de desenvolvedor já está vinculada a outra conta do portal.",
+      "account_already_linked", { targetUserId: legacy.id });
+  }
+  audit.record({ type: "identity.linked", outcome: "success", req, actorUserId: legacy.id, targetUserId: legacy.id,
+    metadata: { portal_user_id: portal.id } });
+  const row = db.prepare("SELECT * FROM users WHERE id = ?").get(legacy.id);
+  res.json({ linked: true, developer_account: developerAccountView(row) });
+  // Aviso ao e-mail da conta ANTIGA: um vínculo feito por quem soube a senha
+  // legada não passa despercebido (o dono redefine a senha, o que desfaz o
+  // vínculo). Sem segredo e sem o e-mail do portal no corpo.
+  const locale = (req.body || {}).lang === "en" ? "en" : "pt";
+  runInBackground(async () => {
+    try {
+      await bongo.enqueueMail({
+        template: "qrng_legacy_account_linked", to: legacy.email, locale, secret: null, secretExpiresAt: null,
+        idempotencyKey: `qrng-legacy-linked-${crypto.randomUUID()}`, validity: { kind: "none", ref: null },
+      });
+    } catch (e) {
+      console.warn(`[identity] aviso de vínculo NÃO enfileirado (${e && e.code ? e.code : "erro"})`);
+    }
+  });
+}
+
+// ── Recuperação de senha das contas LEGADAS (doc 155, 2.5 + 3) ────────────────
+// Token: 32 bytes do CSPRNG do SO (crypto.randomBytes — nunca o QRNG), base64url;
+// só o SHA-256 fica no banco. Pedido novo invalida os anteriores. O link vai
+// para a fila central de e-mail do Bongo (secret cifrado lá, apagado quando a
+// mensagem é aceita/cancelada/expira) e NUNCA para log, auditoria ou resposta.
+//
+// Bongo inacessível no pedido: a resposta continua o 202 genérico, o token é
+// MANTIDO (expira sozinho em QRNG_RESET_TOKEN_TTL_MINUTES), a falha fica na
+// auditoria (auth.password_reset.requested, outcome=failure,
+// reason=mail_queue_unavailable) e o e-mail simplesmente não sai — o usuário
+// pede de novo. Não há fila local: o Bongo é a única trilha de envio.
+//
+// Cancelamento ativo: ao invalidar (pedido novo) ou usar (confirmação) um
+// token, a client-api avisa o Bongo (POST /api/internal/v1/mail/cancel) para
+// que uma mensagem ainda não enviada com aquele link morra na fila. É
+// melhor-esforço: se falhar, o link já está morto aqui (quem valida o token é
+// a client-api) e o segredo expira no prazo do lado do Bongo.
+function cancelLegacyResetMails(tokenIds) {
+  const refs = [...new Set(tokenIds.map(String))];
+  if (refs.length === 0) return;
+  runInBackground(async () => {
+    try {
+      await bongo.cancelMail({ kind: "qrng_legacy_password_reset", refs });
+    } catch (e) {
+      console.warn(`[password-reset] cancelamento na fila do Bongo falhou (${e && e.code ? e.code : "erro"}); o token já está invalidado aqui`);
+    }
+  });
+}
+
+const RESET_TOKEN_RX = /^[A-Za-z0-9_-]{43}$/;
+const RESET_GENERIC_MESSAGE = "Se houver uma conta de desenvolvedor com este e-mail, enviaremos um link para redefinir a senha.";
+const resetEmailKey = (req) => `reset:${String((req.body || {}).email || "").trim().toLowerCase()}`;
+const resetRequestLimiterByIp = identityLimiter({ windowMs: 15 * 60 * 1000, max: 10 });
+const resetRequestLimiterByEmailMinute = identityLimiter({ windowMs: 60 * 1000, max: 1, keyGenerator: resetEmailKey });
+const resetRequestLimiterByEmailDay = identityLimiter({ windowMs: 24 * 60 * 60 * 1000, max: 5, keyGenerator: resetEmailKey });
+const resetTokenLimiterByIp = identityLimiter({ windowMs: 15 * 60 * 1000, max: 30 });
+
+function findUsableResetToken(token) {
+  if (typeof token !== "string" || !RESET_TOKEN_RX.test(token)) return null;
+  return db.prepare(`
+    SELECT t.* FROM password_reset_tokens t
+    JOIN users u ON u.id = t.user_id AND u.auth_source = 'legacy'
+    WHERE t.token_hash = ? AND t.used_at IS NULL AND t.invalidated_at IS NULL AND t.expires_at > ?
+  `).get(hashToken(token), new Date().toISOString()) || null;
+}
+
+// Contexto mínimo para a auditoria fora do ciclo da requisição (sem o corpo).
+function auditCtx(req) {
+  return { requestId: req.requestId, ip: req.ip || (req.socket && req.socket.remoteAddress) || null };
+}
+
+async function processLegacyResetRequest(email, locale, ctx) {
+  const user = db.prepare("SELECT id, email FROM users WHERE email = ? AND auth_source = 'legacy' AND password_hash IS NOT NULL").get(email);
+  if (!user) {
+    audit.record({ type: "auth.password_reset.requested", outcome: "success", req: ctx, subjectEmail: email,
+      metadata: { account_found: false, delivered_to_queue: false } });
+    return;
+  }
+  const raw = crypto.randomBytes(32).toString("base64url");
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const expiresAt = new Date(now.getTime() + QRNG_RESET_TOKEN_TTL_MINUTES * 60 * 1000).toISOString();
+  let tokenId;
+  let previousIds = [];
+  db.transaction(() => {
+    previousIds = db.prepare("SELECT id FROM password_reset_tokens WHERE user_id = ? AND used_at IS NULL AND invalidated_at IS NULL")
+      .all(user.id).map((r) => r.id);
+    db.prepare("UPDATE password_reset_tokens SET invalidated_at = ? WHERE user_id = ? AND used_at IS NULL AND invalidated_at IS NULL")
+      .run(nowIso, user.id);
+    tokenId = Number(db.prepare(`
+      INSERT INTO password_reset_tokens (user_id, token_hash, expires_at, created_at, requested_ip_prefix, sent_to_hash)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `).run(user.id, hashToken(raw), expiresAt, nowIso, ctx.ip ? truncateIp(ctx.ip) : null, audit.subjectHash(user.email)).lastInsertRowid);
+  })();
+  cancelLegacyResetMails(previousIds);
+  let delivered = false;
+  try {
+    await bongo.enqueueMail({
+      template: "qrng_legacy_password_reset",
+      to: user.email,
+      locale,
+      secret: `${QRNG_PASSWORD_RESET_URL}#token=${raw}`,
+      secretExpiresAt: expiresAt,
+      idempotencyKey: `qrng-legacy-reset-${crypto.randomUUID()}`,
+      validity: { kind: "qrng_legacy_password_reset", ref: String(tokenId) },
+    });
+    delivered = true;
+  } catch (e) {
+    console.warn(`[password-reset] fila de e-mail do Bongo indisponível (${e && e.code ? e.code : "erro"}); token mantido até expirar, e-mail NÃO enfileirado`);
+  }
+  audit.record({ type: "auth.password_reset.requested", outcome: delivered ? "success" : "failure", req: ctx,
+    targetUserId: user.id, subjectEmail: user.email,
+    metadata: { account_found: true, delivered_to_queue: delivered, reason: delivered ? undefined : "mail_queue_unavailable" } });
+}
+
+/**
+ * @openapi
+ * /auth/password-reset/request:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Pede o link de redefinição de senha de uma conta de desenvolvedor antiga (e-mail e senha).
+ *     description: >
+ *       Resposta SEMPRE 202 genérica, exista a conta ou não (o processamento é
+ *       feito depois da resposta). O link chega por e-mail, vale 30 minutos e é
+ *       de uso único; um pedido novo invalida os anteriores. Contas criadas pelo
+ *       portal não têm senha local — use a recuperação de senha do portal.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [email]
+ *             properties:
+ *               email: { type: string, format: email }
+ *               lang: { type: string, enum: [pt, en], default: pt }
+ *     responses:
+ *       202:
+ *         description: Pedido recebido (mensagem genérica).
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message: { type: string }
+ *       400:
+ *         description: E-mail ausente ou inválido (INVALID_EMAIL).
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       413: { $ref: '#/components/responses/PayloadTooLarge' }
+ *       429:
+ *         description: Muitos pedidos (10/15 min por IP; 1/min e 5/dia por e-mail). error=TOO_MANY_ATTEMPTS.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ */
+app.post("/v1/auth/password-reset/request", attachRequestId, resetRequestLimiterByIp, resetRequestLimiterByEmailMinute,
+  resetRequestLimiterByEmailDay, (req, res) => {
+    const { email, lang } = req.body || {};
+    if (typeof email !== "string" || email.length > 254 || !EMAIL_RE.test(email.trim())) {
+      return res.status(400).json({ error: "INVALID_EMAIL", message: "E-mail inválido." });
+    }
+    const locale = lang === "en" ? "en" : "pt";
+    const ctx = auditCtx(req);
+    res.status(202).json({ message: RESET_GENERIC_MESSAGE });
+    runInBackground(() => processLegacyResetRequest(email.trim().toLowerCase(), locale, ctx));
+  });
+
+/**
+ * @openapi
+ * /auth/password-reset/check:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Diz se um token de redefinição ainda vale, SEM consumi-lo.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [token]
+ *             properties:
+ *               token: { type: string }
+ *     responses:
+ *       200:
+ *         description: Resultado.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 valid: { type: boolean }
+ *       429:
+ *         description: Muitas consultas deste IP (30/15 min). error=TOO_MANY_ATTEMPTS.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ */
+app.post("/v1/auth/password-reset/check", attachRequestId, resetTokenLimiterByIp, (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  res.json({ valid: Boolean(findUsableResetToken((req.body || {}).token)) });
+});
+
+/**
+ * @openapi
+ * /auth/password-reset/confirm:
+ *   post:
+ *     tags: [Auth]
+ *     summary: Define a nova senha com o token do e-mail (consumo atômico, uso único).
+ *     description: >
+ *       A regra de senha é verificada ANTES do token. Sucesso revoga todas as
+ *       sessões (JWT) emitidas antes da redefinição, invalida os outros tokens
+ *       de redefinição da conta, DESFAZ o vínculo com uma conta do portal (se
+ *       houver — quem soube a senha antiga pode tê-la vinculado; para vincular
+ *       de novo use POST /identity/link com a senha nova) e envia um aviso por
+ *       e-mail. Não faz login automático: entre de novo com a nova senha. O
+ *       token de API NÃO muda: se suspeitar de acesso indevido, gere outro em
+ *       POST /me/token/rotate.
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [token, password]
+ *             properties:
+ *               token: { type: string }
+ *               password: { type: string, minLength: 12, maxLength: 256, description: "Letras e números." }
+ *               lang: { type: string, enum: [pt, en], default: pt }
+ *     responses:
+ *       200:
+ *         description: Senha redefinida.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 message: { type: string }
+ *       400:
+ *         description: >
+ *           WEAK_PASSWORD (regra de senha) ou INVALID_OR_EXPIRED_TOKEN (token inválido,
+ *           vencido ou já usado — mesma resposta para os três).
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       413: { $ref: '#/components/responses/PayloadTooLarge' }
+ *       429:
+ *         description: Muitas tentativas deste IP (30/15 min). error=TOO_MANY_ATTEMPTS.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ */
+app.post("/v1/auth/password-reset/confirm", attachRequestId, resetTokenLimiterByIp, (req, res, next) => {
+  confirmLegacyReset(req, res).catch(next);
+});
+async function confirmLegacyReset(req, res) {
+  const { token, password, lang } = req.body || {};
+  const pwdProblem = passwordProblem(password);
+  if (pwdProblem) return res.status(400).json({ error: "WEAK_PASSWORD", message: pwdProblem });
+  const invalid = () => {
+    audit.record({ type: "auth.password_reset.completed", outcome: "failure", req, metadata: { reason: "invalid_or_expired" } });
+    return res.status(400).json({ error: "INVALID_OR_EXPIRED_TOKEN", message: "Link de redefinição inválido, vencido ou já usado. Peça um novo." });
+  };
+  // Pré-checagem só para não gastar bcrypt com token inválido; quem decide é o UPDATE atômico abaixo.
+  if (!findUsableResetToken(token)) return invalid();
+  const newHash = await bcrypt.hash(password, 12);
+  const tokenHash = hashToken(token);
+  let user = null;
+  let unlinkedPortalId = null;
+  let deadTokenIds = [];
+  const consume = db.transaction(() => {
+    const nowIso = new Date().toISOString();
+    const consumed = db.prepare(`
+      UPDATE password_reset_tokens SET used_at = ?
+      WHERE token_hash = ? AND used_at IS NULL AND invalidated_at IS NULL AND expires_at > ?
+    `).run(nowIso, tokenHash, nowIso);
+    if (consumed.changes !== 1) return; // outro pedido concorrente consumiu primeiro
+    const t = db.prepare("SELECT user_id FROM password_reset_tokens WHERE token_hash = ?").get(tokenHash);
+    const before = db.prepare("SELECT bongo_user_id FROM users WHERE id = ? AND auth_source = 'legacy'").get(t.user_id);
+    // A redefinição (prova de controle do e-mail da conta) também DESFAZ um
+    // vínculo com o portal: quem soube a senha antiga podia ter vinculado a
+    // conta à própria identidade do portal e continuaria entrando por
+    // X-Portal-Session depois da redefinição. O dono vincula de novo se quiser
+    // (sessão do portal + reautenticação + a senha nova).
+    const upd = db.prepare(`
+      UPDATE users SET password_hash = ?, password_changed_at = ?, bongo_user_id = NULL, linked_at = NULL, portal_email = NULL
+      WHERE id = ? AND auth_source = 'legacy'
+    `).run(newHash, nowIso, t.user_id);
+    if (upd.changes !== 1 || !before) throw Object.assign(new Error("conta legada ausente"), { code: "RESET_USER_GONE" });
+    deadTokenIds = db.prepare("SELECT id FROM password_reset_tokens WHERE user_id = ? AND (token_hash = ? OR (used_at IS NULL AND invalidated_at IS NULL))")
+      .all(t.user_id, tokenHash).map((r) => r.id);
+    db.prepare("UPDATE password_reset_tokens SET invalidated_at = ? WHERE user_id = ? AND used_at IS NULL AND invalidated_at IS NULL")
+      .run(nowIso, t.user_id);
+    unlinkedPortalId = before.bongo_user_id || null;
+    user = db.prepare("SELECT id, email FROM users WHERE id = ?").get(t.user_id);
+  });
+  try {
+    consume();
+  } catch (e) {
+    // Conta excluída entre a pré-checagem e o consumo: a transação foi desfeita.
+    if (e && e.code === "RESET_USER_GONE") return invalid();
+    throw e;
+  }
+  if (!user) return invalid();
+  audit.record({ type: "auth.password_reset.completed", outcome: "success", req, actorUserId: user.id, targetUserId: user.id });
+  if (unlinkedPortalId) {
+    audit.record({ type: "identity.unlinked", outcome: "success", req, actorUserId: user.id, targetUserId: user.id,
+      metadata: { via: "password_reset", portal_user_id: unlinkedPortalId } });
+  }
+  res.json({ message: "Senha redefinida. Entre novamente com a nova senha." });
+  cancelLegacyResetMails(deadTokenIds);
+  const locale = lang === "en" ? "en" : "pt";
+  runInBackground(async () => {
+    try {
+      await bongo.enqueueMail({
+        template: "qrng_legacy_password_changed", to: user.email, locale, secret: null, secretExpiresAt: null,
+        idempotencyKey: `qrng-legacy-changed-${crypto.randomUUID()}`, validity: { kind: "none", ref: null },
+      });
+    } catch (e) {
+      console.warn(`[password-reset] aviso de senha alterada NÃO enfileirado (${e && e.code ? e.code : "erro"})`);
+    }
+  });
+}
+
+// ── API interna para o worker de e-mail do Bongo ──────────────────────────────
+// Antes de enviar um e-mail de recuperação legado, o worker pergunta se o token
+// ainda vale (não usado, não invalidado, não vencido, conta ainda existe) — para
+// não mandar um link morto. Só com INTERNAL_SERVICE_TOKEN (comparação em tempo
+// constante); sem ele, 404 idêntico ao de uma rota inexistente. Na borda, o
+// nginx devolve 404 para /qrng/v1/internal/v1/ (a rota nunca sai do host).
+function internalServiceAuthorized(req) {
+  const got = bearerToken(req);
+  if (!INTERNAL_SERVICE_TOKEN || !got) return false;
+  const a = crypto.createHash("sha256").update(got).digest();
+  const b = crypto.createHash("sha256").update(INTERNAL_SERVICE_TOKEN).digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+/**
+ * @openapi
+ * /internal/v1/password-reset/{id}/status:
+ *   get:
+ *     tags: [Internal]
+ *     summary: (Interno, serviço↔serviço) Validade de um token de redefinição legado, pelo id.
+ *     description: >
+ *       Usado só pelo worker de e-mail do Bongo, com Authorization Bearer
+ *       INTERNAL_SERVICE_TOKEN. Fora das duas specs publicadas (tag Internal).
+ *     parameters:
+ *       - { name: id, in: path, required: true, schema: { type: integer } }
+ *     responses:
+ *       200:
+ *         description: Resultado.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 valid: { type: boolean }
+ *       404:
+ *         description: Sem credencial de serviço válida (indistinguível de rota inexistente).
+ */
+// Sem credencial de serviço a rota "não existe": next("route") cai no MESMO
+// 404 catch-all de uma rota desconhecida (sem X-Request-Id, request_id novo),
+// por isso a checagem vem ANTES de attachRequestId.
+function internalServiceOnly(req, res, next) {
+  if (!internalServiceAuthorized(req)) return next("route");
+  next();
+}
+app.get("/v1/internal/v1/password-reset/:id/status", internalServiceOnly, attachRequestId, (req, res) => {
+  res.setHeader("Cache-Control", "no-store");
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id < 1) return res.json({ valid: false });
+  const row = db.prepare(`
+    SELECT t.used_at, t.invalidated_at, t.expires_at FROM password_reset_tokens t
+    JOIN users u ON u.id = t.user_id AND u.auth_source = 'legacy'
+    WHERE t.id = ?
+  `).get(id);
+  const valid = Boolean(row && !row.used_at && !row.invalidated_at && row.expires_at > new Date().toISOString());
+  res.json({ valid });
 });
 
 // ── GET /v1/health ────────────────────────────────────────────────────────────
@@ -2007,7 +3070,7 @@ function qoaError(res, status, requestId, error, message, extra) {
  *         content: { application/json: { schema: { $ref: '#/components/schemas/QoaCapabilitiesResponse' } } }
  *       400: { description: "AMBIGUOUS_CREDENTIALS (Bearer e X-API-Key com valores diferentes).", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
  *       401: { $ref: '#/components/responses/Unauthorized' }
- *       403: { description: "INVALID_TOKEN.", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       403: { description: "INVALID_TOKEN, ou PORTAL_ACCESS_REVOKED (a conta do portal dona da chave foi desabilitada, perdeu o QRNG ou foi excluída).", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
  *       429: { $ref: '#/components/responses/RateLimited' }
  *       503: { description: "Fonte indisponível (broker inacessível ou fonte parada) — código do contrato.", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
  */
@@ -2077,7 +3140,7 @@ function parseOpenApiEntropy(req, res, next) {
  *         content: { application/json: { schema: { $ref: '#/components/schemas/QoaEntropyResponse' } } }
  *       400: { description: "AMBIGUOUS_CREDENTIALS ou INVALID_JSON (corpo que não é JSON válido).", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
  *       401: { $ref: '#/components/responses/Unauthorized' }
- *       403: { description: "INVALID_TOKEN.", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       403: { description: "INVALID_TOKEN, ou PORTAL_ACCESS_REVOKED (a conta do portal dona da chave foi desabilitada, perdeu o QRNG ou foi excluída).", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
  *       413: { description: "REQUEST_BODY_TOO_LARGE (corpo JSON acima de 8 KiB).", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
  *       415: { description: "UNSUPPORTED_MEDIA_TYPE (corpo sem Content-Type application/json).", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
  *       422: { description: "Parâmetro inválido — código do contrato. error: INVALID_REQUEST_BODY | MISSING_BLOCK_SIZE | INVALID_BLOCK_SIZE | BLOCK_SIZE_OUT_OF_RANGE | INVALID_BLOCK_COUNT | BLOCK_COUNT_OUT_OF_RANGE | UNSUPPORTED_ENTROPY_TYPE | TOTAL_TOO_LARGE. Nenhuma entropia é consumida.", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
@@ -2169,7 +3232,7 @@ app.post("/v1/entropy", attachRequestId, qoaNoStore, requireApiCredential, check
  *         content: { application/json: { schema: { $ref: '#/components/schemas/QoaHealthtestResponse' } } }
  *       400: { description: "AMBIGUOUS_CREDENTIALS.", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
  *       401: { $ref: '#/components/responses/Unauthorized' }
- *       403: { description: "INVALID_TOKEN.", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
+ *       403: { description: "INVALID_TOKEN, ou PORTAL_ACCESS_REVOKED (a conta do portal dona da chave foi desabilitada, perdeu o QRNG ou foi excluída).", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
  *       429: { $ref: '#/components/responses/RateLimited' }
  *       503: { description: "Fonte dos testes de saúde indisponível (broker inacessível) — código do contrato.", content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } } }
  */
@@ -2988,6 +4051,11 @@ if (process.env.ENABLE_TEST_ROUTES === "1") {
     publicIpDailyUsage.delete(ip);
     res.json({ request_id: req.requestId, reset: true, ip });
   });
+  // Prova (só CI) de que os cabeçalhos de identidade do cliente foram REMOVIDOS
+  // antes de chegar às rotas — não apenas ignorados por elas.
+  app.get("/v1/_test/identity-headers", attachRequestId, (req, res) => {
+    res.json({ present: UNTRUSTED_IDENTITY_HEADERS.filter((h) => h in req.headers) });
+  });
 }
 
 // ── 404 catch-all estruturado ───────────────────────────────────────────────
@@ -3061,6 +4129,10 @@ if (require.main === module) {
     const purge = purgeUsageLogs();
     console.log(`Retenção de logs → ${USAGE_LOG_RETENTION_DAYS} d (apagados agora: ${purge.deleted}; anonimizados: ${purge.anonymized})`);
     setInterval(() => { try { purgeUsageLogs(); } catch (e) { console.error("[purge]", e.message); } }, 24 * 60 * 60 * 1000).unref();
+    // Auditoria: expurgo por AUDIT_RETENTION_DAYS na inicialização e a cada 24 h.
+    try { console.log(`Auditoria        → retenção ${AUDIT_RETENTION_DAYS} d (expurgados agora: ${audit.purge()})`); } catch (e) { console.error("[audit-purge]", e.message); }
+    setInterval(() => { try { audit.purge(); } catch (e) { console.error("[audit-purge]", e.message); } }, 24 * 60 * 60 * 1000).unref();
+    console.log(`Identidade portal→ ${INTERNAL_SERVICE_TOKEN ? `introspecção em ${BONGO_INTERNAL_URL} (cache ${PORTAL_INTROSPECTION_CACHE_MS} ms)` : "DESLIGADA (INTERNAL_SERVICE_TOKEN ausente: sessão do portal → 503)"}`);
     console.log(`Max bytes/req    → ${MAX_BYTES_PER_REQUEST.toLocaleString()} bytes`);
     console.log(`Rate limit IP    → ${RATE_LIMIT_PER_IP_MIN} req/min`);
     console.log(`Rate limit token → ${RATE_LIMIT_PER_TOKEN_MIN} req/min`);
@@ -3078,4 +4150,9 @@ if (require.main === module) {
   });
 }
 
-module.exports = { app, db, interpretUpstreamResponse, UpstreamFormatError, checkUpstream, purgeUsageLogs, truncateIp, entropyPool };
+module.exports = {
+  app, db, interpretUpstreamResponse, UpstreamFormatError, checkUpstream, purgeUsageLogs, truncateIp, entropyPool,
+  audit, waitForBackgroundJobs,
+  // Só testes: zera os limitadores das rotas de identidade/recuperação.
+  resetIdentityRateLimits: () => Promise.all(identityRateStores.map((s) => s.resetAll())),
+};

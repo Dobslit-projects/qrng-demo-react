@@ -44,6 +44,12 @@ tags:
       mesmas cotas, mesma fonte. Não é a especificação OpenAPI (Swagger); é um contrato de
       interoperabilidade para obter entropia por REST. Compatibilidade com produtos de terceiros não
       foi testada. Ambiguidades e interpretações: docs/qrng-open-api.md.
+  - name: Identity
+    description: >-
+      Identidade integrada com o portal Bongo: a sessão do portal (cabeçalho X-Portal-Session) é
+      validada no Bongo por introspecção; a conta de desenvolvedor do QRNG é criada para ela ou
+      vinculada a uma conta antiga (com reautenticação no portal + senha da conta antiga — nunca por
+      igualdade de e-mail).
 components:
   securitySchemes:
     bearerAuthJWT:
@@ -60,6 +66,16 @@ components:
         Token de API pessoal (formato dobslit_qrng_live_<hex>, emitido por POST /v1/tokens). Usado
         pelos endpoints de consumo: /v1/random, /v1/health. Endpoints /v1/me/* aceitam tanto este
         token quanto o JWT de sessão.
+    portalSession:
+      type: apiKey
+      in: header
+      name: X-Portal-Session
+      description: >-
+        Sessão do portal Bongo (o mesmo JWT do login no portal), em cabeçalho explícito — nunca por
+        cookie. Validada no Bongo por introspecção a cada uso (cache curto). Aceita nas rotas
+        /identity/*, /auth/me, /tokens, /me/* e /admin/* (o papel de admin é o da conta da
+        client-api, não o do portal). Não envie junto um Authorization de OUTRA conta (400
+        AMBIGUOUS_CREDENTIALS).
     apiKeyHeader:
       type: apiKey
       in: header
@@ -554,15 +570,138 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/QoaExtension'
+    DeveloperAccount:
+      type: object
+      properties:
+        id:
+          type: integer
+          description: Id da conta na client-api (o mesmo de antes do vínculo).
+        auth_source:
+          type: string
+          enum:
+            - legacy
+            - portal
+          description: >-
+            legacy = conta antiga (e-mail e senha da client-api); portal = criada pela sessão do
+            portal.
+        linked_at:
+          type: string
+          format: date-time
+          nullable: true
+        has_token:
+          type: boolean
+          description: Se há token de API ativo.
+    IdentityStatus:
+      type: object
+      properties:
+        portal:
+          type: object
+          properties:
+            id:
+              type: string
+              description: Identificador estável da conta do portal (UUID).
+            email:
+              type: string
+              format: email
+              nullable: true
+              example: user@example.com
+            name:
+              type: string
+              nullable: true
+        developer_account:
+          allOf:
+            - $ref: '#/components/schemas/DeveloperAccount'
+          nullable: true
+        can_provision:
+          type: boolean
+        can_link:
+          type: boolean
+    AuditEvent:
+      type: object
+      properties:
+        id:
+          type: integer
+        occurred_at:
+          type: string
+          format: date-time
+        event_type:
+          type: string
+          example: auth.login
+        outcome:
+          type: string
+          enum:
+            - success
+            - failure
+            - denied
+        actor_user_id:
+          type: integer
+          nullable: true
+        target_user_id:
+          type: integer
+          nullable: true
+        request_id:
+          type: string
+          nullable: true
+        ip_prefix:
+          type: string
+          nullable: true
+          description: IPv4 /24 ou IPv6 /48.
+        subject_hash:
+          type: string
+          nullable: true
+          description: Pseudônimo HMAC do e-mail (32 hex), só em falhas/eventos anônimos.
+        metadata:
+          type: object
+          nullable: true
+          description: Só chaves permitidas (motivo, ids, cotas…); nunca segredos.
   responses:
+    PortalSessionInvalid:
+      description: Sessão do portal ausente, inválida, expirada ou revogada (PORTAL_SESSION_INVALID).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    QrngAccessDenied:
+      description: Sessão do portal válida, mas a conta não tem acesso ao QRNG (QRNG_ACCESS_DENIED).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    IdentityUnavailable:
+      description: >-
+        Serviço de identidade do portal indisponível (IDENTITY_UNAVAILABLE). Falha fechada: nenhum
+        acesso é concedido.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    AmbiguousPortalCredentials:
+      description: >-
+        X-Portal-Session enviado junto com um Authorization: Bearer de OUTRA conta (ou inválido)
+        (AMBIGUOUS_CREDENTIALS).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    DeveloperAccountNotProvisioned:
+      description: >-
+        Sessão do portal válida, mas sem conta de desenvolvedor do QRNG
+        (DEVELOPER_ACCOUNT_NOT_PROVISIONED): use POST /identity/provision ou POST /identity/link.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
     Unauthorized:
-      description: Token ausente, inválido ou expirado.
+      description: Token ausente, inválido ou expirado (com X-Portal-Session, PORTAL_SESSION_INVALID).
       content:
         application/json:
           schema:
             $ref: '#/components/schemas/ErrorResponse'
     Forbidden:
-      description: 'Autenticado, mas sem permissão (ex.: rota de admin sem role=admin).'
+      description: >-
+        Autenticado, mas sem permissão (ex.: rota de admin sem role=admin; INVALID_TOKEN;
+        PORTAL_ACCESS_REVOKED quando a conta do portal dona da chave foi desabilitada, perdeu o QRNG
+        ou foi excluída).
       content:
         application/json:
           schema:
@@ -776,6 +915,7 @@ paths:
       summary: Retorna os dados da conta autenticada.
       security:
         - bearerAuthJWT: []
+        - portalSession: []
       responses:
         '200':
           description: Dados do usuário.
@@ -797,8 +937,16 @@ paths:
                   created_at:
                     type: string
                     format: date-time
+        '400':
+          $ref: '#/components/responses/AmbiguousPortalCredentials'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/QrngAccessDenied'
+        '404':
+          $ref: '#/components/responses/DeveloperAccountNotProvisioned'
+        '503':
+          $ref: '#/components/responses/IdentityUnavailable'
     delete:
       tags:
         - Auth
@@ -807,6 +955,7 @@ paths:
         anônimos.
       security:
         - bearerAuthJWT: []
+        - portalSession: []
       requestBody:
         required: true
         content:
@@ -828,14 +977,22 @@ paths:
                 properties:
                   deleted:
                     type: boolean
+        '400':
+          $ref: '#/components/responses/AmbiguousPortalCredentials'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          description: Senha incorreta (INVALID_PASSWORD).
+          description: >-
+            Senha incorreta (INVALID_PASSWORD). Com X-Portal-Session, também QRNG_ACCESS_DENIED
+            (conta do portal sem acesso ao QRNG).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '404':
+          $ref: '#/components/responses/DeveloperAccountNotProvisioned'
+        '503':
+          $ref: '#/components/responses/IdentityUnavailable'
   /tokens:
     post:
       tags:
@@ -846,6 +1003,7 @@ paths:
         depois via GET /me/token. Use /me/token/rotate para gerar um novo se perdê-lo.
       security:
         - bearerAuthJWT: []
+        - portalSession: []
       responses:
         '200':
           description: Token criado.
@@ -853,14 +1011,22 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TokenIssued'
+        '400':
+          $ref: '#/components/responses/AmbiguousPortalCredentials'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/QrngAccessDenied'
+        '404':
+          $ref: '#/components/responses/DeveloperAccountNotProvisioned'
         '409':
           description: Usuário já tem um token ativo.
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/IdentityUnavailable'
   /me/token:
     get:
       tags:
@@ -869,6 +1035,7 @@ paths:
       security:
         - bearerAuthJWT: []
         - bearerAuthToken: []
+        - portalSession: []
       responses:
         '200':
           description: Metadados do token, ou { has_token false } se nenhum existir.
@@ -876,8 +1043,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TokenInfo'
+        '400':
+          $ref: '#/components/responses/AmbiguousPortalCredentials'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/QrngAccessDenied'
+        '404':
+          $ref: '#/components/responses/DeveloperAccountNotProvisioned'
+        '503':
+          $ref: '#/components/responses/IdentityUnavailable'
   /me/token/rotate:
     post:
       tags:
@@ -886,6 +1061,7 @@ paths:
       security:
         - bearerAuthJWT: []
         - bearerAuthToken: []
+        - portalSession: []
       responses:
         '200':
           description: Novo token emitido.
@@ -893,14 +1069,22 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/TokenIssued'
+        '400':
+          $ref: '#/components/responses/AmbiguousPortalCredentials'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/QrngAccessDenied'
         '404':
-          description: Nenhum token ativo encontrado.
+          description: >-
+            Nenhum token ativo encontrado. Com X-Portal-Session, também
+            DEVELOPER_ACCOUNT_NOT_PROVISIONED (identidade do portal sem conta de desenvolvedor).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/IdentityUnavailable'
   /me/token/revoke:
     post:
       tags:
@@ -909,6 +1093,7 @@ paths:
       security:
         - bearerAuthJWT: []
         - bearerAuthToken: []
+        - portalSession: []
       responses:
         '200':
           description: Token revogado.
@@ -922,14 +1107,22 @@ paths:
                   revoked_at:
                     type: string
                     format: date-time
+        '400':
+          $ref: '#/components/responses/AmbiguousPortalCredentials'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/QrngAccessDenied'
         '404':
-          description: Nenhum token ativo encontrado.
+          description: >-
+            Nenhum token ativo encontrado. Com X-Portal-Session, também
+            DEVELOPER_ACCOUNT_NOT_PROVISIONED (identidade do portal sem conta de desenvolvedor).
           content:
             application/json:
               schema:
                 $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/IdentityUnavailable'
   /me/usage:
     get:
       tags:
@@ -938,6 +1131,7 @@ paths:
       security:
         - bearerAuthJWT: []
         - bearerAuthToken: []
+        - portalSession: []
       responses:
         '200':
           description: Resumo de uso.
@@ -945,8 +1139,16 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/UsageResponse'
+        '400':
+          $ref: '#/components/responses/AmbiguousPortalCredentials'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/QrngAccessDenied'
+        '404':
+          $ref: '#/components/responses/DeveloperAccountNotProvisioned'
+        '503':
+          $ref: '#/components/responses/IdentityUnavailable'
   /me/requests:
     get:
       tags:
@@ -955,6 +1157,7 @@ paths:
       security:
         - bearerAuthJWT: []
         - bearerAuthToken: []
+        - portalSession: []
       parameters:
         - name: limit
           in: query
@@ -975,8 +1178,16 @@ paths:
                     type: array
                     items:
                       $ref: '#/components/schemas/RequestLogEntry'
+        '400':
+          $ref: '#/components/responses/AmbiguousPortalCredentials'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/QrngAccessDenied'
+        '404':
+          $ref: '#/components/responses/DeveloperAccountNotProvisioned'
+        '503':
+          $ref: '#/components/responses/IdentityUnavailable'
   /upstream/status:
     get:
       tags:
@@ -985,6 +1196,7 @@ paths:
       security:
         - bearerAuthJWT: []
         - bearerAuthToken: []
+        - portalSession: []
       responses:
         '200':
           description: Status atual, uptime estimado nas últimas 24h e eventos recentes.
@@ -1028,8 +1240,316 @@ paths:
                         checked_at:
                           type: string
                           format: date-time
+        '400':
+          $ref: '#/components/responses/AmbiguousPortalCredentials'
         '401':
           $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/QrngAccessDenied'
+        '404':
+          $ref: '#/components/responses/DeveloperAccountNotProvisioned'
+        '503':
+          $ref: '#/components/responses/IdentityUnavailable'
+  /identity/status:
+    get:
+      tags:
+        - Identity
+      summary: Identidade do portal e a conta de desenvolvedor do QRNG ligada a ela (se houver).
+      description: >
+        Autentica pela sessão do portal (cabeçalho X-Portal-Session), validada no Bongo por
+        introspecção. Não cria nem vincula nada: uma conta antiga com o MESMO e-mail não é vinculada
+        automaticamente (use /identity/link).
+      security:
+        - portalSession: []
+      responses:
+        '200':
+          description: Estado da identidade.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IdentityStatus'
+        '400':
+          $ref: '#/components/responses/AmbiguousPortalCredentials'
+        '401':
+          $ref: '#/components/responses/PortalSessionInvalid'
+        '403':
+          $ref: '#/components/responses/QrngAccessDenied'
+        '503':
+          $ref: '#/components/responses/IdentityUnavailable'
+  /identity/provision:
+    post:
+      tags:
+        - Identity
+      summary: Cria a conta de desenvolvedor do QRNG para a identidade do portal (sem senha local).
+      description: >
+        A conta nasce vinculada (auth_source=portal), sem e-mail/senha locais — não colide com uma
+        conta antiga de mesmo e-mail e não tem login legado. Papel sempre "user" (o papel de
+        administrador da client-api não vem do portal). Depois, emita o token de API com POST
+        /tokens usando a mesma sessão do portal.
+      security:
+        - portalSession: []
+      responses:
+        '201':
+          description: Conta criada.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  developer_account:
+                    $ref: '#/components/schemas/DeveloperAccount'
+        '400':
+          $ref: '#/components/responses/AmbiguousPortalCredentials'
+        '401':
+          $ref: '#/components/responses/PortalSessionInvalid'
+        '403':
+          $ref: '#/components/responses/QrngAccessDenied'
+        '409':
+          description: A identidade do portal já tem conta de desenvolvedor (PORTAL_ALREADY_LINKED).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/IdentityUnavailable'
+  /identity/link:
+    post:
+      tags:
+        - Identity
+      summary: >-
+        Vincula uma conta de desenvolvedor ANTIGA (e-mail e senha da client-api) à identidade do
+        portal.
+      description: >
+        Exige prova de controle das duas contas: (1) sessão do portal + reautenticação recente no
+        portal (reauthToken de uso único, finalidade link_qrng_developer, obtido em POST
+        /api/auth/reauth do portal) e (2) e-mail + senha da conta antiga. Igualdade de e-mail não
+        basta. O vínculo mantém id, token de API, cota e histórico; o login antigo continua
+        funcionando. Desvinculação só por script administrativo ou pela redefinição de senha da
+        conta antiga (POST /auth/password-reset/confirm). Não envie Authorization de outra conta
+        junto (400 AMBIGUOUS_CREDENTIALS).
+      security:
+        - portalSession: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - reauthToken
+                - legacyEmail
+                - legacyPassword
+              properties:
+                reauthToken:
+                  type: string
+                legacyEmail:
+                  type: string
+                  format: email
+                legacyPassword:
+                  type: string
+                lang:
+                  type: string
+                  enum:
+                    - pt
+                    - en
+                  description: Idioma do aviso de vínculo enviado ao e-mail da conta antiga (padrão pt).
+      responses:
+        '200':
+          description: Conta vinculada. Um aviso (sem link) é enfileirado para o e-mail da conta antiga.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  linked:
+                    type: boolean
+                  developer_account:
+                    $ref: '#/components/schemas/DeveloperAccount'
+        '400':
+          description: >-
+            Campos ausentes (MISSING_FIELDS) ou Authorization de outra conta junto com
+            X-Portal-Session (AMBIGUOUS_CREDENTIALS).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '401':
+          $ref: '#/components/responses/PortalSessionInvalid'
+        '403':
+          description: >
+            REAUTH_REQUIRED (reauthToken ausente, inválido, vencido, já usado ou de outra
+            finalidade), INVALID_LEGACY_CREDENTIALS (e-mail/senha da conta antiga incorretos) ou
+            QRNG_ACCESS_DENIED.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: >-
+            PORTAL_ALREADY_LINKED (esta identidade já tem conta) ou ACCOUNT_ALREADY_LINKED (a conta
+            antiga já está vinculada).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          description: >
+            Muitas tentativas de vínculo malsucedidas (TOO_MANY_ATTEMPTS): por IP, por conta do
+            portal e por conta antiga — este último no MESMO limite do login por e-mail (10/15 min
+            somando login e vínculo).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          $ref: '#/components/responses/IdentityUnavailable'
+  /auth/password-reset/request:
+    post:
+      tags:
+        - Auth
+      summary: Pede o link de redefinição de senha de uma conta de desenvolvedor antiga (e-mail e senha).
+      description: >
+        Resposta SEMPRE 202 genérica, exista a conta ou não (o processamento é feito depois da
+        resposta). O link chega por e-mail, vale 30 minutos e é de uso único; um pedido novo
+        invalida os anteriores. Contas criadas pelo portal não têm senha local — use a recuperação
+        de senha do portal.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - email
+              properties:
+                email:
+                  type: string
+                  format: email
+                lang:
+                  type: string
+                  enum:
+                    - pt
+                    - en
+                  default: pt
+      responses:
+        '202':
+          description: Pedido recebido (mensagem genérica).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        '400':
+          description: E-mail ausente ou inválido (INVALID_EMAIL).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          description: Muitos pedidos (10/15 min por IP; 1/min e 5/dia por e-mail). error=TOO_MANY_ATTEMPTS.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/password-reset/check:
+    post:
+      tags:
+        - Auth
+      summary: Diz se um token de redefinição ainda vale, SEM consumi-lo.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - token
+              properties:
+                token:
+                  type: string
+      responses:
+        '200':
+          description: Resultado.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  valid:
+                    type: boolean
+        '429':
+          description: Muitas consultas deste IP (30/15 min). error=TOO_MANY_ATTEMPTS.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /auth/password-reset/confirm:
+    post:
+      tags:
+        - Auth
+      summary: Define a nova senha com o token do e-mail (consumo atômico, uso único).
+      description: >
+        A regra de senha é verificada ANTES do token. Sucesso revoga todas as sessões (JWT) emitidas
+        antes da redefinição, invalida os outros tokens de redefinição da conta, DESFAZ o vínculo
+        com uma conta do portal (se houver — quem soube a senha antiga pode tê-la vinculado; para
+        vincular de novo use POST /identity/link com a senha nova) e envia um aviso por e-mail. Não
+        faz login automático: entre de novo com a nova senha. O token de API NÃO muda: se suspeitar
+        de acesso indevido, gere outro em POST /me/token/rotate.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required:
+                - token
+                - password
+              properties:
+                token:
+                  type: string
+                password:
+                  type: string
+                  minLength: 12
+                  maxLength: 256
+                  description: Letras e números.
+                lang:
+                  type: string
+                  enum:
+                    - pt
+                    - en
+                  default: pt
+      responses:
+        '200':
+          description: Senha redefinida.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+        '400':
+          description: >
+            WEAK_PASSWORD (regra de senha) ou INVALID_OR_EXPIRED_TOKEN (token inválido, vencido ou
+            já usado — mesma resposta para os três).
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          description: Muitas tentativas deste IP (30/15 min). error=TOO_MANY_ATTEMPTS.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
   /health:
     get:
       tags:
@@ -1307,7 +1827,9 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          description: INVALID_TOKEN.
+          description: >-
+            INVALID_TOKEN, ou PORTAL_ACCESS_REVOKED (a conta do portal dona da chave foi
+            desabilitada, perdeu o QRNG ou foi excluída).
           content:
             application/json:
               schema:
@@ -1388,7 +1910,9 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          description: INVALID_TOKEN.
+          description: >-
+            INVALID_TOKEN, ou PORTAL_ACCESS_REVOKED (a conta do portal dona da chave foi
+            desabilitada, perdeu o QRNG ou foi excluída).
           content:
             application/json:
               schema:
@@ -1488,7 +2012,9 @@ paths:
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
-          description: INVALID_TOKEN.
+          description: >-
+            INVALID_TOKEN, ou PORTAL_ACCESS_REVOKED (a conta do portal dona da chave foi
+            desabilitada, perdeu o QRNG ou foi excluída).
           content:
             application/json:
               schema:

@@ -70,7 +70,18 @@ const definition = {
         "Não é a especificação OpenAPI (Swagger); é um contrato de interoperabilidade para obter entropia por REST. " +
         "Compatibilidade com produtos de terceiros não foi testada. Ambiguidades e interpretações: docs/qrng-open-api.md.",
     },
+    {
+      name: "Identity",
+      description:
+        "Identidade integrada com o portal Bongo: a sessão do portal (cabeçalho X-Portal-Session) é validada no Bongo " +
+        "por introspecção; a conta de desenvolvedor do QRNG é criada para ela ou vinculada a uma conta antiga " +
+        "(com reautenticação no portal + senha da conta antiga — nunca por igualdade de e-mail).",
+    },
     { name: "Admin", description: "Administração de tokens e usuários (role=admin)" },
+    // "Internal": rotas serviço↔serviço (INTERNAL_SERVICE_TOKEN). Documentadas no
+    // código (a varredura rota×spec do teste as cobre), mas fora das DUAS specs
+    // publicadas — ver buildPublicSpec/buildInternalAdminSpec.
+    { name: "Internal", description: "Rotas internas serviço↔serviço (nunca publicadas)" },
   ],
   components: {
     securitySchemes: {
@@ -89,6 +100,16 @@ const definition = {
           "Token de API pessoal (formato dobslit_qrng_live_<hex>, emitido por POST /v1/tokens). " +
           "Usado pelos endpoints de consumo: /v1/random, /v1/health. " +
           "Endpoints /v1/me/* aceitam tanto este token quanto o JWT de sessão.",
+      },
+      portalSession: {
+        type: "apiKey",
+        in: "header",
+        name: "X-Portal-Session",
+        description:
+          "Sessão do portal Bongo (o mesmo JWT do login no portal), em cabeçalho explícito — nunca por cookie. " +
+          "Validada no Bongo por introspecção a cada uso (cache curto). Aceita nas rotas /identity/*, /auth/me, " +
+          "/tokens, /me/* e /admin/* (o papel de admin é o da conta da client-api, não o do portal). " +
+          "Não envie junto um Authorization de OUTRA conta (400 AMBIGUOUS_CREDENTIALS).",
       },
       apiKeyHeader: {
         type: "apiKey",
@@ -356,14 +377,74 @@ const definition = {
           extensions: { type: "array", items: { $ref: "#/components/schemas/QoaExtension" } },
         },
       },
+      DeveloperAccount: {
+        type: "object",
+        properties: {
+          id: { type: "integer", description: "Id da conta na client-api (o mesmo de antes do vínculo)." },
+          auth_source: { type: "string", enum: ["legacy", "portal"], description: "legacy = conta antiga (e-mail e senha da client-api); portal = criada pela sessão do portal." },
+          linked_at: { type: "string", format: "date-time", nullable: true },
+          has_token: { type: "boolean", description: "Se há token de API ativo." },
+        },
+      },
+      IdentityStatus: {
+        type: "object",
+        properties: {
+          portal: {
+            type: "object",
+            properties: {
+              id: { type: "string", description: "Identificador estável da conta do portal (UUID)." },
+              email: { type: "string", format: "email", nullable: true, example: "user@example.com" },
+              name: { type: "string", nullable: true },
+            },
+          },
+          developer_account: { allOf: [{ $ref: "#/components/schemas/DeveloperAccount" }], nullable: true },
+          can_provision: { type: "boolean" },
+          can_link: { type: "boolean" },
+        },
+      },
+      AuditEvent: {
+        type: "object",
+        properties: {
+          id: { type: "integer" },
+          occurred_at: { type: "string", format: "date-time" },
+          event_type: { type: "string", example: "auth.login" },
+          outcome: { type: "string", enum: ["success", "failure", "denied"] },
+          actor_user_id: { type: "integer", nullable: true },
+          target_user_id: { type: "integer", nullable: true },
+          request_id: { type: "string", nullable: true },
+          ip_prefix: { type: "string", nullable: true, description: "IPv4 /24 ou IPv6 /48." },
+          subject_hash: { type: "string", nullable: true, description: "Pseudônimo HMAC do e-mail (32 hex), só em falhas/eventos anônimos." },
+          metadata: { type: "object", nullable: true, description: "Só chaves permitidas (motivo, ids, cotas…); nunca segredos." },
+        },
+      },
     },
     responses: {
+      PortalSessionInvalid: {
+        description: "Sessão do portal ausente, inválida, expirada ou revogada (PORTAL_SESSION_INVALID).",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } },
+      },
+      QrngAccessDenied: {
+        description: "Sessão do portal válida, mas a conta não tem acesso ao QRNG (QRNG_ACCESS_DENIED).",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } },
+      },
+      IdentityUnavailable: {
+        description: "Serviço de identidade do portal indisponível (IDENTITY_UNAVAILABLE). Falha fechada: nenhum acesso é concedido.",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } },
+      },
+      AmbiguousPortalCredentials: {
+        description: "X-Portal-Session enviado junto com um Authorization: Bearer de OUTRA conta (ou inválido) (AMBIGUOUS_CREDENTIALS).",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } },
+      },
+      DeveloperAccountNotProvisioned: {
+        description: "Sessão do portal válida, mas sem conta de desenvolvedor do QRNG (DEVELOPER_ACCOUNT_NOT_PROVISIONED): use POST /identity/provision ou POST /identity/link.",
+        content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } },
+      },
       Unauthorized: {
-        description: "Token ausente, inválido ou expirado.",
+        description: "Token ausente, inválido ou expirado (com X-Portal-Session, PORTAL_SESSION_INVALID).",
         content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } },
       },
       Forbidden: {
-        description: "Autenticado, mas sem permissão (ex.: rota de admin sem role=admin).",
+        description: "Autenticado, mas sem permissão (ex.: rota de admin sem role=admin; INVALID_TOKEN; PORTAL_ACCESS_REVOKED quando a conta do portal dona da chave foi desabilitada, perdeu o QRNG ou foi excluída).",
         content: { "application/json": { schema: { $ref: "#/components/schemas/ErrorResponse" } } },
       },
       RateLimited: {
@@ -421,8 +502,9 @@ function filterPathsByTag(spec, tagPredicate) {
 }
 
 /**
- * Spec pública (item 7): tudo MENOS a tag "Admin", sem o server local de
- * desenvolvimento. É esta que deve ser servida sem autenticação.
+ * Spec pública (item 7): tudo MENOS as tags "Admin" e "Internal" (rotas
+ * serviço↔serviço, doc 155), sem o server local de desenvolvimento. É esta
+ * que deve ser servida sem autenticação.
  */
 function buildPublicSpec() {
   const full = buildFullSpec();
@@ -433,8 +515,8 @@ function buildPublicSpec() {
       title: "Kuapoã QRNG — API Pública",
     },
     servers: full.servers.filter((s) => !s.url.includes("127.0.0.1")),
-    tags: full.tags.filter((t) => t.name !== "Admin"),
-    paths: filterPathsByTag(full, (tag) => tag !== "Admin"),
+    tags: full.tags.filter((t) => t.name !== "Admin" && t.name !== "Internal"),
+    paths: filterPathsByTag(full, (tag) => tag !== "Admin" && tag !== "Internal"),
   };
 }
 
