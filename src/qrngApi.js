@@ -70,15 +70,28 @@ export function portalToken() {
 //  - "portal" (padrão): a identidade é a sessão do portal, enviada no cabeçalho
 //    explícito X-Portal-Session (nunca por cookie → sem CSRF);
 //  - "legacy": conta antiga da API (e-mail e senha), JWT em qrng_auth_jwt.
-// Só "legacy" é gravado; qualquer outro valor (ou nada) significa "portal".
+// Desde esta versão o modo é SEMPRE gravado ("portal" ou "legacy"). Dica
+// AUSENTE com qrng_auth_jwt presente = navegador vindo da versão anterior,
+// que usava esse JWT direto (área do desenvolvedor e chip de cota): a sessão
+// legada é retomada UMA vez (grava "legacy"; a página ainda valida o JWT em
+// /auth/me e volta a "portal" se ele não valer). Depois de qualquer escolha
+// explícita, um JWT que sobrou nunca sai em modo portal.
 const DEV_AUTH_MODE_KEY = "qrng_dev_auth_mode";
 export function getDevAuthMode() {
-  try { return localStorage.getItem(DEV_AUTH_MODE_KEY) === "legacy" ? "legacy" : "portal"; } catch { return "portal"; }
+  try {
+    const v = localStorage.getItem(DEV_AUTH_MODE_KEY);
+    if (v === "legacy") return "legacy";
+    if (v === "portal") return "portal";
+    if (localStorage.getItem("qrng_auth_jwt")) {
+      localStorage.setItem(DEV_AUTH_MODE_KEY, "legacy");
+      return "legacy";
+    }
+    return "portal";
+  } catch { return "portal"; }
 }
 export function setDevAuthMode(mode) {
   try {
-    if (mode === "legacy") localStorage.setItem(DEV_AUTH_MODE_KEY, "legacy");
-    else localStorage.removeItem(DEV_AUTH_MODE_KEY);
+    localStorage.setItem(DEV_AUTH_MODE_KEY, mode === "legacy" ? "legacy" : "portal");
   } catch { /* localStorage indisponível: fica no padrão (portal) */ }
 }
 

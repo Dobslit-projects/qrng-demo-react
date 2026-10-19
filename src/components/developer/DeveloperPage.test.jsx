@@ -163,6 +163,7 @@ describe("DeveloperPage — modo portal (padrão)", () => {
   it("conta de desenvolvedor existente: painel direto, sem segunda senha, chamadas com X-Portal-Session", async () => {
     document.cookie = `bongo_session=${encodeURIComponent(PORTAL_JWT)}; Path=/`;
     localStorage.setItem("qrng_auth_jwt", LEGACY_JWT); // resto antigo: não pode ser usado em modo portal
+    setDevAuthMode("portal"); // modo já escolhido nesta versão
     const calls = stubFetch({
       "GET /qrng/v1/identity/status": () => json(200, STATUS_READY),
       "GET /qrng/v1/auth/me": () => json(200, { id: 7, email: null, role: "user" }),
@@ -331,6 +332,55 @@ describe("DeveloperPage — modo portal (padrão)", () => {
   });
 });
 
+describe("atualização a partir da versão anterior (sessão legada já aberta no navegador)", () => {
+  it("sem dica gravada + qrng_auth_jwt: retoma a conta antiga UMA vez (grava 'legacy'); chip de cota volta a mostrar o token", async () => {
+    localStorage.setItem("bongo_token", PORTAL_JWT);
+    localStorage.setItem("qrng_auth_jwt", LEGACY_JWT);
+    expect(localStorage.getItem("qrng_dev_auth_mode")).toBeNull();
+    expect(getDevAuthMode()).toBe("legacy");
+    expect(localStorage.getItem("qrng_dev_auth_mode")).toBe("legacy");
+    const calls = stubFetch({
+      "GET /qrng/v1/public/quota": () => json(200, { limit: 10, used: 1 }),
+      "GET /qrng/v1/me/usage": () => json(200, { has_token: true, token_name: "Token principal", requests_today: 3 }),
+    });
+    render(<QuotaProbe />);
+    await waitFor(() => expect(screen.getByTestId("quota-token").textContent).toBe("token:Token principal"));
+    const usage = calls.find((c) => c.key === "GET /qrng/v1/me/usage");
+    expect(usage.headers.Authorization).toBe(`Bearer ${LEGACY_JWT}`);
+    expect(usage.headers["X-Portal-Session"]).toBeUndefined();
+  });
+
+  it("sem dica gravada + qrng_auth_jwt: a área do desenvolvedor reabre o painel da conta antiga", async () => {
+    localStorage.setItem("bongo_token", PORTAL_JWT);
+    localStorage.setItem("qrng_auth_jwt", LEGACY_JWT);
+    const calls = stubFetch({
+      "GET /qrng/v1/auth/me": () => json(200, { id: 3, email: "old@example.org", role: "user" }),
+      "GET /qrng/v1/me/token": () => json(200, { has_token: false }),
+      "GET /qrng/v1/upstream/status": () => json(200, {}),
+    });
+    renderPage();
+    expect(await screen.findByText(/old@example\.org/)).toBeInTheDocument();
+    expect(calls.some((c) => c.key === "GET /qrng/v1/identity/status")).toBe(false);
+  });
+
+  it("JWT antigo inválido: volta ao portal e grava 'portal' (o JWT não é reenviado depois)", async () => {
+    localStorage.setItem("bongo_token", PORTAL_JWT);
+    localStorage.setItem("qrng_auth_jwt", LEGACY_JWT);
+    stubFetch({
+      "GET /qrng/v1/auth/me": () => json(401, { error: "SESSION_EXPIRED", message: "x" }),
+      "GET /qrng/v1/identity/status": () => json(200, STATUS_NOT_PROVISIONED),
+    });
+    renderPage();
+    await waitFor(() => expect(getDevAuthMode()).toBe("portal"));
+    expect(localStorage.getItem("qrng_dev_auth_mode")).toBe("portal");
+    expect(getAuthHeaders().Authorization).toBeUndefined();
+  });
+
+  it("sem dica e sem JWT (navegador novo): modo portal", () => {
+    expect(getDevAuthMode()).toBe("portal");
+  });
+});
+
 describe("DeveloperPage — conta antiga da API (caminho secundário)", () => {
   it("sessão legada guardada: usa Authorization Bearer qrng_auth_jwt e nunca X-Portal-Session", async () => {
     localStorage.setItem("bongo_token", PORTAL_JWT);
@@ -428,9 +478,10 @@ function QuotaProbe() {
 }
 
 describe("getAuthHeaders / chip de cota — nunca o JWT legado em modo portal", () => {
-  it("modo portal (padrão, sem dica gravada) com qrng_auth_jwt que sobrou: X-Portal-Session e nenhum Authorization", () => {
+  it("modo portal gravado com qrng_auth_jwt que sobrou: X-Portal-Session e nenhum Authorization", () => {
     localStorage.setItem("bongo_token", PORTAL_JWT);
     localStorage.setItem("qrng_auth_jwt", LEGACY_JWT);
+    setDevAuthMode("portal");
     expect(getDevAuthMode()).toBe("portal");
     const h = getAuthHeaders();
     expect(h.Authorization).toBeUndefined();
@@ -448,6 +499,7 @@ describe("getAuthHeaders / chip de cota — nunca o JWT legado em modo portal", 
   it("chip de cota em modo portal: /me/usage com X-Portal-Session (sem o JWT legado); 404 DEVELOPER_ACCOUNT_NOT_PROVISIONED → só a cota pública", async () => {
     localStorage.setItem("bongo_token", PORTAL_JWT);
     localStorage.setItem("qrng_auth_jwt", LEGACY_JWT);
+    setDevAuthMode("portal");
     const calls = stubFetch({
       "GET /qrng/v1/public/quota": () => json(200, { limit: 10, used: 1 }),
       "GET /qrng/v1/me/usage": () => json(404, { error: "DEVELOPER_ACCOUNT_NOT_PROVISIONED", message: "x" }),
@@ -465,6 +517,7 @@ describe("getAuthHeaders / chip de cota — nunca o JWT legado em modo portal", 
 
   it("chip de cota sem sessão nenhuma (portal sem cookie, só JWT legado em modo portal): não consulta /me/usage", async () => {
     localStorage.setItem("qrng_auth_jwt", LEGACY_JWT);
+    setDevAuthMode("portal");
     const calls = stubFetch({ "GET /qrng/v1/public/quota": () => json(200, { limit: 10, used: 1 }) });
     await refreshQuota();
     expect(calls.map((c) => c.key)).toEqual(["GET /qrng/v1/public/quota"]);
