@@ -136,3 +136,25 @@ corpos, tokens ou links.
 | `up.sh` / `down.sh` | sobe (gera `.env`) / derruba com `-v` e apaga `.env` |
 | `run-matrix.mjs` | a matriz |
 | `stubs/` | stubs sem dependências |
+
+## Dois modos de e-mail
+
+- **Com e-mail simulado** (padrão do teste): `bash up.sh`. Recuperação self-service ligada nos dois
+  serviços; as mensagens chegam a `accepted` no transporte simulado.
+- **Sem e-mail** (como a produção nesta fase): `AUTHGATE_MAIL_TRANSPORT=disabled AUTHGATE_RESET_ENABLED=0 bash up.sh`.
+  A matriz detecta o modo e confere: status `selfService=false` nos dois serviços, 503
+  `PASSWORD_RESET_UNAVAILABLE` igual para qualquer e-mail, admin sem "enviar link" (409), nenhuma
+  mensagem de redefinição na fila e o aviso de vínculo parado em `pending`.
+
+Os dois modos também cobrem, pela borda: QRNG Open API (`/capabilities`, `/entropy`, `/healthtest`
+com Bearer e `X-API-Key`, erros 400/401/403/422, contabilização na cota do token, fonte parada → 503
+sem bytes e volta), download rápido (`/public/sample`, entrega pelo pool ou direta, conta na cota do IP,
+413 acima do máximo), cota visível (`/public/quota`, `/me/usage`), rota pública `/qrng/api/random` e a
+chave de conta criada pelo portal (403 `PORTAL_ACCESS_REVOKED` com a conta desabilitada, volta ao reabilitar).
+
+## Rollback × roll-forward (`../rollback-compat/`)
+
+`BONGO_REPO=<checkout do bongosite> bash staging/rollback-compat/run.sh` sobe, sobre os MESMOS bancos:
+produção (`bcb5052` / `aa22bfb`) → candidata (migração com cópia prévia) → produção de novo (rollback) →
+candidata de novo. Confere login, JWT, chaves, contas criadas em cada fase, cópia única e o efeito
+conhecido do rollback do Bongo (conta desabilitada volta a entrar enquanto a versão anterior estiver no ar).

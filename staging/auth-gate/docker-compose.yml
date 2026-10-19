@@ -36,7 +36,11 @@ services:
       INTERNAL_SERVICE_TOKEN: "${AUTHGATE_INTERNAL_SERVICE_TOKEN:?rode up.sh (gera .env com segredos de teste)}"
       MAIL_OUTBOX_KEY: "${AUTHGATE_MAIL_OUTBOX_KEY:?rode up.sh (gera .env com segredos de teste)}"
       AUDIT_PSEUDONYM_KEY: "${AUTHGATE_AUDIT_PSEUDONYM_KEY:?rode up.sh (gera .env com segredos de teste)}"
-      MAIL_TRANSPORT: "simulated"
+      # Dois modos (doc 155): com e-mail simulado (padrão do teste) ou SEM e-mail,
+      # como a produção nesta fase: AUTHGATE_MAIL_TRANSPORT=disabled AUTHGATE_RESET_ENABLED=0 bash up.sh
+      MAIL_TRANSPORT: "${AUTHGATE_MAIL_TRANSPORT:-simulated}"
+      PASSWORD_RESET_ENABLED: "${AUTHGATE_RESET_ENABLED:-1}"
+      SUPPORT_CONTACT: "suporte@authgate.invalid"
       MAIL_WORKER_ENABLED: "1"
       MAIL_WORKER_INTERVAL_MS: "1000"
       MAIL_FROM: "Kuapoã / Dobslit (teste) <notificacoes@authgate.invalid>"
@@ -77,6 +81,8 @@ services:
       AUDIT_PSEUDONYM_KEY: "${AUTHGATE_AUDIT_PSEUDONYM_KEY:?rode up.sh (gera .env com segredos de teste)}"
       BONGO_INTERNAL_URL: "http://bongosite-auth:3002"
       PORTAL_INTROSPECTION_CACHE_MS: "0"       # sem cache: revogação/queda do Bongo visíveis na hora
+      PORTAL_ACCOUNT_STATUS_CACHE_MS: "0"      # idem para o estado da conta do portal dona de uma chave
+      QRNG_PASSWORD_RESET_ENABLED: "${AUTHGATE_RESET_ENABLED:-1}"
       PORTAL_INTROSPECTION_TIMEOUT_MS: "2000"
       # Página PÚBLICA do front do portal (Bongo front: LEGACY_API_RESET_PATH),
       # sob `location /`, fora do gate. NUNCA sob /qrng/: lá o gate manda o

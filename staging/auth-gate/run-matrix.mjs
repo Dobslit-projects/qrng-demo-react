@@ -215,6 +215,13 @@ async function main() {
   if (!adm.json?.token) return;
   const adminJwt = adm.json.token;
   const A = bearer(adminJwt);
+  // Modo do ambiente: com e-mail (transporte simulado + recuperação ligada) ou
+  // SEM e-mail (padrão de produção nesta fase: transporte desabilitado,
+  // recuperação self-service explicitamente indisponível). AUTHGATE_RESET_ENABLED.
+  const MAIL_ON = envOf0(C_BONGO, "MAIL_TRANSPORT") === "simulated";
+  const RESET_ON = (await request("GET", "/api/auth/password-reset/status")).json?.selfService === true;
+  check(G0, `modo do ambiente: ${MAIL_ON ? "com e-mail simulado" : "SEM e-mail"}`, MAIL_ON === RESET_ON,
+    "recuperação ligada ⇔ envio possível", `transporte ${MAIL_ON ? "simulated" : "disabled"}, self-service ${RESET_ON ? "ligado" : "desligado"}`);
 
   // usuários do portal
   const plan = {
@@ -223,6 +230,7 @@ async function main() {
     qrng: { role: "user", services: ["qrng"] },
     disabled: { role: "user", services: ["qrng"] },
     linker: { role: "user", services: ["qrng"] },
+    keygate: { role: "user", services: ["qrng"] },
   };
   const U = {};
   for (const [tag, p] of Object.entries(plan)) {
@@ -421,6 +429,106 @@ async function main() {
     check(GD, "chave da conta do portal funciona", pr.status === 200, "200", show(pr));
   }
 
+  // ── QRNG Open API (doc 152) pela borda: chave, formatos, contabilização, saúde, fonte parada ──
+  const GO = "QRNG Open API";
+  {
+    const K = bearer(L.key);
+    const X = { "X-API-Key": L.key };
+    const usage = async () => (await request("GET", "/qrng/v1/me/usage", { headers: K })).json || {};
+    const u0 = await usage();
+    const cap = await request("GET", "/qrng/v1/capabilities", { headers: K });
+    check(GO, "GET /capabilities (Authorization: Bearer)", cap.status === 200 && ctype(cap) === "application/json" && cap.json && typeof cap.json === "object", "200 JSON", show(cap));
+    const capx = await request("GET", "/qrng/v1/capabilities", { headers: X });
+    check(GO, "GET /capabilities (X-API-Key)", capx.status === 200 && ctype(capx) === "application/json", "200 JSON", show(capx));
+    expectJson(GO, "GET /capabilities sem chave", await request("GET", "/qrng/v1/capabilities"), 401, "MISSING_TOKEN");
+    expectJson(GO, "GET /capabilities com chave inválida", await request("GET", "/qrng/v1/capabilities", { headers: bearer(`qrng_invalida_${RUN}`) }), 403, "INVALID_TOKEN");
+    expectJson(GO, "Bearer e X-API-Key diferentes", await request("GET", "/qrng/v1/capabilities", { headers: { ...K, "X-API-Key": `outra-${RUN}` } }), 400, "AMBIGUOUS_CREDENTIALS");
+    const ent = await request("POST", "/qrng/v1/entropy", { headers: X, body: { block_size: 32, block_count: 3 } });
+    const blocks = Array.isArray(ent.json?.entropy) ? ent.json.entropy : [];
+    const sizes = blocks.map((b) => Buffer.from(String(b), "base64").length);
+    check(GO, "POST /entropy 32×3 (X-API-Key) → 3 blocos Base64 de 32 bytes, distintos", ent.status === 200 && sizes.length === 3 && sizes.every((n) => n === 32) && new Set(blocks).size === 3,
+      "200 [32,32,32]", `${show(ent)} ${JSON.stringify(sizes)}`);
+    check(GO, "POST /entropy: Cache-Control no-store", String(ent.headers["cache-control"] || "").includes("no-store"), "no-store", ent.headers["cache-control"] || "-");
+    expectJson(GO, "POST /entropy sem block_size → 422", await request("POST", "/qrng/v1/entropy", { headers: K, body: {} }), 422, "MISSING_BLOCK_SIZE");
+    const hz = await request("GET", "/qrng/v1/healthtest", { headers: K });
+    check(GO, "GET /healthtest → test_result[]", hz.status === 200 && Array.isArray(hz.json?.test_result) && hz.json.test_result.length > 0, "200 test_result", show(hz));
+    const u1 = await usage();
+    // contam: capabilities ×2, entropy e healthtest (4 req, 96 bytes); 401/403/400/422 não contam
+    const dReq = (u1.requests_today ?? NaN) - (u0.requests_today ?? NaN);
+    const dBytes = (u1.bytes_today ?? NaN) - (u0.bytes_today ?? NaN);
+    check(GO, "contabilização na cota do token (a mesma de /v1/random)", dReq === 4 && dBytes === 96, "+4 req, +96 bytes", `+${dReq} req, +${dBytes} bytes`);
+
+    const ctl = (mode) => docker(["exec", "-i", C_CLIENT, "node", "-"],
+      `fetch("http://fixture-upstream:18091/_ctl/mode?mode=${mode}",{method:"POST"}).then(r=>console.log("STATUS",r.status)).catch(e=>console.log("STATUS ERR",e.message))`);
+    const off = ctl("offline");
+    check(GO, "controle: fonte (fixture) → offline", /STATUS 200/.test(off.out), "200", (off.out.match(/STATUS \S+/) || ["sem saída"])[0]);
+    const eo = await request("POST", "/qrng/v1/entropy", { headers: K, body: { block_size: 32 } });
+    check(GO, "fonte indisponível: POST /entropy → 503 sem campo entropy", eo.status === 503 && ctype(eo) === "application/json" && !("entropy" in (eo.json || {})),
+      "503 sem entropy", show(eo));
+    const ro = await request("GET", "/qrng/v1/random?bytes=16", { headers: K });
+    check(GO, "fonte indisponível: /random não entrega bytes", ro.status >= 500, "5xx", show(ro));
+    const so = await request("GET", "/qrng/v1/public/sample?bytes=1024");
+    check(GO, "fonte indisponível: amostra pública não entrega bytes da fonte parada", so.status >= 500 || so.headers["x-qrng-delivery"] === "prefetch-pool",
+      "5xx (ou só o pool já validado)", `${show(so)} ${so.headers["x-qrng-delivery"] || ""}`);
+    const ho = await request("GET", "/qrng/v1/healthtest", { headers: K });
+    const hot = JSON.stringify(ho.json || {});
+    check(GO, "fonte indisponível: /healthtest não declara a fonte online", ho.status === 503 || /offline|unavailable/.test(hot), "503 ou offline", show(ho));
+    const on = ctl("online");
+    check(GO, "controle: fonte (fixture) → online", /STATUS 200/.test(on.out), "200", (on.out.match(/STATUS \S+/) || ["sem saída"])[0]);
+    let back = null;
+    for (let i = 0; i < 10; i++) {
+      back = await request("POST", "/qrng/v1/entropy", { headers: K, body: { block_size: 16 } });
+      if (back.status === 200) break;
+      await sleep(1000);
+    }
+    check(GO, "fonte de volta: POST /entropy → 200", back?.status === 200, "200", back ? show(back) : "-");
+  }
+
+  // ── download rápido (pool de entropia) e cota visível (bcb5052) ──
+  const GQ = "download rápido e cota";
+  {
+    const q0 = await request("GET", "/qrng/v1/public/quota");
+    check(GQ, "GET /public/quota (anônimo) → cota por IP", q0.status === 200 && q0.json?.scope === "ip" && Number.isInteger(q0.json?.requests_today) && q0.json?.token_quota,
+      "200 scope=ip", show(q0));
+    let s = null;
+    for (let i = 0; i < 10; i++) {
+      s = await request("GET", "/qrng/v1/public/sample?bytes=1024");
+      if (s.status === 200) break;
+      await sleep(1000);
+    }
+    check(GQ, "GET /public/sample?bytes=1024 (anônimo) → 1024 bytes", s.status === 200 && ctype(s) === "application/octet-stream" && s.bytes === 1024, "200 octet-stream 1024", `${show(s)} ${s.bytes}`);
+    check(GQ, "amostra informa a entrega (pool ou direta)", ["prefetch-pool", "direct"].includes(String(s.headers["x-qrng-delivery"] || "")), "prefetch-pool|direct", s.headers["x-qrng-delivery"] || "-");
+    const q1 = await request("GET", "/qrng/v1/public/quota");
+    check(GQ, "a amostra conta na cota pública do IP", (q1.json?.requests_today ?? 0) > (q0.json?.requests_today ?? 0) && (q1.json?.bytes_today ?? 0) >= (q0.json?.bytes_today ?? 0) + 1024,
+      "requests e bytes sobem", `${q0.json?.requests_today}→${q1.json?.requests_today}, ${q0.json?.bytes_today}→${q1.json?.bytes_today}`);
+    expectJson(GQ, "amostra acima do máximo → 413 JSON", await request("GET", "/qrng/v1/public/sample?bytes=99999999"), 413, "REQUEST_TOO_LARGE");
+    const pr = await request("GET", "/qrng/api/random?bytes=16");
+    check(GQ, "rota pública /qrng/api/random (anônima) continua", pr.status === 200, "200", show(pr));
+    const mu = await request("GET", "/qrng/v1/me/usage", { headers: bearer(L.key) });
+    check(GQ, "cota do token visível (/v1/me/usage)", mu.status === 200 && Number.isInteger(mu.json?.remaining_requests_today), "200 remaining_*", show(mu));
+  }
+
+  // ── chave de API de conta CRIADA PELO PORTAL segue a conta do portal ──
+  const GG = "chave de conta do portal";
+  {
+    const pv = await request("POST", "/qrng/v1/identity/provision", { headers: portal(U.keygate.jwt) });
+    check(GG, "provision (keygate)", pv.status === 201, "201", show(pv));
+    const tk = await request("POST", "/qrng/v1/tokens", { headers: portal(U.keygate.jwt), body: { name: "keygate" } });
+    const kk = secret(tk.json?.token);
+    const X = { "X-API-Key": kk };
+    check(GG, "chave ativa: /capabilities (X-API-Key) → 200", (await request("GET", "/qrng/v1/capabilities", { headers: X })).status === 200, "200", "ok");
+    const d = await request("PUT", `/api/admin/users/${U.keygate.id}`, { headers: A, body: { disabled: true, disabledReason: "teste da chave" } });
+    check(GG, "admin desabilita a conta do portal", d.status === 200, "200", show(d));
+    expectJson(GG, "conta do portal desabilitada: /capabilities → 403", await request("GET", "/qrng/v1/capabilities", { headers: X }), 403, "PORTAL_ACCESS_REVOKED");
+    expectJson(GG, "conta do portal desabilitada: /random → 403", await request("GET", "/qrng/v1/random?bytes=8", { headers: bearer(kk) }), 403, "PORTAL_ACCESS_REVOKED");
+    const e = await request("PUT", `/api/admin/users/${U.keygate.id}`, { headers: A, body: { disabled: false } });
+    check(GG, "admin reabilita", e.status === 200, "200", show(e));
+    const ok = await request("GET", "/qrng/v1/capabilities", { headers: X });
+    check(GG, "reabilitada: a chave volta a valer", ok.status === 200, "200", show(ok));
+    const legacyStill = await request("GET", "/qrng/v1/capabilities", { headers: { "X-API-Key": L.key } });
+    check(GG, "chave de conta legada não depende do portal", legacyStill.status === 200, "200", show(legacyStill));
+  }
+
   // vínculo com conta legada (reauth de uso único + credenciais legadas)
   const GK = "vínculo legado";
   const reauth = async () => {
@@ -443,14 +551,19 @@ async function main() {
     check(GK, "link (reauth + credenciais legadas)", ok.status === 200, "200", show(ok));
     {
       let notice = null;
-      for (let i = 0; i < 30; i++) {
+      for (let i = 0; i < (MAIL_ON ? 30 : 5); i++) {
         const items = listOf((await request("GET", "/api/admin/mail/outbox", { headers: A })).json);
         notice = items.find((m) => !linkedBefore.has(m.id) && m.template === "qrng_legacy_account_linked") || null;
-        if (notice && !["pending", "sending"].includes(notice.status)) break;
+        if (notice && (!MAIL_ON || !["pending", "sending"].includes(notice.status))) break;
         await sleep(1000);
       }
-      check(GK, "aviso de vínculo ao e-mail da conta antiga aceito pelo transporte simulado",
-        notice?.status === "accepted" || notice?.status === "delivered", "accepted", notice ? `status=${notice.status}` : "não enfileirado");
+      if (MAIL_ON) {
+        check(GK, "aviso de vínculo ao e-mail da conta antiga aceito pelo transporte simulado",
+          notice?.status === "accepted" || notice?.status === "delivered", "accepted", notice ? `status=${notice.status}` : "não enfileirado");
+      } else {
+        check(GK, "sem e-mail: aviso de vínculo enfileirado e NÃO enviado (fica pendente até expirar)",
+          notice?.status === "pending", "pending", notice ? `status=${notice.status}` : "não enfileirado");
+      }
     }
     const again = await request("POST", "/qrng/v1/identity/link", { headers: portal(U.linker.jwt), body: { reauthToken: c.t, legacyEmail: L.email, legacyPassword: L.password } });
     check(GK, "reuso do mesmo reauthToken não vincula de novo", [403, 409].includes(again.status), "403|409", show(again));
@@ -476,7 +589,30 @@ async function main() {
   const before = await outboxIds();
   check(GM, "GET /api/admin/mail/outbox", before.r.status === 200, "200", show(before.r));
   const seen = new Set(before.items.map((m) => m.id));
-  {
+  if (!RESET_ON) {
+    const GN = "recuperação SEM e-mail (padrão)";
+    const st = await request("GET", "/api/auth/password-reset/status");
+    check(GN, "Bongo: status selfService=false com contato de suporte", st.status === 200 && st.json?.selfService === false && typeof st.json?.supportContact === "string",
+      "200 selfService=false", show(st));
+    const qs = await request("GET", "/qrng/v1/auth/password-reset/status");
+    check(GN, "client-api: status self_service=false", qs.status === 200 && qs.json?.self_service === false, "200 self_service=false", show(qs));
+    const f1 = await request("POST", "/api/auth/forgot-password", { body: { email: U.qrng.email } });
+    const f2 = await request("POST", "/api/auth/forgot-password", { body: { email: email("inexistente") } });
+    expectJson(GN, "forgot-password (conta existente) → 503", f1, 503, "PASSWORD_RESET_UNAVAILABLE");
+    check(GN, "forgot-password: mesma resposta para e-mail inexistente", f2.status === 503 && f1.text === f2.text, "503 corpo idêntico", show(f2));
+    check(GN, "forgot-password: não promete envio", !/enviamos|enviaremos/i.test(f1.text), "sem promessa", f1.json?.error ? "texto ok" : show(f1));
+    const lr = await request("POST", "/qrng/v1/auth/password-reset/request", { body: { email: L.email } });
+    expectJson(GN, "password-reset/request legado → 503", lr, 503, "PASSWORD_RESET_UNAVAILABLE");
+    const lr2 = await request("POST", "/qrng/v1/auth/password-reset/request", { body: { email: email("inexistente-legado") } });
+    check(GN, "password-reset/request: mesma resposta p/ inexistente", lr2.status === 503 && lr.text === lr2.text, "503 corpo idêntico", show(lr2));
+    const sr = await request("POST", `/api/admin/users/${U.qrng.id}/send-password-reset`, { headers: A, body: {} });
+    expectJson(GN, "admin: enviar link → 409 (sem envio real)", sr, 409, "PASSWORD_RESET_UNAVAILABLE");
+    const after = await outboxIds();
+    const newResets = after.items.filter((m) => !seen.has(m.id) && /password_reset/.test(m.template));
+    check(GN, "nenhuma mensagem de redefinição enfileirada", newResets.length === 0, "0", String(newResets.length));
+    const chk = await request("POST", "/qrng/v1/auth/password-reset/check", { body: { token: crypto.randomBytes(32).toString("base64url") } });
+    check(GN, "password-reset/check continua respondendo", chk.status === 200 && chk.json?.valid === false, "200 valid=false", show(chk));
+  } else {
     const f1 = await request("POST", "/api/auth/forgot-password", { body: { email: U.qrng.email } });
     const f2 = await request("POST", "/api/auth/forgot-password", { body: { email: email("inexistente") } });
     check(GM, "forgot-password (conta existente)", f1.status === 200, "200", show(f1));
@@ -503,6 +639,12 @@ async function main() {
     const txt = JSON.stringify(last.r.json || {});
     const leaks = /#token=|redefinir-senha#|secret_ciphertext"\s*:\s*"/.test(txt) || [...SECRETS].some((s) => txt.includes(s)) || [...EMAILS].some((e) => txt.includes(e));
     check(GM, "listagem da fila sem link/token/e-mail completo", !leaks, "mascarada", leaks ? "VAZAMENTO" : "mascarada");
+  }
+  {
+    const lastAll = await outboxIds();
+    const txt = JSON.stringify(lastAll.r.json || {});
+    const leaks = /#token=|redefinir-senha#|secret_ciphertext"\s*:\s*"/.test(txt) || [...SECRETS].some((s) => txt.includes(s)) || [...EMAILS].some((e) => txt.includes(e));
+    check(GM, "listagem da fila (fim) sem link/token/e-mail completo", !leaks, "mascarada", leaks ? "VAZAMENTO" : "mascarada");
   }
 
   // ── páginas públicas de redefinição (destino dos links dos e-mails) ──

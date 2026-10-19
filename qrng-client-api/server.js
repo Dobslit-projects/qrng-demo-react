@@ -192,6 +192,11 @@ const INTERNAL_SERVICE_TOKEN          = process.env.INTERNAL_SERVICE_TOKEN || nu
 const PORTAL_INTROSPECTION_TIMEOUT_MS = parseInt(process.env.PORTAL_INTROSPECTION_TIMEOUT_MS || "3000", 10);
 const PORTAL_INTROSPECTION_CACHE_MS   = parseInt(process.env.PORTAL_INTROSPECTION_CACHE_MS || "30000", 10);
 const QRNG_RESET_TOKEN_TTL_MINUTES    = parseInt(process.env.QRNG_RESET_TOKEN_TTL_MINUTES || "30", 10);
+// Recuperação self-service das contas legadas: DESLIGADA por padrão. Liga só
+// depois de o envio real de e-mail do Bongo estar ativo e testado (doc 155).
+// Desligada: POST /v1/auth/password-reset/request → 503 PASSWORD_RESET_UNAVAILABLE
+// (igual para todo e-mail) e nenhum token é gerado.
+const QRNG_PASSWORD_RESET_ENABLED     = process.env.QRNG_PASSWORD_RESET_ENABLED === "1";
 // Página PÚBLICA do portal (fora de /qrng/, que passa pelo gate de autorização
 // no nginx) que lê o token do FRAGMENTO (#token=...): o fragmento não vai ao
 // servidor, então fica fora de logs de acesso, proxies e Referer.
@@ -2342,15 +2347,43 @@ async function processLegacyResetRequest(email, locale, ctx) {
 
 /**
  * @openapi
+ * /auth/password-reset/status:
+ *   get:
+ *     tags: [Auth]
+ *     summary: Diz se a recuperação de senha por e-mail das contas antigas está disponível.
+ *     description: >
+ *       Público e sem dados de conta. Com self_service=false, o pedido de
+ *       recuperação responde 503 PASSWORD_RESET_UNAVAILABLE e a interface
+ *       orienta o contato com o suporte.
+ *     responses:
+ *       200:
+ *         description: Disponibilidade.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 self_service: { type: boolean }
+ */
+app.get("/v1/auth/password-reset/status", (req, res) => {
+  res.set("Cache-Control", "no-store");
+  res.json({ self_service: QRNG_PASSWORD_RESET_ENABLED });
+});
+
+/**
+ * @openapi
  * /auth/password-reset/request:
  *   post:
  *     tags: [Auth]
  *     summary: Pede o link de redefinição de senha de uma conta de desenvolvedor antiga (e-mail e senha).
  *     description: >
- *       Resposta SEMPRE 202 genérica, exista a conta ou não (o processamento é
- *       feito depois da resposta). O link chega por e-mail, vale 30 minutos e é
- *       de uso único; um pedido novo invalida os anteriores. Contas criadas pelo
- *       portal não têm senha local — use a recuperação de senha do portal.
+ *       Com a recuperação ligada: resposta SEMPRE 202 genérica, exista a conta
+ *       ou não (o processamento é feito depois da resposta). O link chega por
+ *       e-mail, vale 30 minutos e é de uso único; um pedido novo invalida os
+ *       anteriores. Com a recuperação desligada (padrão, enquanto o envio de
+ *       e-mail não está ativo): 503 PASSWORD_RESET_UNAVAILABLE para qualquer
+ *       e-mail e nenhum token é gerado. Contas criadas pelo portal não têm
+ *       senha local — use a recuperação de senha do portal.
  *     requestBody:
  *       required: true
  *       content:
@@ -2377,8 +2410,16 @@ async function processLegacyResetRequest(email, locale, ctx) {
  *       429:
  *         description: Muitos pedidos (10/15 min por IP; 1/min e 5/dia por e-mail). error=TOO_MANY_ATTEMPTS.
  *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
+ *       503:
+ *         description: Recuperação por e-mail desligada neste ambiente (PASSWORD_RESET_UNAVAILABLE). Fale com o suporte.
+ *         content: { application/json: { schema: { $ref: '#/components/schemas/ErrorResponse' } } }
  */
-app.post("/v1/auth/password-reset/request", attachRequestId, resetRequestLimiterByIp, resetRequestLimiterByEmailMinute,
+function legacyResetEnabled(req, res, next) {
+  if (QRNG_PASSWORD_RESET_ENABLED) return next();
+  return res.status(503).json({ error: "PASSWORD_RESET_UNAVAILABLE",
+    message: "A recuperação de senha por e-mail não está disponível no momento. Fale com o suporte para redefinir a senha da conta de desenvolvedor." });
+}
+app.post("/v1/auth/password-reset/request", attachRequestId, legacyResetEnabled, resetRequestLimiterByIp, resetRequestLimiterByEmailMinute,
   resetRequestLimiterByEmailDay, (req, res) => {
     const { email, lang } = req.body || {};
     if (typeof email !== "string" || email.length > 254 || !EMAIL_RE.test(email.trim())) {

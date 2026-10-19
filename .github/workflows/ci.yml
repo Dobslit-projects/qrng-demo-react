@@ -70,6 +70,20 @@ jobs:
       - name: Build
         run: npm run build
 
+  nginx-auth-gate:
+    name: nginx — gate de autorização do QRNG (script + nginx -t real)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: staging/auth-gate/nginx
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Testes do apply_nginx_authz.py contra a cópia da configuração de produção
+        run: PYTHONDONTWRITEBYTECODE=1 python3 test_apply_nginx_authz.py -v
+
   nist-service:
     name: qrng-nist-api (testes Python)
     runs-on: ubuntu-latest

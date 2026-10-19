@@ -33,6 +33,7 @@ before(async () => {
   process.env.AUDIT_PSEUDONYM_KEY = "test-audit-pseudonym-key";
   process.env.RATE_LIMIT_PER_IP_PER_MINUTE = "100000";
   process.env.QRNG_PASSWORD_RESET_URL = "https://portal.test/redefinir-senha-api";
+  process.env.QRNG_PASSWORD_RESET_ENABLED = "1";
   process.env.QRNG_UPSTREAM = "http://127.0.0.1:9";
   ({ app, db, waitForBackgroundJobs, resetIdentityRateLimits } = require("../server"));
 });
